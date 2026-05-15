@@ -8,6 +8,7 @@ export function register(program: Command): void {
     .description('Serve static files from a directory')
     .option('-p, --port <number>', 'Port to serve on', parseIntArg, 1204)
     .option('-a, --address <string>', 'Address to bind to', '0.0.0.0')
+    .option('-u, --upload', 'Enable file uploads', false)
     .action(async (directory: string, options: Omit<ServeOptions, 'directory'>) => {
       const { serve } = await import('./serve')
       await serve({

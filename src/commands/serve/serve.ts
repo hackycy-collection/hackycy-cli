@@ -125,7 +125,7 @@ function buildBreadcrumb(urlPath: string): string {
   return html
 }
 
-function buildDirectoryHtml(urlPath: string, entries: DirectoryEntry[]): string {
+function buildDirectoryHtml(urlPath: string, entries: DirectoryEntry[], uploadEnabled: boolean): string {
   const isRoot = urlPath === '/'
   const title = `Index of ${escapeHtml(urlPath)}`
   const breadcrumb = buildBreadcrumb(urlPath)
@@ -157,6 +157,85 @@ function buildDirectoryHtml(urlPath: string, entries: DirectoryEntry[]): string 
 
   const emptyRow = entries.length === 0
     ? '<tr><td colspan="3" class="empty-state">Empty directory</td></tr>'
+    : ''
+
+  const uploadBtnHtml = uploadEnabled
+    ? `<input type="file" id="fileInput" style="display:none"><button class="upload-btn" id="uploadBtn" onclick="document.getElementById('fileInput').click()" title="Upload file">&#x2B06; Upload</button>`
+    : ''
+
+  const progressHtml = uploadEnabled
+    ? `<div id="progressWrap" class="progress-wrap" style="display:none">
+      <div class="progress-track"><div class="progress-fill" id="uploadFill"></div></div>
+      <span class="progress-text" id="progressText"></span>
+    </div>`
+    : ''
+
+  const dropOverlayHtml = uploadEnabled
+    ? `<div id="dropOverlay" class="drop-overlay">Drop file to upload</div>`
+    : ''
+
+  const uploadScriptHtml = uploadEnabled
+    ? `<script>
+    function uploadFile(file) {
+      var dir = window.location.pathname;
+      var xhr = new XMLHttpRequest();
+      xhr.open('POST', '/__upload?dir=' + encodeURIComponent(dir));
+      var wrap = document.getElementById('progressWrap');
+      var fill = document.getElementById('uploadFill');
+      var text = document.getElementById('progressText');
+      var btn = document.getElementById('uploadBtn');
+      wrap.style.display = 'block';
+      btn.disabled = true;
+      xhr.upload.onprogress = function(e) {
+        if (e.lengthComputable) {
+          var pct = Math.round(e.loaded / e.total * 100);
+          fill.style.width = pct + '%';
+          text.textContent = pct + '%';
+        }
+      };
+      xhr.onload = function() {
+        if (xhr.status === 200) {
+          window.location.reload();
+        } else {
+          wrap.style.display = 'none';
+          btn.disabled = false;
+          alert('Upload failed (' + xhr.status + '): ' + xhr.responseText);
+        }
+      };
+      xhr.onerror = function() {
+        wrap.style.display = 'none';
+        btn.disabled = false;
+        alert('Upload failed: network error');
+      };
+      var fd = new FormData();
+      fd.append('file', file);
+      xhr.send(fd);
+    }
+    document.getElementById('fileInput').addEventListener('change', function() {
+      var f = this.files[0];
+      if (f) uploadFile(f);
+      this.value = '';
+    });
+    var _dragCnt = 0;
+    var _overlay = document.getElementById('dropOverlay');
+    document.addEventListener('dragenter', function(e) {
+      e.preventDefault();
+      _dragCnt++;
+      _overlay.style.display = 'flex';
+    });
+    document.addEventListener('dragleave', function() {
+      _dragCnt--;
+      if (_dragCnt <= 0) { _dragCnt = 0; _overlay.style.display = 'none'; }
+    });
+    document.addEventListener('dragover', function(e) { e.preventDefault(); });
+    document.addEventListener('drop', function(e) {
+      e.preventDefault();
+      _dragCnt = 0;
+      _overlay.style.display = 'none';
+      var f = e.dataTransfer && e.dataTransfer.files[0];
+      if (f) uploadFile(f);
+    });
+  </script>`
     : ''
 
   return `<!DOCTYPE html>
@@ -300,6 +379,28 @@ function buildDirectoryHtml(urlPath: string, entries: DirectoryEntry[]): string 
     }
     .footer { margin-top: 1.25rem; font-size: 0.72rem; color: var(--footer); }
     .empty-state { padding: 2rem; text-align: center; color: var(--empty); font-style: italic; }
+    .upload-btn {
+      flex-shrink: 0;
+      margin-top: 0.1rem;
+      padding: 0.35rem 0.65rem;
+      background: var(--brand);
+      color: #0f172a;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 0.8rem;
+      font-weight: 600;
+      line-height: 1;
+      transition: opacity 0.15s;
+      white-space: nowrap;
+    }
+    .upload-btn:hover { opacity: 0.8; }
+    .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .progress-wrap { margin-bottom: 1rem; }
+    .progress-track { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin-bottom: 0.3rem; }
+    .progress-fill { height: 100%; background: var(--brand); border-radius: 2px; width: 0%; transition: width 0.1s ease; }
+    .progress-text { font-size: 0.72rem; color: var(--muted); }
+    .drop-overlay { display: none; position: fixed; inset: 0; background: rgba(34,211,238,0.08); border: 3px dashed var(--brand); z-index: 1000; pointer-events: none; align-items: center; justify-content: center; font-size: 1.5rem; font-weight: 600; color: var(--brand); }
   </style>
   <script>
     (function() {
@@ -316,6 +417,7 @@ function buildDirectoryHtml(urlPath: string, entries: DirectoryEntry[]): string 
       <div class="breadcrumb">${breadcrumb}</div>
     </div>
     <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle theme">&#9790;</button>
+    ${uploadBtnHtml}
   </div>
   <script>
     function toggleTheme() {
@@ -337,6 +439,7 @@ function buildDirectoryHtml(urlPath: string, entries: DirectoryEntry[]): string 
       btn.textContent = theme === 'light' ? '\\u2600' : '\\u263E';
     })();
   </script>
+  ${progressHtml}
   <table>
     <thead>
       <tr>
@@ -353,13 +456,15 @@ function buildDirectoryHtml(urlPath: string, entries: DirectoryEntry[]): string 
   <div class="footer">
     ${entries.length} item${entries.length !== 1 ? 's' : ''} &bull; ycy file server
   </div>
+  ${dropOverlayHtml}
+  ${uploadScriptHtml}
 </body>
 </html>`
 }
 
 // ─── Directory Listing ────────────────────────────────────────────────────────
 
-async function serveDirectory(dirPath: string, urlPath: string): Promise<Response> {
+async function serveDirectory(dirPath: string, urlPath: string, uploadEnabled: boolean): Promise<Response> {
   if (!urlPath.endsWith('/')) {
     return Response.redirect(`${urlPath}/`, 301)
   }
@@ -400,7 +505,7 @@ async function serveDirectory(dirPath: string, urlPath: string): Promise<Respons
     return a.name.localeCompare(b.name, undefined, { sensitivity: 'base' })
   })
 
-  const html = buildDirectoryHtml(urlPath, entries)
+  const html = buildDirectoryHtml(urlPath, entries, uploadEnabled)
   return new Response(html, { headers: { 'Content-Type': 'text/html; charset=utf-8' } })
 }
 
@@ -420,14 +525,130 @@ function withCors(res: Response): Response {
   return res
 }
 
+// ─── Upload ───────────────────────────────────────────────────────────────────
+
+const MAX_UPLOAD_SIZE = 1024 * 1024 * 1024 // 1 GB
+
+function sanitizeFilename(name: string): string | null {
+  const cleaned = name.replace(/[/\\]/g, '').replace(/\0/g, '').trim()
+  if (!cleaned || cleaned === '.' || cleaned === '..')
+    return null
+  return cleaned
+}
+
+async function resolveUploadFilename(dir: string, name: string): Promise<string> {
+  const lastDot = name.lastIndexOf('.')
+  const base = lastDot > 0 ? name.slice(0, lastDot) : name
+  const ext = lastDot > 0 ? name.slice(lastDot) : ''
+
+  try {
+    await fs.access(path.join(dir, name))
+  }
+  catch {
+    return name
+  }
+
+  for (let i = 1; i <= 9999; i++) {
+    const candidate = `${base} (${i})${ext}`
+    try {
+      await fs.access(path.join(dir, candidate))
+    }
+    catch {
+      return candidate
+    }
+  }
+  throw new Error('Too many files with the same name')
+}
+
+async function handleUpload(req: Request, root: string): Promise<Response> {
+  const contentLength = req.headers.get('Content-Length')
+  if (contentLength && Number(contentLength) > MAX_UPLOAD_SIZE) {
+    return new Response('413 Payload Too Large', { status: 413, headers: { 'Content-Type': 'text/plain' } })
+  }
+
+  const url = new URL(req.url)
+  const dirParam = url.searchParams.get('dir') ?? '/'
+
+  const targetDir = await resolveSafePath(root, dirParam)
+  if (targetDir === null) {
+    return new Response('403 Forbidden', { status: 403, headers: { 'Content-Type': 'text/plain' } })
+  }
+
+  let dirStat: Awaited<ReturnType<typeof fs.stat>>
+  try {
+    dirStat = await fs.stat(targetDir)
+    if (!dirStat.isDirectory()) {
+      return new Response('400 Bad Request: Not a directory', { status: 400, headers: { 'Content-Type': 'text/plain' } })
+    }
+  }
+  catch {
+    return new Response('404 Not Found', { status: 404, headers: { 'Content-Type': 'text/plain' } })
+  }
+
+  let file: File | string | null
+  try {
+    const formData = await req.formData()
+    file = formData.get('file') as File | string | null
+  }
+  catch {
+    return new Response('400 Bad Request: Invalid form data', { status: 400, headers: { 'Content-Type': 'text/plain' } })
+  }
+
+  if (!(file instanceof File)) {
+    return new Response('400 Bad Request: No file provided', { status: 400, headers: { 'Content-Type': 'text/plain' } })
+  }
+
+  if (file.size > MAX_UPLOAD_SIZE) {
+    return new Response('413 Payload Too Large', { status: 413, headers: { 'Content-Type': 'text/plain' } })
+  }
+
+  const rawName = sanitizeFilename(file.name)
+  if (!rawName) {
+    return new Response('400 Bad Request: Invalid filename', { status: 400, headers: { 'Content-Type': 'text/plain' } })
+  }
+
+  let finalName: string
+  try {
+    finalName = await resolveUploadFilename(targetDir, rawName)
+  }
+  catch (err) {
+    return new Response(`409 Conflict: ${err instanceof Error ? err.message : String(err)}`, { status: 409, headers: { 'Content-Type': 'text/plain' } })
+  }
+
+  const tmpPath = path.join(targetDir, `.upload-${crypto.randomUUID()}.tmp`)
+  const finalPath = path.join(targetDir, finalName)
+
+  try {
+    await Bun.write(tmpPath, file)
+    await fs.rename(tmpPath, finalPath)
+  }
+  catch (err) {
+    try {
+      await fs.unlink(tmpPath)
+    }
+    catch {}
+    return new Response(`500 Internal Server Error: ${err instanceof Error ? err.message : String(err)}`, { status: 500, headers: { 'Content-Type': 'text/plain' } })
+  }
+
+  return new Response(JSON.stringify({ ok: true, filename: finalName }), {
+    status: 200,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
 // ─── Request Router ───────────────────────────────────────────────────────────
 
-async function handleRequest(req: Request, root: string): Promise<Response> {
+async function handleRequest(req: Request, root: string, uploadEnabled: boolean): Promise<Response> {
   if (req.method === 'OPTIONS') {
     return new Response(null, { status: 204, headers: CORS_HEADERS })
   }
 
   const url = new URL(req.url)
+
+  if (uploadEnabled && req.method === 'POST' && url.pathname === '/__upload') {
+    return withCors(await handleUpload(req, root))
+  }
+
   const safePath = await resolveSafePath(root, url.pathname)
 
   if (safePath === null) {
@@ -443,7 +664,7 @@ async function handleRequest(req: Request, root: string): Promise<Response> {
   }
 
   if (stat.isDirectory()) {
-    return withCors(await serveDirectory(safePath, url.pathname))
+    return withCors(await serveDirectory(safePath, url.pathname, uploadEnabled))
   }
 
   return withCors(await serveFile(safePath, stat))
@@ -491,7 +712,7 @@ export async function serve(opt: ServeOptions): Promise<void> {
       port: opt.port,
       hostname: opt.address,
       fetch(req) {
-        return handleRequest(req, root)
+        return handleRequest(req, root, opt.upload)
       },
     })
   }
@@ -515,7 +736,7 @@ export async function serve(opt: ServeOptions): Promise<void> {
 
   msgs.push(`  ${ansis.dim('Directory')} ${ansis.dim(root)}`)
   msgs.push(`  ${ansis.dim('Bind')}      ${ansis.dim(`${opt.address}:${server.port}`)}`)
-
+  msgs.push(`  ${ansis.dim('Upload')}    ${opt.upload ? ansis.green('enabled') : ansis.dim('disabled')}`)
   note(msgs.join('\n'), `Server running`)
 
   await new Promise<void>((resolve) => {
