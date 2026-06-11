@@ -184,7 +184,7 @@ export async function testGit(): Promise<boolean> {
   }
 }
 
-export async function runGitAct(directory: string, options: GitLsOptions): Promise<void> {
+export async function runGitPulse(directory: string, options: GitLsOptions): Promise<void> {
   const root = path.resolve(directory)
 
   let rootStat

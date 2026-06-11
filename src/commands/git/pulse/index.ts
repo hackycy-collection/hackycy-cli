@@ -5,11 +5,11 @@ import { parseIntArg } from '../../../shared/utils'
 
 export function register(parent: Command): void {
   parent
-    .command('act [directory]')
+    .command('pulse [directory]')
     .description('Show recent git activity across repositories')
     .option('--days <number>', 'Number of days to search', parseIntArg)
     .action(async (directory: string | undefined, options: GitLsOptions) => {
-      const { runGitAct } = await import('./act')
-      await runGitAct(directory ?? process.cwd(), options)
+      const { runGitPulse } = await import('./pulse')
+      await runGitPulse(directory ?? process.cwd(), options)
     })
 }
