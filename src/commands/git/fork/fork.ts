@@ -63,61 +63,65 @@ export async function runGitFork(repoInput: string, dest?: string): Promise<void
       s.stop(`Branch: ${ansis.dim(ref)}`)
     }
     catch (err) {
-      s.stop('Failed to get default branch')
-      p.log.error((err as Error).message)
-      process.exit(1)
+      s.stop(`Failed to get default branch: ${ansis.dim((err as Error).message)}`)
+      p.log.warn('Falling back to git clone with remote default branch.')
     }
   }
 
   // 4. Try Archive API first
   let success = false
-  s.start('Downloading archive...')
+  if (ref) {
+    s.start('Downloading archive...')
 
-  try {
-    const archiveUrl = provider.getArchiveUrl(baseUrl, owner, repo, ref)
-    const headers = provider.buildArchiveHeaders(token)
-    const res = await fetch(archiveUrl, { headers, redirect: 'follow' })
+    try {
+      const archiveUrl = provider.getArchiveUrl(baseUrl, owner, repo, ref)
+      const headers = provider.buildArchiveHeaders(token)
+      const res = await fetch(archiveUrl, { headers, redirect: 'follow' })
 
-    if (!res.ok) {
-      const statusText = res.status === 401 || res.status === 403
-        ? 'Authentication failed. Check your token with "ycy git config add".'
-        : `${res.status} ${res.statusText}`
-      throw new Error(statusText)
-    }
-
-    const buffer = new Uint8Array(await res.arrayBuffer())
-    const decompressed = gunzipSync(buffer)
-
-    // Extract tar with strip-1 (remove top-level directory)
-    await mkdir(destPath, { recursive: true })
-    const entries = parseTar(decompressed)
-    const writeOps: Promise<void>[] = []
-    for (const entry of entries) {
-      const slashIdx = entry.name.indexOf('/')
-      if (slashIdx === -1)
-        continue
-      const stripped = entry.name.slice(slashIdx + 1)
-      if (!stripped)
-        continue
-      const filePath = path.join(destPath, stripped)
-      if (entry.type === 'directory') {
-        writeOps.push(mkdir(filePath, { recursive: true }).then(() => {}))
+      if (!res.ok) {
+        const statusText = res.status === 401 || res.status === 403
+          ? 'Authentication failed. Check your token with "ycy git config add".'
+          : `${res.status} ${res.statusText}`
+        throw new Error(statusText)
       }
-      else if (entry.type === 'file') {
-        writeOps.push(
-          mkdir(path.dirname(filePath), { recursive: true }).then(() =>
-            Bun.write(filePath, entry.data).then(() => {}),
-          ),
-        )
-      }
-    }
-    await Promise.all(writeOps)
 
-    success = true
-    s.stop('Archive downloaded and extracted')
+      const buffer = new Uint8Array(await res.arrayBuffer())
+      const decompressed = gunzipSync(buffer)
+
+      // Extract tar with strip-1 (remove top-level directory)
+      await mkdir(destPath, { recursive: true })
+      const entries = parseTar(decompressed)
+      const writeOps: Promise<void>[] = []
+      for (const entry of entries) {
+        const slashIdx = entry.name.indexOf('/')
+        if (slashIdx === -1)
+          continue
+        const stripped = entry.name.slice(slashIdx + 1)
+        if (!stripped)
+          continue
+        const filePath = path.join(destPath, stripped)
+        if (entry.type === 'directory') {
+          writeOps.push(mkdir(filePath, { recursive: true }).then(() => {}))
+        }
+        else if (entry.type === 'file') {
+          writeOps.push(
+            mkdir(path.dirname(filePath), { recursive: true }).then(() =>
+              Bun.write(filePath, entry.data).then(() => {}),
+            ),
+          )
+        }
+      }
+      await Promise.all(writeOps)
+
+      success = true
+      s.stop('Archive downloaded and extracted')
+    }
+    catch (archiveErr) {
+      s.stop(`Archive download failed: ${ansis.dim((archiveErr as Error).message)}`)
+    }
   }
-  catch (archiveErr) {
-    s.stop(`Archive download failed: ${ansis.dim((archiveErr as Error).message)}`)
+  else {
+    p.log.warn('Skipping archive download because default branch could not be resolved.')
   }
 
   // 5. Fallback to git clone
@@ -125,7 +129,12 @@ export async function runGitFork(repoInput: string, dest?: string): Promise<void
     s.start('Falling back to git clone...')
     try {
       const cloneUrl = provider.buildCloneUrl(baseUrl, owner, repo, token)
-      const proc = Bun.spawn(['git', 'clone', '--depth=1', '--single-branch', '--branch', ref, cloneUrl, destPath], {
+      const cloneArgs = ['git', 'clone', '--depth=1', '--single-branch']
+      if (ref)
+        cloneArgs.push('--branch', ref)
+      cloneArgs.push(cloneUrl, destPath)
+
+      const proc = Bun.spawn(cloneArgs, {
         stdout: 'pipe',
         stderr: 'pipe',
       })
