@@ -1,97 +1,65 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
 
-## Project Overview
+**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
 
-`hackycy-cli` (invoked as `ycy`) is a personal developer CLI toolkit
+## 1. Think Before Coding
 
-## Commands
+**Don't assume. Don't hide confusion. Surface tradeoffs.**
 
-```sh
-bun run dev        # watch-mode dev run (src/index.ts)
-bun run lint       # ESLint with cache
-bun run typecheck  # tsc type-check only (no emit)
-bun run release    # bumpp version bump + tag
-bun src/cli.ts     # run CLI directly (manual testing)
+Before implementing:
+- State your assumptions explicitly. If uncertain, ask.
+- If multiple interpretations exist, present them - don't pick silently.
+- If a simpler approach exists, say so. Push back when warranted.
+- If something is unclear, stop. Name what's confusing. Ask.
+
+## 2. Simplicity First
+
+**Minimum code that solves the problem. Nothing speculative.**
+
+- No features beyond what was asked.
+- No abstractions for single-use code.
+- No "flexibility" or "configurability" that wasn't requested.
+- No error handling for impossible scenarios.
+- If you write 200 lines and it could be 50, rewrite it.
+
+Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify.
+
+## 3. Surgical Changes
+
+**Touch only what you must. Clean up only your own mess.**
+
+When editing existing code:
+- Don't "improve" adjacent code, comments, or formatting.
+- Don't refactor things that aren't broken.
+- Match existing style, even if you'd do it differently.
+- If you notice unrelated dead code, mention it - don't delete it.
+
+When your changes create orphans:
+- Remove imports/variables/functions that YOUR changes made unused.
+- Don't remove pre-existing dead code unless asked.
+
+The test: Every changed line should trace directly to the user's request.
+
+## 4. Goal-Driven Execution
+
+**Define success criteria. Loop until verified.**
+
+Transform tasks into verifiable goals:
+- "Add validation" → "Write tests for invalid inputs, then make them pass"
+- "Fix the bug" → "Write a test that reproduces it, then make it pass"
+- "Refactor X" → "Ensure tests pass before and after"
+
+For multi-step tasks, state a brief plan:
+```
+1. [Step] → verify: [check]
+2. [Step] → verify: [check]
+3. [Step] → verify: [check]
 ```
 
-No automated tests exist; manual testing is done with `bun src/cli.ts`.
-
-## Architecture
-
-**Entry point**: `src/cli.ts` — thin orchestrator that calls `register(program)` for each command module and sets up `errorHandler`. No command logic lives here.
-
-**Directory layout**:
-```
-src/
-├── cli.ts                    # program setup, errorHandler only
-├── shared/
-│   └── utils.ts              # clearScreen, printTitle, hyperlinker, parseIntArg
-└── commands/
-    └── <name>/
-        ├── index.ts          # exports register(program: Command): void
-        ├── types.ts          # exported option interfaces (omit if no shared types)
-        └── <name>.ts         # implementation (lazy-imported inside action handlers)
-```
-
-**Command registration**: every command (and future sub-command group) must export `register(program: Command): void` from its `index.ts`. `cli.ts` imports and calls these; it never contains inline command logic.
-
-**Multi-level commands**: commands are grouped by functional domain (e.g. `ycy foo bar`). A sub-command group gets its own directory under `commands/`, with the same `index.ts` / `types.ts` / implementation layout. Sub-group `register` receives the parent `Command` object and calls `parent.addCommand(...)` directly.
-
-**Lazy loading**: heavy implementation files are always dynamically imported (`await import('./did')`) inside action handlers, never at module top-level, to keep startup time fast.
-
-**Shared utilities**: `src/shared/utils.ts` — `clearScreen()`, `printTitle()`, `hyperlinker()` (OSC 8 terminal links), `parseIntArg()`. This is the only global utility module; group-specific helpers live alongside the group's own files.
-
-**Types**: each command group keeps its exported option interfaces in its own `types.ts`. Internal-only types stay in the implementation file. Do not create a global `src/types.ts`.
-
-**Key dependencies**:
-- `@clack/prompts` — interactive terminal UI (spinners, selects, text inputs)
-- `ink` - react for interactive command-line apps
-- `commander` — CLI argument parsing
-- `ansis` — terminal colors
-- `dayjs` — date math in `did`
-- `fflate` — zip compression in `zip`
-- `reveal-file` — open Finder/Explorer after zip
-
-**Runtime APIs used**: `Bun.spawn` (git), `Bun.serve()` (static server), `Bun.file`/`Bun.write`, `Bun.Glob`, `Bun.semver`
-
-**TypeScript config**: `noEmit: true` — Bun transpiles at runtime, `tsc` is type-check only. Module resolution is `Preserve` (bundler mode).
-
-## Release / Distribution
-
-Builds are distributed as pre-compiled native binaries for macOS (x64/arm64), Linux (x64/arm64), and Windows (x64) via GitHub Releases. The `upgrade` command handles self-replacement by downloading the matching binary artifact.
+Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
 ---
 
-Default to using Bun instead of Node.js.
-
-- Use `bun <file>` instead of `node <file>` or `ts-node <file>`
-- Use `bun test` instead of `jest` or `vitest`
-- Use `bun build <file.html|file.ts|file.css>` instead of `webpack` or `esbuild`
-- Use `bun install` instead of `npm install` or `yarn install` or `pnpm install`
-- Use `bun run <script>` instead of `npm run <script>` or `yarn run <script>` or `pnpm run <script>`
-- Use `bunx <package> <command>` instead of `npx <package> <command>`
-- Bun automatically loads .env, so don't use dotenv.
-
-## APIs
-
-- `Bun.serve()` supports WebSockets, HTTPS, and routes. Don't use `express`.
-- `bun:sqlite` for SQLite. Don't use `better-sqlite3`.
-- `Bun.redis` for Redis. Don't use `ioredis`.
-- `Bun.sql` for Postgres. Don't use `pg` or `postgres.js`.
-- `WebSocket` is built-in. Don't use `ws`.
-- Prefer `Bun.file` over `node:fs`'s readFile/writeFile
-- Bun.$`ls` instead of execa.
-
-## Testing
-
-Use `bun test` to run tests.
-
-```ts#index.test.ts
-import { test, expect } from "bun:test";
-
-test("hello world", () => {
-  expect(1).toBe(1);
-});
-```
+**These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.
