@@ -1,3 +1,5 @@
+import type { AiConfig } from '../ai/types'
+
 export interface InstanceConfig {
   host: string
   scheme?: 'http' | 'https' // default 'https'
@@ -8,6 +10,7 @@ export interface InstanceConfig {
 export interface ForkConfig {
   salt: string
   instances: Record<string, InstanceConfig>
+  ai?: AiConfig
 }
 
 export interface ParsedRepo {
