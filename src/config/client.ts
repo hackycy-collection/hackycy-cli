@@ -12,6 +12,22 @@ interface ChatCompletionResponse {
       content?: string
     }
   }>
+  usage?: {
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
+  }
+}
+
+export interface ChatCompletionTokenUsage {
+  promptTokens?: number
+  completionTokens?: number
+  totalTokens?: number
+}
+
+export interface ChatCompletionResult {
+  content: string
+  usage?: ChatCompletionTokenUsage
 }
 
 function summarizeText(text: string, limit = 500): string {
@@ -26,10 +42,32 @@ function shouldDisableThinking(profile: ResolvedCmProfile): boolean {
     && profile.model.toLowerCase().startsWith('deepseek-v4-')
 }
 
-export async function createChatCompletion(
+function normalizeTokenUsage(usage: ChatCompletionResponse['usage']): ChatCompletionTokenUsage | undefined {
+  if (!usage)
+    return undefined
+
+  const promptTokens = Number.isFinite(usage.prompt_tokens) ? usage.prompt_tokens : undefined
+  const completionTokens = Number.isFinite(usage.completion_tokens) ? usage.completion_tokens : undefined
+  const totalTokens = Number.isFinite(usage.total_tokens)
+    ? usage.total_tokens
+    : promptTokens !== undefined && completionTokens !== undefined
+      ? promptTokens + completionTokens
+      : undefined
+
+  if (promptTokens === undefined && completionTokens === undefined && totalTokens === undefined)
+    return undefined
+
+  return {
+    promptTokens,
+    completionTokens,
+    totalTokens,
+  }
+}
+
+export async function createChatCompletionWithUsage(
   profile: ResolvedCmProfile,
   messages: ChatMessage[],
-): Promise<string> {
+): Promise<ChatCompletionResult> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), profile.timeoutMs)
 
@@ -69,7 +107,10 @@ export async function createChatCompletion(
       throw new Error(`Provider returned an empty response (${detail})`)
     }
 
-    return content
+    return {
+      content,
+      usage: normalizeTokenUsage(json.usage),
+    }
   }
   catch (err) {
     if ((err as Error).name === 'AbortError')
@@ -79,6 +120,14 @@ export async function createChatCompletion(
   finally {
     clearTimeout(timeout)
   }
+}
+
+export async function createChatCompletion(
+  profile: ResolvedCmProfile,
+  messages: ChatMessage[],
+): Promise<string> {
+  const result = await createChatCompletionWithUsage(profile, messages)
+  return result.content
 }
 
 export async function testCmProfile(profile: ResolvedCmProfile): Promise<string> {

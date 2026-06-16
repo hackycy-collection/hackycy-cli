@@ -1,9 +1,10 @@
+import type { ChatCompletionTokenUsage } from '../../../config/client'
 import type { ResolvedCmProfile } from '../../../config/types'
 import type { ChangeSummary, CmOptions, CommitLanguage } from './types'
 import process from 'node:process'
 import * as p from '@clack/prompts'
 import ansis from 'ansis'
-import { createChatCompletion } from '../../../config/client'
+import { createChatCompletionWithUsage } from '../../../config/client'
 import { resolveCmProfile } from '../../../config/cm'
 import { printTitle } from '../../../shared/utils'
 import {
@@ -33,12 +34,28 @@ function cleanCommitMessage(content: string): string {
     .replace(/^["']|["']$/g, '')
 }
 
+function formatTokenCount(value: number | undefined): string {
+  return value === undefined ? 'unknown' : value.toLocaleString('en-US')
+}
+
+function formatTokenUsage(usage: ChatCompletionTokenUsage | undefined): string {
+  if (!usage)
+    return 'Token usage: unavailable from provider'
+
+  return [
+    'Token usage:',
+    `prompt ${formatTokenCount(usage.promptTokens)}`,
+    `completion ${formatTokenCount(usage.completionTokens)}`,
+    `total ${formatTokenCount(usage.totalTokens)}`,
+  ].join(' ')
+}
+
 function buildMessages(
   summary: ChangeSummary,
   lang: CommitLanguage,
   history: string[],
   includeBody: boolean,
-): Parameters<typeof createChatCompletion>[1] {
+): Parameters<typeof createChatCompletionWithUsage>[1] {
   const language = lang === 'zh' ? 'Chinese' : 'English'
   const historyText = history.length > 0
     ? `\nRecent commit subjects for style reference:\n${history.map(item => `- ${item}`).join('\n')}\n`
@@ -71,18 +88,31 @@ function buildMessages(
   ]
 }
 
+interface GeneratedCommitMessage {
+  message: string
+  tokenUsage?: ChatCompletionTokenUsage
+}
+
 async function generateCommitMessage(
   profile: ResolvedCmProfile,
   summary: ChangeSummary,
   options: CmOptions,
-): Promise<string> {
+): Promise<GeneratedCommitMessage> {
   const history = options.history ? await getRecentCommitSubjects(summary.repoRoot) : []
   const messages = buildMessages(summary, normalizeLanguage(options.lang), history, Boolean(options.body))
-  const content = await createChatCompletion(profile, messages)
-  return cleanCommitMessage(content)
+  const result = await createChatCompletionWithUsage(profile, messages)
+  return {
+    message: cleanCommitMessage(result.content),
+    tokenUsage: result.usage,
+  }
 }
 
-function printGeneratedMessage(message: string, summary: ChangeSummary, profile: ResolvedCmProfile): void {
+function printGeneratedMessage(
+  message: string,
+  summary: ChangeSummary,
+  profile: ResolvedCmProfile,
+  tokenUsage: ChatCompletionTokenUsage | undefined,
+): void {
   const lines = [
     ansis.green(message),
     '',
@@ -90,6 +120,7 @@ function printGeneratedMessage(message: string, summary: ChangeSummary, profile:
     ...summary.files.map(file => ansis.dim(file.status)),
     '',
     ansis.dim(`CM profile: ${profile.name} (${profile.model})`),
+    ansis.dim(formatTokenUsage(tokenUsage)),
   ]
 
   if (summary.truncated)
@@ -226,9 +257,9 @@ export async function runGitCm(options: CmOptions): Promise<void> {
 
   spin.message(`Generating commit message with ${profile.name}...`)
 
-  let message: string
+  let generated: GeneratedCommitMessage
   try {
-    message = await generateCommitMessage(profile, summary, options)
+    generated = await generateCommitMessage(profile, summary, options)
   }
   catch (err) {
     spin.stop('Provider request failed')
@@ -241,7 +272,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
   }
 
   spin.stop('Commit message generated')
-  printGeneratedMessage(message, summary, profile)
+  printGeneratedMessage(generated.message, summary, profile, generated.tokenUsage)
 
   if (!shouldCreateCommit) {
     p.outro(options.dryRun ? 'Dry run complete' : 'Done')
@@ -266,7 +297,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
   const commitSpin = p.spinner()
   commitSpin.start('Creating commit...')
   try {
-    await commitWithMessage(summary.repoRoot, message)
+    await commitWithMessage(summary.repoRoot, generated.message)
     commitSpin.stop('Commit created')
     p.outro(ansis.green('Done'))
   }
