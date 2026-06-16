@@ -12,6 +12,8 @@ import {
   getRecentCommitSubjects,
   hasStagedChanges,
   stageAllChanges,
+  stageFiles,
+  unstageFiles,
 } from './changes'
 
 function normalizeLanguage(lang: string | undefined): CommitLanguage {
@@ -81,26 +83,101 @@ async function generateCommitMessage(
 }
 
 function printGeneratedMessage(message: string, summary: ChangeSummary, profile: ResolvedCmProfile): void {
-  console.log()
-  console.log(ansis.bold('Generated commit message:'))
-  console.log()
-  console.log(ansis.green(message))
-  console.log()
-  console.log(ansis.bold('Changed files:'))
-  for (const file of summary.files)
-    console.log(ansis.dim(file.status))
-  console.log()
-  console.log(ansis.dim(`CM profile: ${profile.name} (${profile.model})`))
+  const lines = [
+    ansis.green(message),
+    '',
+    ansis.bold('Changed files:'),
+    ...summary.files.map(file => ansis.dim(file.status)),
+    '',
+    ansis.dim(`CM profile: ${profile.name} (${profile.model})`),
+  ]
+
   if (summary.truncated)
-    console.log(ansis.yellow('Some diffs were omitted or truncated to save tokens.'))
+    lines.push(ansis.yellow('Some diffs were omitted or truncated to save tokens.'))
+
+  p.note(lines.join('\n'), 'Generated commit message')
+}
+
+async function promptForStageFiles(summary: ChangeSummary): Promise<void> {
+  if (summary.files.length === 0) {
+    p.log.info('No uncommitted changes.')
+    return
+  }
+
+  const selected = await p.multiselect({
+    message: 'Select files to stage',
+    options: summary.files.map(file => ({
+      value: file.path,
+      label: file.status,
+    })),
+    initialValues: summary.files.map(file => file.path),
+  })
+
+  if (p.isCancel(selected)) {
+    p.cancel('Cancelled')
+    process.exit(0)
+  }
+
+  const selectedPaths = selected as string[]
+  if (selectedPaths.length === 0) {
+    p.cancel('Nothing selected.')
+    process.exit(0)
+  }
+
+  const selectedSet = new Set(selectedPaths)
+  const unselectedPaths = summary.files
+    .filter(file => file.indexStatus !== '?')
+    .map(file => file.path)
+    .filter(filePath => !selectedSet.has(filePath))
+
+  const stageSpin = p.spinner()
+  stageSpin.start('Staging selected changes...')
+  try {
+    if (unselectedPaths.length > 0)
+      await unstageFiles(summary.repoRoot, unselectedPaths)
+    await stageFiles(summary.repoRoot, selectedPaths)
+    stageSpin.stop('Staged selected changes')
+  }
+  catch (err) {
+    stageSpin.stop('Failed to stage selected changes')
+    p.log.error((err as Error).message)
+    process.exit(1)
+  }
 }
 
 export async function runGitCm(options: CmOptions): Promise<void> {
   printTitle()
   p.intro(ansis.cyan('Git Commit Message'))
 
-  const shouldStageAll = Boolean(options.stageAll && options.commit && !options.dryRun)
-  const stagedOnly = Boolean(options.staged || (options.commit && !options.stageAll))
+  if (options.stage && options.stageAll) {
+    p.log.error('Use either --stage or --stage-all, not both.')
+    process.exit(1)
+  }
+
+  if (options.stage && options.dryRun) {
+    p.log.error('Use either --stage or --dry-run, not both.')
+    process.exit(1)
+  }
+
+  const shouldPromptStage = Boolean(options.stage)
+  const shouldStageAll = Boolean(options.stageAll && !options.dryRun)
+  const stagedOnly = Boolean(options.staged || shouldPromptStage || shouldStageAll)
+  const shouldCreateCommit = stagedOnly && !options.dryRun
+
+  if (shouldPromptStage) {
+    const spin = p.spinner()
+    spin.start('Collecting git changes...')
+    try {
+      const summary = await collectChangeSummary()
+      spin.stop('Git changes collected')
+      await promptForStageFiles(summary)
+    }
+    catch (err) {
+      spin.stop('Failed to collect git changes')
+      p.log.error((err as Error).message)
+      process.exit(1)
+    }
+  }
 
   if (shouldStageAll) {
     const stageSpin = p.spinner()
@@ -132,7 +209,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
 
   if (summary.files.length === 0) {
     spin.stop(stagedOnly
-      ? 'No staged changes. Use --stage-all with --commit to stage all changes before committing.'
+      ? 'No staged changes.'
       : 'No uncommitted changes.')
     return
   }
@@ -159,25 +236,26 @@ export async function runGitCm(options: CmOptions): Promise<void> {
     p.log.info(`Provider: ${profile.name}`)
     p.log.info(`Base URL: ${profile.baseURL}`)
     p.log.info(`Model: ${profile.model}`)
+    p.log.info('If the response was empty, the provider likely returned no assistant content.')
     process.exit(1)
   }
 
   spin.stop('Commit message generated')
   printGeneratedMessage(message, summary, profile)
 
-  if (!options.commit || options.dryRun) {
+  if (!shouldCreateCommit) {
     p.outro(options.dryRun ? 'Dry run complete' : 'Done')
     return
   }
 
   if (!(await hasStagedChanges(summary.repoRoot))) {
-    p.log.warn('No staged changes. Use --stage-all with --commit to stage all changes before committing.')
+    p.log.warn('No staged changes.')
     p.outro('No commit created')
     return
   }
 
   const confirmed = await p.confirm({
-    message: 'Commit staged changes with this message?',
+    message: 'Create commit with this message?',
   })
 
   if (p.isCancel(confirmed) || !confirmed) {

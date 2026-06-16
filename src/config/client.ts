@@ -7,10 +7,23 @@ interface ChatMessage {
 
 interface ChatCompletionResponse {
   choices?: Array<{
+    finish_reason?: string
     message?: {
       content?: string
     }
   }>
+}
+
+function summarizeText(text: string, limit = 500): string {
+  const trimmed = text.trim()
+  if (trimmed.length <= limit)
+    return trimmed
+  return `${trimmed.slice(0, limit)}…`
+}
+
+function shouldDisableThinking(profile: ResolvedCmProfile): boolean {
+  return profile.baseURL.includes('api.deepseek.com')
+    && profile.model.toLowerCase().startsWith('deepseek-v4-')
 }
 
 export async function createChatCompletion(
@@ -33,6 +46,9 @@ export async function createChatCompletion(
         temperature: profile.temperature,
         max_tokens: profile.maxOutputTokens,
         messages,
+        ...(shouldDisableThinking(profile)
+          ? { thinking: { type: 'disabled' } }
+          : {}),
       }),
     })
 
@@ -41,10 +57,17 @@ export async function createChatCompletion(
       throw new Error(`${res.status} ${res.statusText}${text ? `: ${text}` : ''}`)
     }
 
-    const json = await res.json() as ChatCompletionResponse
-    const content = json.choices?.[0]?.message?.content?.trim()
-    if (!content)
-      throw new Error('Provider returned an empty response')
+    const raw = await res.text()
+    const json = raw ? JSON.parse(raw) as ChatCompletionResponse : {}
+    const choice = json.choices?.[0]
+    const content = choice?.message?.content?.trim()
+    if (!content) {
+      const detail = [
+        `finish_reason=${choice?.finish_reason ?? 'unknown'}`,
+        raw ? `response=${summarizeText(raw)}` : 'response=<empty body>',
+      ].join(', ')
+      throw new Error(`Provider returned an empty response (${detail})`)
+    }
 
     return content
   }

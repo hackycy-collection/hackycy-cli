@@ -5,7 +5,7 @@ import { readConfig, writeConfig } from './store'
 
 const DEFAULT_TEMPERATURE = 0.2
 const DEFAULT_TIMEOUT_MS = 30_000
-const DEFAULT_MAX_OUTPUT_TOKENS = 300
+const DEFAULT_MAX_OUTPUT_TOKENS = 1000
 
 const ENV_PROFILE = 'YCY_CM_PROFILE'
 const ENV_BASE_URL = 'YCY_CM_BASE_URL'

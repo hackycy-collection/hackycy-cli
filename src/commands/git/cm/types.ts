@@ -5,7 +5,7 @@ export interface CmOptions {
   lang?: CommitLanguage
   history?: boolean
   staged?: boolean
-  commit?: boolean
+  stage?: boolean
   stageAll?: boolean
   dryRun?: boolean
   body?: boolean

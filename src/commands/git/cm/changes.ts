@@ -59,14 +59,22 @@ export async function getRepoRoot(): Promise<string> {
   return (await runGit(['rev-parse', '--show-toplevel'])).trim()
 }
 
+export async function stageAllChanges(repoRoot: string): Promise<void> {
+  await runGit(['add', '-A'], repoRoot)
+}
+
 export async function hasStagedChanges(repoRoot: string): Promise<boolean> {
   const proc = Bun.spawn(['git', 'diff', '--cached', '--quiet'], { cwd: repoRoot })
   const exitCode = await proc.exited
   return exitCode === 1
 }
 
-export async function stageAllChanges(repoRoot: string): Promise<void> {
-  await runGit(['add', '-A'], repoRoot)
+export async function stageFiles(repoRoot: string, filePaths: string[]): Promise<void> {
+  await runGit(['add', '-A', '--', ...filePaths], repoRoot)
+}
+
+export async function unstageFiles(repoRoot: string, filePaths: string[]): Promise<void> {
+  await runGit(['restore', '--staged', '--', ...filePaths], repoRoot)
 }
 
 export async function commitWithMessage(repoRoot: string, message: string): Promise<void> {

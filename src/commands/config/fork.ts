@@ -129,8 +129,7 @@ export async function runForkConfigList(): Promise<void> {
   const instances = await listInstances()
 
   if (Object.keys(instances).length === 0) {
-    p.log.info('No instances configured. Run "ycy config fork add" to add one.')
-    p.outro('')
+    console.log(ansis.dim('No instances configured. Run "ycy config fork add" to add one.'))
     return
   }
 

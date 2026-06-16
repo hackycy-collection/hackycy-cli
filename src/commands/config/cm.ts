@@ -86,8 +86,7 @@ export async function runCmConfigList(): Promise<void> {
   const cm = await listCmProfiles()
   const entries = Object.entries(cm.profiles)
   if (entries.length === 0) {
-    p.log.info('No CM profiles configured. Run "ycy config cm add" to add one.')
-    p.outro('')
+    console.log(ansis.dim('No CM profiles configured. Run "ycy config cm add" to add one.'))
     return
   }
 
@@ -96,7 +95,6 @@ export async function runCmConfigList(): Promise<void> {
     console.log(`${marker} ${ansis.cyan(name)} ${ansis.dim(profile.model)} ${ansis.dim(profile.baseURL)}`)
   }
   console.log()
-  p.outro('')
 }
 
 export async function runCmConfigUse(name: string): Promise<void> {

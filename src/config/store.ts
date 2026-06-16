@@ -18,12 +18,43 @@ function emptyConfig(): AppConfig {
   }
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
+function normalizeConfig(raw: unknown): AppConfig {
+  const fallback = emptyConfig()
+  if (!isRecord(raw))
+    return fallback
+
+  const salt = typeof raw.salt === 'string' && raw.salt ? raw.salt : fallback.salt
+
+  const legacyInstances = isRecord(raw.instances) ? raw.instances : undefined
+  const fork = isRecord(raw.fork) ? raw.fork : undefined
+  const forkInstances = isRecord(fork?.instances) ? fork.instances : undefined
+  const instances = forkInstances ?? legacyInstances ?? {}
+
+  const cm = isRecord(raw.cm)
+    ? raw.cm
+    : isRecord(raw.ai)
+      ? raw.ai
+      : undefined
+
+  return {
+    salt,
+    fork: {
+      instances: instances as AppConfig['fork']['instances'],
+    },
+    cm: cm as AppConfig['cm'],
+  }
+}
+
 export async function readConfig(): Promise<AppConfig> {
   const file = Bun.file(getConfigPath())
   if (!(await file.exists()))
     return emptyConfig()
 
-  const config: AppConfig = await file.json()
+  const config = normalizeConfig(await file.json())
   let dirty = false
 
   for (const [, instance] of Object.entries(config.fork.instances)) {
