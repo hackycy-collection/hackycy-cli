@@ -88,6 +88,19 @@ export async function commitWithMessage(repoRoot: string, message: string): Prom
   await runGit(args, repoRoot)
 }
 
+async function getCurrentBranch(repoRoot: string): Promise<string> {
+  const branch = (await runGit(['branch', '--show-current'], repoRoot)).trim()
+  if (!branch)
+    throw new Error('Cannot push from detached HEAD. Check out a branch first.')
+
+  return branch
+}
+
+export async function pushChanges(repoRoot: string, remote = 'origin'): Promise<void> {
+  const branch = await getCurrentBranch(repoRoot)
+  await runGit(['push', '-u', remote, branch], repoRoot)
+}
+
 export async function getRecentCommitSubjects(repoRoot: string, limit = 20): Promise<string[]> {
   const output = await runGit(['log', `-${limit}`, '--pretty=%s'], repoRoot, true)
   return output.split('\n').map(line => line.trim()).filter(Boolean)

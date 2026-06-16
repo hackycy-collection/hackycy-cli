@@ -7,6 +7,7 @@ export interface CmOptions {
   staged?: boolean
   stage?: boolean
   stageAll?: boolean
+  push?: boolean | string
   dryRun?: boolean
   body?: boolean
 }

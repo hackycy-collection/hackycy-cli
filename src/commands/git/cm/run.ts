@@ -12,6 +12,7 @@ import {
   commitWithMessage,
   getRecentCommitSubjects,
   hasStagedChanges,
+  pushChanges,
   stageAllChanges,
   stageFiles,
   unstageFiles,
@@ -190,10 +191,22 @@ export async function runGitCm(options: CmOptions): Promise<void> {
     process.exit(1)
   }
 
+  if (options.push && options.dryRun) {
+    p.log.error('Use either --push or --dry-run, not both.')
+    process.exit(1)
+  }
+
+  if (options.push && !options.stage && !options.staged && !options.stageAll) {
+    p.log.error('Use --push with --stage, --staged, or --stage-all.')
+    process.exit(1)
+  }
+
   const shouldPromptStage = Boolean(options.stage)
   const shouldStageAll = Boolean(options.stageAll && !options.dryRun)
   const stagedOnly = Boolean(options.staged || shouldPromptStage || shouldStageAll)
   const shouldCreateCommit = stagedOnly && !options.dryRun
+  const shouldPush = Boolean(options.push && shouldCreateCommit)
+  const pushRemote = typeof options.push === 'string' ? options.push : undefined
 
   if (shouldPromptStage) {
     const spin = p.spinner()
@@ -299,10 +312,27 @@ export async function runGitCm(options: CmOptions): Promise<void> {
   try {
     await commitWithMessage(summary.repoRoot, generated.message)
     commitSpin.stop('Commit created')
-    p.outro(ansis.green('Done'))
   }
   catch (err) {
     commitSpin.stop('git commit failed')
+    p.log.error((err as Error).message)
+    process.exit(1)
+  }
+
+  if (!shouldPush) {
+    p.outro(ansis.green('Done'))
+    return
+  }
+
+  const pushSpin = p.spinner()
+  pushSpin.start('Pushing to remote...')
+  try {
+    await pushChanges(summary.repoRoot, pushRemote)
+    pushSpin.stop('Pushed to remote')
+    p.outro(ansis.green('Done'))
+  }
+  catch (err) {
+    pushSpin.stop('git push failed')
     p.log.error((err as Error).message)
     process.exit(1)
   }
