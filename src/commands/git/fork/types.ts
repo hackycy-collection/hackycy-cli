@@ -1,18 +1,3 @@
-import type { AiConfig } from '../ai/types'
-
-export interface InstanceConfig {
-  host: string
-  scheme?: 'http' | 'https' // default 'https'
-  type: 'github' | 'gitlab'
-  token: string // encrypted
-}
-
-export interface ForkConfig {
-  salt: string
-  instances: Record<string, InstanceConfig>
-  ai?: AiConfig
-}
-
 export interface ParsedRepo {
   host: string
   owner: string

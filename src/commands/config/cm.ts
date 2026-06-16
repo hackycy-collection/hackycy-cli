@@ -1,20 +1,20 @@
 import process from 'node:process'
 import * as p from '@clack/prompts'
 import ansis from 'ansis'
-import { printTitle } from '../../../shared/utils'
-import { testAiProfile } from './client'
+import { testCmProfile } from '../../config/client'
 import {
-  addAiProfile,
-  listAiProfiles,
-  removeAiProfile,
-  resolveAiProfile,
-  setAiProfileValue,
-  setDefaultAiProfile,
-} from './config'
+  addCmProfile,
+  listCmProfiles,
+  removeCmProfile,
+  resolveCmProfile,
+  setCmProfileValue,
+  setDefaultCmProfile,
+} from '../../config/cm'
+import { printTitle } from '../../shared/utils'
 
-export async function runAiConfigAdd(): Promise<void> {
+export async function runCmConfigAdd(): Promise<void> {
   printTitle()
-  p.intro(ansis.cyan('Git AI Config — Add Profile'))
+  p.intro(ansis.cyan('CM Config — Add Profile'))
 
   const result = await p.group(
     {
@@ -65,44 +65,44 @@ export async function runAiConfigAdd(): Promise<void> {
   )
 
   const spin = p.spinner()
-  spin.start('Saving AI profile...')
+  spin.start('Saving CM profile...')
   try {
-    await addAiProfile(result.name, result.baseURL, result.model, result.apiKey)
-    spin.stop('AI profile saved')
+    await addCmProfile(result.name, result.baseURL, result.model, result.apiKey)
+    spin.stop('CM profile saved')
     p.outro(`Profile ${ansis.cyan(result.name)} added`)
   }
   catch (err) {
-    spin.stop('Failed to save AI profile')
+    spin.stop('Failed to save CM profile')
     p.log.error((err as Error).message)
     process.exit(1)
   }
 }
 
-export async function runAiConfigList(): Promise<void> {
+export async function runCmConfigList(): Promise<void> {
   printTitle()
-  console.log(ansis.dim('Git AI Config — Profiles'))
+  console.log(ansis.dim('CM Config — Profiles'))
   console.log()
 
-  const ai = await listAiProfiles()
-  const entries = Object.entries(ai.profiles)
+  const cm = await listCmProfiles()
+  const entries = Object.entries(cm.profiles)
   if (entries.length === 0) {
-    p.log.info('No AI profiles configured. Run "ycy git ai config add" to add one.')
+    p.log.info('No CM profiles configured. Run "ycy config cm add" to add one.')
     p.outro('')
     return
   }
 
   for (const [name, profile] of entries) {
-    const marker = ai.defaultProfile === name ? ansis.green('*') : ' '
+    const marker = cm.defaultProfile === name ? ansis.green('*') : ' '
     console.log(`${marker} ${ansis.cyan(name)} ${ansis.dim(profile.model)} ${ansis.dim(profile.baseURL)}`)
   }
   console.log()
   p.outro('')
 }
 
-export async function runAiConfigUse(name: string): Promise<void> {
+export async function runCmConfigUse(name: string): Promise<void> {
   try {
-    await setDefaultAiProfile(name)
-    p.outro(`Default AI profile set to ${ansis.cyan(name)}`)
+    await setDefaultCmProfile(name)
+    p.outro(`Default CM profile set to ${ansis.cyan(name)}`)
   }
   catch (err) {
     p.log.error((err as Error).message)
@@ -110,9 +110,9 @@ export async function runAiConfigUse(name: string): Promise<void> {
   }
 }
 
-export async function runAiConfigRemove(name: string): Promise<void> {
+export async function runCmConfigRemove(name: string): Promise<void> {
   const confirmed = await p.confirm({
-    message: `Remove AI profile "${name}"?`,
+    message: `Remove CM profile "${name}"?`,
   })
 
   if (p.isCancel(confirmed) || !confirmed) {
@@ -120,18 +120,18 @@ export async function runAiConfigRemove(name: string): Promise<void> {
     return
   }
 
-  const removed = await removeAiProfile(name)
+  const removed = await removeCmProfile(name)
   if (!removed) {
-    p.log.error(`AI profile not found: ${name}`)
+    p.log.error(`CM profile not found: ${name}`)
     process.exit(1)
   }
 
   p.outro(`Profile ${ansis.cyan(name)} removed`)
 }
 
-export async function runAiConfigSet(name: string, key: string, value: string): Promise<void> {
+export async function runCmConfigSet(name: string, key: string, value: string): Promise<void> {
   try {
-    await setAiProfileValue(name, key, value)
+    await setCmProfileValue(name, key, value)
     p.outro(`Profile ${ansis.cyan(name)} updated`)
   }
   catch (err) {
@@ -140,13 +140,13 @@ export async function runAiConfigSet(name: string, key: string, value: string): 
   }
 }
 
-export async function runAiConfigTest(name?: string): Promise<void> {
+export async function runCmConfigTest(name?: string): Promise<void> {
   printTitle()
-  p.intro(ansis.cyan('Git AI Config — Test Profile'))
+  p.intro(ansis.cyan('CM Config — Test Profile'))
 
   let profile
   try {
-    profile = await resolveAiProfile(name)
+    profile = await resolveCmProfile(name)
   }
   catch (err) {
     p.log.error((err as Error).message)
@@ -156,13 +156,13 @@ export async function runAiConfigTest(name?: string): Promise<void> {
   const spin = p.spinner()
   spin.start(`Testing ${profile.name}...`)
   try {
-    const content = await testAiProfile(profile)
-    spin.stop('AI profile is reachable')
+    const content = await testCmProfile(profile)
+    spin.stop('CM profile is reachable')
     p.log.info(`Response: ${content}`)
     p.outro('Done')
   }
   catch (err) {
-    spin.stop('AI profile test failed')
+    spin.stop('CM profile test failed')
     p.log.error((err as Error).message)
     p.log.info(`Provider: ${profile.name}`)
     p.log.info(`Base URL: ${profile.baseURL}`)

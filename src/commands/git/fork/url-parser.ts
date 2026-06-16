@@ -1,4 +1,4 @@
-import { getInstanceByHost, getInstanceByName } from './config'
+import { getInstanceByHost, getInstanceByName } from '../../../config/fork'
 
 interface ResolvedRepo {
   host: string
@@ -51,7 +51,7 @@ export async function parseRepoUrl(input: string): Promise<ResolvedRepo> {
     const pathPart = rest.slice(colonIdx + 1)
     const instance = await getInstanceByName(alias)
     if (!instance)
-      throw new Error(`Unknown instance alias: "${alias}". Run "ycy git config add" to configure it.`)
+      throw new Error(`Unknown instance alias: "${alias}". Run "ycy config fork add" to configure it.`)
 
     instanceName = alias
     host = instance.host
@@ -117,5 +117,5 @@ function detectProviderType(host: string): 'github' | 'gitlab' {
     return 'github'
   if (host === 'gitlab.com' || host.includes('gitlab'))
     return 'gitlab'
-  throw new Error(`Cannot determine provider type for host "${host}". Run "ycy git config add" to configure it.`)
+  throw new Error(`Cannot determine provider type for host "${host}". Run "ycy config fork add" to configure it.`)
 }

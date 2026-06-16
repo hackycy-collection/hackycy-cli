@@ -80,7 +80,7 @@ export async function runGitFork(repoInput: string, dest?: string): Promise<void
 
       if (!res.ok) {
         const statusText = res.status === 401 || res.status === 403
-          ? 'Authentication failed. Check your token with "ycy git config add".'
+          ? 'Authentication failed. Check your token with "ycy config fork add".'
           : `${res.status} ${res.statusText}`
         throw new Error(statusText)
       }

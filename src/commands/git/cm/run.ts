@@ -1,17 +1,18 @@
-import type { ChangeSummary, CmOptions, CommitLanguage, ResolvedAiProfile } from './types'
+import type { ResolvedCmProfile } from '../../../config/types'
+import type { ChangeSummary, CmOptions, CommitLanguage } from './types'
 import process from 'node:process'
 import * as p from '@clack/prompts'
 import ansis from 'ansis'
+import { createChatCompletion } from '../../../config/client'
+import { resolveCmProfile } from '../../../config/cm'
 import { printTitle } from '../../../shared/utils'
-import { createChatCompletion } from './client'
-import { resolveAiProfile } from './config'
 import {
   collectChangeSummary,
   commitWithMessage,
   getRecentCommitSubjects,
   hasStagedChanges,
   stageAllChanges,
-} from './diff'
+} from './changes'
 
 function normalizeLanguage(lang: string | undefined): CommitLanguage {
   if (!lang)
@@ -69,7 +70,7 @@ function buildMessages(
 }
 
 async function generateCommitMessage(
-  profile: ResolvedAiProfile,
+  profile: ResolvedCmProfile,
   summary: ChangeSummary,
   options: CmOptions,
 ): Promise<string> {
@@ -79,7 +80,7 @@ async function generateCommitMessage(
   return cleanCommitMessage(content)
 }
 
-function printGeneratedMessage(message: string, summary: ChangeSummary, profile: ResolvedAiProfile): void {
+function printGeneratedMessage(message: string, summary: ChangeSummary, profile: ResolvedCmProfile): void {
   console.log()
   console.log(ansis.bold('Generated commit message:'))
   console.log()
@@ -89,14 +90,14 @@ function printGeneratedMessage(message: string, summary: ChangeSummary, profile:
   for (const file of summary.files)
     console.log(ansis.dim(file.status))
   console.log()
-  console.log(ansis.dim(`AI profile: ${profile.name} (${profile.model})`))
+  console.log(ansis.dim(`CM profile: ${profile.name} (${profile.model})`))
   if (summary.truncated)
     console.log(ansis.yellow('Some diffs were omitted or truncated to save tokens.'))
 }
 
-export async function runGitAiCm(options: CmOptions): Promise<void> {
+export async function runGitCm(options: CmOptions): Promise<void> {
   printTitle()
-  p.intro(ansis.cyan('Git AI Commit Message'))
+  p.intro(ansis.cyan('Git Commit Message'))
 
   const shouldStageAll = Boolean(options.stageAll && options.commit && !options.dryRun)
   const stagedOnly = Boolean(options.staged || (options.commit && !options.stageAll))
@@ -136,12 +137,12 @@ export async function runGitAiCm(options: CmOptions): Promise<void> {
     return
   }
 
-  let profile: ResolvedAiProfile
+  let profile: ResolvedCmProfile
   try {
-    profile = await resolveAiProfile(options.profile)
+    profile = await resolveCmProfile(options.profile)
   }
   catch (err) {
-    spin.stop('AI profile not configured')
+    spin.stop('CM profile not configured')
     p.log.error((err as Error).message)
     process.exit(1)
   }
@@ -153,7 +154,7 @@ export async function runGitAiCm(options: CmOptions): Promise<void> {
     message = await generateCommitMessage(profile, summary, options)
   }
   catch (err) {
-    spin.stop('AI request failed')
+    spin.stop('Provider request failed')
     p.log.error((err as Error).message)
     p.log.info(`Provider: ${profile.name}`)
     p.log.info(`Base URL: ${profile.baseURL}`)

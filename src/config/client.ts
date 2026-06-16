@@ -1,4 +1,4 @@
-import type { ResolvedAiProfile } from './types'
+import type { ResolvedCmProfile } from './types'
 
 interface ChatMessage {
   role: 'system' | 'user'
@@ -14,7 +14,7 @@ interface ChatCompletionResponse {
 }
 
 export async function createChatCompletion(
-  profile: ResolvedAiProfile,
+  profile: ResolvedCmProfile,
   messages: ChatMessage[],
 ): Promise<string> {
   const controller = new AbortController()
@@ -44,13 +44,13 @@ export async function createChatCompletion(
     const json = await res.json() as ChatCompletionResponse
     const content = json.choices?.[0]?.message?.content?.trim()
     if (!content)
-      throw new Error('AI returned an empty response')
+      throw new Error('Provider returned an empty response')
 
     return content
   }
   catch (err) {
     if ((err as Error).name === 'AbortError')
-      throw new Error(`AI request timed out after ${profile.timeoutMs}ms`)
+      throw new Error(`Provider request timed out after ${profile.timeoutMs}ms`)
     throw err
   }
   finally {
@@ -58,7 +58,7 @@ export async function createChatCompletion(
   }
 }
 
-export async function testAiProfile(profile: ResolvedAiProfile): Promise<string> {
+export async function testCmProfile(profile: ResolvedCmProfile): Promise<string> {
   const content = await createChatCompletion(profile, [
     {
       role: 'system',

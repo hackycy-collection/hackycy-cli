@@ -1,21 +1,21 @@
-import type { AiConfig, AiProfile, ResolvedAiProfile } from './types'
+import type { CmConfig, CmProfile, ResolvedCmProfile } from './types'
 import process from 'node:process'
-import { readConfig, writeConfig } from '../fork/config'
-import { decrypt, deriveKey, encrypt } from '../fork/crypto'
+import { decrypt, deriveKey, encrypt } from './crypto'
+import { readConfig, writeConfig } from './store'
 
 const DEFAULT_TEMPERATURE = 0.2
 const DEFAULT_TIMEOUT_MS = 30_000
 const DEFAULT_MAX_OUTPUT_TOKENS = 300
 
-const ENV_PROFILE = 'YCY_AI_PROFILE'
-const ENV_BASE_URL = 'YCY_AI_BASE_URL'
-const ENV_API_KEY = 'YCY_AI_API_KEY'
-const ENV_MODEL = 'YCY_AI_MODEL'
-const ENV_TEMPERATURE = 'YCY_AI_TEMPERATURE'
-const ENV_TIMEOUT_MS = 'YCY_AI_TIMEOUT_MS'
-const ENV_MAX_OUTPUT_TOKENS = 'YCY_AI_MAX_OUTPUT_TOKENS'
+const ENV_PROFILE = 'YCY_CM_PROFILE'
+const ENV_BASE_URL = 'YCY_CM_BASE_URL'
+const ENV_API_KEY = 'YCY_CM_API_KEY'
+const ENV_MODEL = 'YCY_CM_MODEL'
+const ENV_TEMPERATURE = 'YCY_CM_TEMPERATURE'
+const ENV_TIMEOUT_MS = 'YCY_CM_TIMEOUT_MS'
+const ENV_MAX_OUTPUT_TOKENS = 'YCY_CM_MAX_OUTPUT_TOKENS'
 
-function emptyAiConfig(): AiConfig {
+function emptyCmConfig(): CmConfig {
   return { profiles: {} }
 }
 
@@ -30,7 +30,7 @@ function parseNumberEnv(value: string | undefined): number | undefined {
   return Number.isFinite(parsed) ? parsed : undefined
 }
 
-function withDefaults(profile: AiProfile): Omit<ResolvedAiProfile, 'name' | 'apiKey'> {
+function withDefaults(profile: CmProfile): Omit<ResolvedCmProfile, 'name' | 'apiKey'> {
   return {
     baseURL: normalizeBaseURL(profile.baseURL),
     model: profile.model,
@@ -40,68 +40,68 @@ function withDefaults(profile: AiProfile): Omit<ResolvedAiProfile, 'name' | 'api
   }
 }
 
-export async function readAiConfig(): Promise<AiConfig> {
+export async function readCmConfig(): Promise<CmConfig> {
   const config = await readConfig()
-  if (!config.ai)
-    return emptyAiConfig()
+  if (!config.cm)
+    return emptyCmConfig()
   return {
-    ...config.ai,
-    profiles: config.ai.profiles ?? {},
+    ...config.cm,
+    profiles: config.cm.profiles ?? {},
   }
 }
 
-export async function writeAiConfig(ai: AiConfig): Promise<void> {
+export async function writeCmConfig(cm: CmConfig): Promise<void> {
   const config = await readConfig()
-  config.ai = ai
+  config.cm = cm
   await writeConfig(config)
 }
 
-export async function addAiProfile(
+export async function addCmProfile(
   name: string,
   baseURL: string,
   model: string,
   apiKey: string,
 ): Promise<void> {
   const config = await readConfig()
-  const ai = config.ai ?? emptyAiConfig()
+  const cm = config.cm ?? emptyCmConfig()
   const key = await deriveKey(config.salt)
-  ai.profiles[name] = {
+  cm.profiles[name] = {
     baseURL: normalizeBaseURL(baseURL),
     model: model.trim(),
     apiKey: encrypt(apiKey, key),
   }
-  ai.defaultProfile ??= name
-  config.ai = ai
+  cm.defaultProfile ??= name
+  config.cm = cm
   await writeConfig(config)
 }
 
-export async function removeAiProfile(name: string): Promise<boolean> {
-  const ai = await readAiConfig()
-  if (!ai.profiles[name])
+export async function removeCmProfile(name: string): Promise<boolean> {
+  const cm = await readCmConfig()
+  if (!cm.profiles[name])
     return false
 
-  delete ai.profiles[name]
-  if (ai.defaultProfile === name)
-    ai.defaultProfile = Object.keys(ai.profiles)[0]
+  delete cm.profiles[name]
+  if (cm.defaultProfile === name)
+    cm.defaultProfile = Object.keys(cm.profiles)[0]
 
-  await writeAiConfig(ai)
+  await writeCmConfig(cm)
   return true
 }
 
-export async function setDefaultAiProfile(name: string): Promise<void> {
-  const ai = await readAiConfig()
-  if (!ai.profiles[name])
-    throw new Error(`AI profile not found: ${name}`)
-  ai.defaultProfile = name
-  await writeAiConfig(ai)
+export async function setDefaultCmProfile(name: string): Promise<void> {
+  const cm = await readCmConfig()
+  if (!cm.profiles[name])
+    throw new Error(`CM profile not found: ${name}`)
+  cm.defaultProfile = name
+  await writeCmConfig(cm)
 }
 
-export async function setAiProfileValue(name: string, key: string, value: string): Promise<void> {
+export async function setCmProfileValue(name: string, key: string, value: string): Promise<void> {
   const config = await readConfig()
-  const ai = config.ai ?? emptyAiConfig()
-  const profile = ai.profiles[name]
+  const cm = config.cm ?? emptyCmConfig()
+  const profile = cm.profiles[name]
   if (!profile)
-    throw new Error(`AI profile not found: ${name}`)
+    throw new Error(`CM profile not found: ${name}`)
 
   if (key === 'baseURL') {
     profile.baseURL = normalizeBaseURL(value)
@@ -135,20 +135,20 @@ export async function setAiProfileValue(name: string, key: string, value: string
     throw new Error('Unsupported key. Use baseURL, model, apiKey, temperature, timeoutMs, or maxOutputTokens.')
   }
 
-  config.ai = ai
+  config.cm = cm
   await writeConfig(config)
 }
 
-export async function listAiProfiles(): Promise<AiConfig> {
-  return readAiConfig()
+export async function listCmProfiles(): Promise<CmConfig> {
+  return readCmConfig()
 }
 
-export async function resolveAiProfile(profileName?: string): Promise<ResolvedAiProfile> {
+export async function resolveCmProfile(profileName?: string): Promise<ResolvedCmProfile> {
   const config = await readConfig()
-  const ai = config.ai ?? emptyAiConfig()
+  const cm = config.cm ?? emptyCmConfig()
   const env = process.env
-  const selectedName = profileName || env[ENV_PROFILE] || ai.defaultProfile || Object.keys(ai.profiles)[0]
-  const stored = selectedName ? ai.profiles[selectedName] : undefined
+  const selectedName = profileName || env[ENV_PROFILE] || cm.defaultProfile || Object.keys(cm.profiles)[0]
+  const stored = selectedName ? cm.profiles[selectedName] : undefined
 
   const baseURL = env[ENV_BASE_URL] || stored?.baseURL
   const model = env[ENV_MODEL] || stored?.model
@@ -160,7 +160,7 @@ export async function resolveAiProfile(profileName?: string): Promise<ResolvedAi
   }
 
   if (!baseURL || !model || !apiKey) {
-    throw new Error('No usable AI profile found. Run "ycy git ai config add" or set YCY_AI_BASE_URL, YCY_AI_MODEL, and YCY_AI_API_KEY.')
+    throw new Error('No usable CM profile found. Run "ycy config cm add" or set YCY_CM_BASE_URL, YCY_CM_MODEL, and YCY_CM_API_KEY.')
   }
 
   const defaults = stored

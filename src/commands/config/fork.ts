@@ -4,8 +4,8 @@ import * as p from '@clack/prompts'
 import ansis from 'ansis'
 import { render } from 'ink'
 import React from 'react'
-import { printTitle } from '../../../shared/utils'
-import { addInstance, listInstances, removeInstance } from '../fork/config'
+import { addInstance, listInstances, removeInstance } from '../../config/fork'
+import { printTitle } from '../../shared/utils'
 import { InstanceList } from './components/InstanceList'
 
 export async function runForkConfigAdd(): Promise<void> {
@@ -129,7 +129,7 @@ export async function runForkConfigList(): Promise<void> {
   const instances = await listInstances()
 
   if (Object.keys(instances).length === 0) {
-    p.log.info('No instances configured. Run "ycy git config add" to add one.')
+    p.log.info('No instances configured. Run "ycy config fork add" to add one.')
     p.outro('')
     return
   }

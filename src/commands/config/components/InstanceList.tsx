@@ -1,9 +1,9 @@
-import type { InstanceConfig } from '../../fork/types'
+import type { ForkInstanceConfig } from '../../../config/types'
 import { Box, Text } from 'ink'
 import React, { useEffect } from 'react'
 
 interface InstanceListProps {
-  instances: Record<string, InstanceConfig>
+  instances: Record<string, ForkInstanceConfig>
   onDone: () => void
 }
 

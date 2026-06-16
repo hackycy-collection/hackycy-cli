@@ -1,29 +1,5 @@
 export type CommitLanguage = 'en' | 'zh'
 
-export interface AiProfile {
-  baseURL: string
-  model: string
-  apiKey: string // encrypted
-  temperature?: number
-  timeoutMs?: number
-  maxOutputTokens?: number
-}
-
-export interface AiConfig {
-  defaultProfile?: string
-  profiles: Record<string, AiProfile>
-}
-
-export interface ResolvedAiProfile {
-  name: string
-  baseURL: string
-  model: string
-  apiKey: string
-  temperature: number
-  timeoutMs: number
-  maxOutputTokens: number
-}
-
 export interface CmOptions {
   profile?: string
   lang?: CommitLanguage
