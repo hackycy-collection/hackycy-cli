@@ -85,7 +85,7 @@ function HeatTable({ title, rows, pathLabel }: { title: string, rows: PathHeat[]
     <Box flexDirection="column">
       <Text bold color="magenta">{title}</Text>
       <Box flexDirection="row">
-        <HeaderCell width={COL.rank}>#</HeaderCell>
+        <HeaderCell width={COL.rank} muted>#</HeaderCell>
         <HeaderCell width={COL.total}>Total</HeaderCell>
         <HeaderCell width={COL.stat}>M</HeaderCell>
         <HeaderCell width={COL.stat}>A</HeaderCell>
@@ -109,7 +109,7 @@ function HeatRow({ index, row, pathWidth }: { index: number, row: PathHeat, path
 
   return (
     <Box flexDirection="row">
-      <Cell width={COL.rank}><Text color="gray">{String(index + 1)}</Text></Cell>
+      <Cell width={COL.rank}><Text color="gray" dimColor>{String(index + 1)}</Text></Cell>
       <Cell width={COL.total}><Text color="cyan">{String(row.total)}</Text></Cell>
       <CountCell color="yellow" width={COL.stat} value={row.modified} />
       <CountCell color="green" width={COL.stat} value={row.added} />
@@ -129,10 +129,10 @@ function HeatRow({ index, row, pathWidth }: { index: number, row: PathHeat, path
   )
 }
 
-function HeaderCell({ width, children }: { width: number, children: React.ReactNode }) {
+function HeaderCell({ width, muted, children }: { width: number, muted?: boolean, children: React.ReactNode }) {
   return (
     <Box minWidth={width}>
-      <Text bold color="cyan">{children}</Text>
+      <Text bold={!muted} color={muted ? 'gray' : 'cyan'} dimColor={muted}>{children}</Text>
     </Box>
   )
 }
