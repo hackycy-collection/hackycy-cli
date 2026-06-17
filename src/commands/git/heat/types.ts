@@ -1,10 +1,12 @@
 export type ChangeKind = 'M' | 'A' | 'D' | 'R' | 'C'
 export type HeatTarget = 'files' | 'directories'
+export type HeatSort = 'count' | 'path'
 
 export interface GitHeatOptions {
   limit?: number
   days?: number
   type?: HeatTarget
+  sort?: HeatSort
 }
 
 export interface ChangeCounts {
@@ -25,6 +27,7 @@ export interface HeatReport {
   repoName: string
   rangeLabel: string
   target: HeatTarget
+  sort: HeatSort
   commitCount: number
   files: PathHeat[]
   directories: PathHeat[]

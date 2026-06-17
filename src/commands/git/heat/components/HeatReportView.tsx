@@ -9,9 +9,8 @@ interface HeatReportViewProps {
   onDone: () => void
 }
 
-const COL = { rank: 4, total: 7, stat: 4 }
+const COL = { rank: 4, total: 6, stat: 3 }
 const FIXED_WIDTH = COL.rank + COL.total + COL.stat * 5
-const MAX_ROWS = 12
 
 export function HeatReportView({ report, onDone }: HeatReportViewProps) {
   useEffect(() => {
@@ -25,7 +24,7 @@ export function HeatReportView({ report, onDone }: HeatReportViewProps) {
       <Text> </Text>
       <HeatTable
         title={report.target === 'files' ? 'Top changed files' : 'Top changed directories'}
-        rows={(report.target === 'files' ? report.files : report.directories).slice(0, MAX_ROWS)}
+        rows={report.target === 'files' ? report.files : report.directories}
         pathLabel={report.target === 'files' ? 'File' : 'Directory'}
       />
       <Box marginTop={1}>
@@ -120,12 +119,12 @@ function HeatRow({ index, row, pathWidth }: { index: number, row: PathHeat, path
       {parsed.dir
         ? (
             <Text>
-              <Text color="gray" dimColor>{truncatePath(parsed.dir, pathWidth - parsed.base.length - 1)}</Text>
+              <Text color="cyan">{truncateDirectoryPath(parsed.dir, pathWidth - parsed.base.length - 1)}</Text>
               <Text color="gray" dimColor>/</Text>
-              <Text>{truncateEnd(parsed.base, pathWidth)}</Text>
+              <Text color="gray">{truncateEnd(parsed.base, pathWidth)}</Text>
             </Text>
           )
-        : <Text>{truncateEnd(row.path, pathWidth)}</Text>}
+        : <Text color="gray">{truncateEnd(row.path, pathWidth)}</Text>}
     </Box>
   )
 }
@@ -166,14 +165,40 @@ function splitPath(filePath: string): { dir: string, base: string } {
   }
 }
 
-function truncatePath(value: string, width: number): string {
+function truncateDirectoryPath(value: string, width: number): string {
   if (width <= 0)
     return ''
   if (value.length <= width)
     return value
   if (width <= 3)
     return '.'.repeat(width)
-  return `...${value.slice(value.length - width + 3)}`
+
+  const parts = value.split('/')
+  if (parts.length === 1)
+    return truncateMiddle(value, width)
+
+  const maxPrefixCount = Math.min(3, parts.length - 1)
+  for (let prefixCount = maxPrefixCount; prefixCount >= 1; prefixCount--) {
+    let best = [...parts.slice(0, prefixCount), '...'].join('/')
+    if (best.length > width)
+      continue
+
+    for (let suffixCount = 1; prefixCount + suffixCount < parts.length; suffixCount++) {
+      const candidate = [
+        ...parts.slice(0, prefixCount),
+        '...',
+        ...parts.slice(parts.length - suffixCount),
+      ].join('/')
+
+      if (candidate.length <= width && candidate.length > best.length)
+        best = candidate
+    }
+
+    return best
+  }
+
+  const fallback = `${parts[0]}/...`
+  return fallback.length <= width ? fallback : truncateMiddle(value, width)
 }
 
 function truncateEnd(value: string, width: number): string {
@@ -184,4 +209,17 @@ function truncateEnd(value: string, width: number): string {
   if (width <= 3)
     return '.'.repeat(width)
   return `${value.slice(0, width - 3)}...`
+}
+
+function truncateMiddle(value: string, width: number): string {
+  if (width <= 0)
+    return ''
+  if (value.length <= width)
+    return value
+  if (width <= 3)
+    return '.'.repeat(width)
+
+  const left = Math.ceil((width - 3) / 2)
+  const right = Math.floor((width - 3) / 2)
+  return `${value.slice(0, left)}...${value.slice(value.length - right)}`
 }

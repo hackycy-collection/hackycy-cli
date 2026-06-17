@@ -34,6 +34,7 @@ export async function runGitHeat(options: GitHeatOptions): Promise<void> {
       limit,
       days: options.days,
       target: options.type ?? 'files',
+      sort: options.sort ?? 'count',
     })
   }
   catch (err) {
@@ -97,7 +98,7 @@ async function readGitLog(repoRoot: string, range: { limit?: number, days?: numb
 export function buildHeatReport(
   repoRoot: string,
   gitLog: string,
-  range: { limit?: number, days?: number, target: HeatReport['target'] },
+  range: { limit?: number, days?: number, target: HeatReport['target'], sort: HeatReport['sort'] },
 ): HeatReport {
   const files = new Map<string, PathHeat>()
   let commitCount = 0
@@ -119,8 +120,8 @@ export function buildHeatReport(
     incrementPath(files, parsed.path, parsed.kind)
   }
 
-  const fileRows = sortHeatRows([...files.values()])
-  const directoryRows = buildDirectoryRows(fileRows)
+  const fileRows = sortFileRows([...files.values()], range.sort)
+  const directoryRows = buildDirectoryRows(fileRows, range.sort)
 
   return {
     repoRoot,
@@ -129,6 +130,7 @@ export function buildHeatReport(
       ? `last ${range.days} day${range.days === 1 ? '' : 's'}`
       : `last ${range.limit ?? DEFAULT_LIMIT} commits`,
     target: range.target,
+    sort: range.sort,
     commitCount,
     files: fileRows,
     directories: directoryRows,
@@ -159,7 +161,7 @@ function isSupportedKind(kind: string): kind is ChangeKind {
   return kind === 'M' || kind === 'A' || kind === 'D' || kind === 'R' || kind === 'C'
 }
 
-function buildDirectoryRows(files: PathHeat[]): PathHeat[] {
+function buildDirectoryRows(files: PathHeat[], sort: HeatReport['sort']): PathHeat[] {
   const directories = new Map<string, PathHeat>()
 
   for (const file of files) {
@@ -174,7 +176,7 @@ function buildDirectoryRows(files: PathHeat[]): PathHeat[] {
     row.copied += file.copied
   }
 
-  return sortHeatRows([...directories.values()])
+  return sortDirectoryRows([...directories.values()], sort)
 }
 
 function incrementPath(map: Map<string, PathHeat>, filePath: string, kind: ChangeKind): void {
@@ -223,12 +225,42 @@ function emptyCounts(): ChangeCounts {
   }
 }
 
-function sortHeatRows(rows: PathHeat[]): PathHeat[] {
+function sortFileRows(rows: PathHeat[], sort: HeatReport['sort']): PathHeat[] {
   return rows.sort((a, b) => {
+    if (sort === 'path')
+      return compareFilePath(a.path, b.path)
     if (b.total !== a.total)
       return b.total - a.total
     return a.path.localeCompare(b.path)
   })
+}
+
+function sortDirectoryRows(rows: PathHeat[], sort: HeatReport['sort']): PathHeat[] {
+  return rows.sort((a, b) => {
+    if (sort === 'path')
+      return compareDirectoryPath(a.path, b.path)
+    if (b.total !== a.total)
+      return b.total - a.total
+    return a.path.localeCompare(b.path)
+  })
+}
+
+function compareFilePath(a: string, b: string): number {
+  const aIsRootFile = !a.includes('/')
+  const bIsRootFile = !b.includes('/')
+
+  if (aIsRootFile !== bIsRootFile)
+    return aIsRootFile ? 1 : -1
+
+  return a.localeCompare(b)
+}
+
+function compareDirectoryPath(a: string, b: string): number {
+  if (a === '.' && b !== '.')
+    return 1
+  if (b === '.' && a !== '.')
+    return -1
+  return a.localeCompare(b)
 }
 
 function validatePositiveInteger(value: number | undefined, label: string): void {
