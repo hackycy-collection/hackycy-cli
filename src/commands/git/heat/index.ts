@@ -9,7 +9,7 @@ export function register(parent: Command): void {
     .option('-n, --limit <number>', 'Number of recent commits to inspect', parseIntArg)
     .option('-d, --days <number>', 'Number of recent days to inspect', parseIntArg)
     .option('-t, --type <type>', 'Report type: files or directories', parseHeatTarget, 'directories')
-    .option('-s, --sort <sort>', 'Sort by count or path', parseHeatSort, 'count')
+    .option('-s, --sort <sort>', 'Sort by count or path', parseHeatSort, 'path')
     .action(async (options: GitHeatOptions) => {
       const { runGitHeat } = await import('./heat')
       await runGitHeat(options)
