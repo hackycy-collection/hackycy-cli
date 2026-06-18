@@ -9,8 +9,8 @@ interface HeatReportViewProps {
   onDone: () => void
 }
 
-const COL = { rank: 4, total: 6, stat: 3 }
-const FIXED_WIDTH = COL.rank + COL.total + COL.stat * 5
+const COL = { rank: 4, changedAt: 20, kinds: 11 }
+const FIXED_WIDTH = COL.rank + COL.changedAt + COL.kinds
 
 export function HeatReportView({ report, onDone }: HeatReportViewProps) {
   useEffect(() => {
@@ -23,7 +23,6 @@ export function HeatReportView({ report, onDone }: HeatReportViewProps) {
       <Summary report={report} />
       <Text> </Text>
       <HeatTable
-        title={report.target === 'files' ? 'Top changed files' : 'Top changed directories'}
         rows={report.target === 'files' ? report.files : report.directories}
         pathLabel={report.target === 'files' ? 'File' : 'Directory'}
       />
@@ -78,21 +77,16 @@ function Summary({ report }: { report: HeatReport }) {
   )
 }
 
-function HeatTable({ title, rows, pathLabel }: { title: string, rows: PathHeat[], pathLabel: string }) {
+function HeatTable({ rows, pathLabel }: { rows: PathHeat[], pathLabel: string }) {
   const pathWidth = getPathWidth()
 
   return (
     <Box flexDirection="column">
-      <Text bold color="magenta">{title}</Text>
       <Box flexDirection="row">
-        <HeaderCell width={COL.rank} muted>#</HeaderCell>
-        <HeaderCell width={COL.total}>Total</HeaderCell>
-        <HeaderCell width={COL.stat}>M</HeaderCell>
-        <HeaderCell width={COL.stat}>A</HeaderCell>
-        <HeaderCell width={COL.stat}>D</HeaderCell>
-        <HeaderCell width={COL.stat}>R</HeaderCell>
-        <HeaderCell width={COL.stat}>C</HeaderCell>
-        <Text bold color="cyan">{pathLabel}</Text>
+        <HeaderCell width={COL.rank}>#</HeaderCell>
+        <HeaderCell width={COL.changedAt}>Changed at</HeaderCell>
+        <HeaderCell width={COL.kinds}>M A D R C</HeaderCell>
+        <Text bold color="magenta">{pathLabel}</Text>
       </Box>
       <Text color="gray">{'─'.repeat(FIXED_WIDTH + pathWidth)}</Text>
       {rows.length === 0
@@ -110,12 +104,8 @@ function HeatRow({ index, row, pathWidth }: { index: number, row: PathHeat, path
   return (
     <Box flexDirection="row">
       <Cell width={COL.rank}><Text color="gray" dimColor>{String(index + 1)}</Text></Cell>
-      <Cell width={COL.total}><Text color="cyan">{String(row.total)}</Text></Cell>
-      <CountCell color="yellow" width={COL.stat} value={row.modified} />
-      <CountCell color="green" width={COL.stat} value={row.added} />
-      <CountCell color="red" width={COL.stat} value={row.deleted} />
-      <CountCell color="magenta" width={COL.stat} value={row.renamed} />
-      <CountCell color="blue" width={COL.stat} value={row.copied} />
+      <Cell width={COL.changedAt}><Text color="#4e7f79">{row.lastChangedAt || '-'}</Text></Cell>
+      <KindCell row={row} />
       {parsed.dir
         ? (
             <Text>
@@ -129,10 +119,10 @@ function HeatRow({ index, row, pathWidth }: { index: number, row: PathHeat, path
   )
 }
 
-function HeaderCell({ width, muted, children }: { width: number, muted?: boolean, children: React.ReactNode }) {
+function HeaderCell({ width, children }: { width: number, children: React.ReactNode }) {
   return (
     <Box minWidth={width}>
-      <Text bold={!muted} color={muted ? 'gray' : 'cyan'} dimColor={muted}>{children}</Text>
+      <Text bold color="magenta">{children}</Text>
     </Box>
   )
 }
@@ -141,12 +131,26 @@ function Cell({ width, children }: { width: number, children: React.ReactNode })
   return <Box minWidth={width}>{children}</Box>
 }
 
-function CountCell({ color, width, value }: { color: string, width: number, value: number }) {
+function KindCell({ row }: { row: PathHeat }) {
   return (
-    <Cell width={width}>
-      <Text color={value > 0 ? color : 'gray'}>{String(value)}</Text>
+    <Cell width={COL.kinds}>
+      <Text>
+        <KindMark color="yellow" label="M" active={row.modified > 0} />
+        {' '}
+        <KindMark color="green" label="A" active={row.added > 0} />
+        {' '}
+        <KindMark color="red" label="D" active={row.deleted > 0} />
+        {' '}
+        <KindMark color="magenta" label="R" active={row.renamed > 0} />
+        {' '}
+        <KindMark color="blue" label="C" active={row.copied > 0} />
+      </Text>
     </Cell>
   )
+}
+
+function KindMark({ color, label, active }: { color: string, label: string, active: boolean }) {
+  return <Text color={active ? color : 'gray'}>{active ? label : '-'}</Text>
 }
 
 function getPathWidth(): number {

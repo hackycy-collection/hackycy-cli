@@ -79,7 +79,7 @@ async function readGitLog(repoRoot: string, range: { limit?: number, days?: numb
     'log',
     ...rangeArgs,
     '--name-status',
-    '--pretty=format:__HACKYCY_HEAT_COMMIT__%H',
+    '--pretty=format:__HACKYCY_HEAT_COMMIT__%H%x1f%ct%x1f%ci',
   ], {
     stdout: 'pipe',
     stderr: 'pipe',
@@ -102,6 +102,7 @@ export function buildHeatReport(
 ): HeatReport {
   const files = new Map<string, PathHeat>()
   let commitCount = 0
+  let currentCommitTime: CommitTime | undefined
 
   for (const rawLine of gitLog.split('\n')) {
     const line = rawLine.trim()
@@ -110,6 +111,7 @@ export function buildHeatReport(
 
     if (line.startsWith('__HACKYCY_HEAT_COMMIT__')) {
       commitCount += 1
+      currentCommitTime = parseCommitTime(line)
       continue
     }
 
@@ -117,7 +119,7 @@ export function buildHeatReport(
     if (!parsed)
       continue
 
-    incrementPath(files, parsed.path, parsed.kind)
+    incrementPath(files, parsed.path, parsed.kind, currentCommitTime)
   }
 
   const fileRows = sortFileRows([...files.values()], range.sort)
@@ -134,6 +136,19 @@ export function buildHeatReport(
     commitCount,
     files: fileRows,
     directories: directoryRows,
+  }
+}
+
+interface CommitTime {
+  label: string
+  epoch: number
+}
+
+function parseCommitTime(line: string): CommitTime {
+  const [, epoch, label = ''] = line.split('\x1F')
+  return {
+    label: label.slice(0, 19),
+    epoch: Number(epoch) || 0,
   }
 }
 
@@ -174,14 +189,22 @@ function buildDirectoryRows(files: PathHeat[], sort: HeatReport['sort']): PathHe
     row.deleted += file.deleted
     row.renamed += file.renamed
     row.copied += file.copied
+    if (file.lastChangedAtEpoch > row.lastChangedAtEpoch) {
+      row.lastChangedAt = file.lastChangedAt
+      row.lastChangedAtEpoch = file.lastChangedAtEpoch
+    }
   }
 
   return sortDirectoryRows([...directories.values()], sort)
 }
 
-function incrementPath(map: Map<string, PathHeat>, filePath: string, kind: ChangeKind): void {
+function incrementPath(map: Map<string, PathHeat>, filePath: string, kind: ChangeKind, commitTime: CommitTime | undefined): void {
   const row = getOrCreatePathHeat(map, filePath)
   row.total += 1
+  if (commitTime && commitTime.epoch >= row.lastChangedAtEpoch) {
+    row.lastChangedAt = commitTime.label
+    row.lastChangedAtEpoch = commitTime.epoch
+  }
 
   switch (kind) {
     case 'M':
@@ -207,6 +230,8 @@ function getOrCreatePathHeat(map: Map<string, PathHeat>, filePath: string): Path
   if (!row) {
     row = {
       path: filePath,
+      lastChangedAt: '',
+      lastChangedAtEpoch: 0,
       ...emptyCounts(),
     }
     map.set(filePath, row)

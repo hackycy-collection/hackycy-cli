@@ -20,6 +20,8 @@ export interface ChangeCounts {
 
 export interface PathHeat extends ChangeCounts {
   path: string
+  lastChangedAt: string
+  lastChangedAtEpoch: number
 }
 
 export interface HeatReport {
