@@ -118,7 +118,7 @@ function HeatRow({ index, row, pathWidth, relativeTime }: { index: number, row: 
   return (
     <Box flexDirection="row">
       <Cell width={COL.rank}><Text color="gray" dimColor>{String(index + 1)}</Text></Cell>
-      <Cell width={COL.changedAt}><Text color="#2d4f5c">{changedAt}</Text></Cell>
+      <Cell width={COL.changedAt}><Text color="#EB009B">{changedAt}</Text></Cell>
       <KindCell row={row} />
       <Box width={pathWidth}>
         {parsed.dir
