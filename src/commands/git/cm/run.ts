@@ -181,32 +181,34 @@ export async function runGitCm(options: CmOptions): Promise<void> {
   printTitle()
   p.intro(ansis.cyan('Git Commit Message'))
 
-  if (options.stage && options.stageAll) {
-    p.log.error('Use either --stage or --stage-all, not both.')
+  if ((options.stage || options.stagePush) && options.stageAll) {
+    p.log.error('Use either --stage/--stage-push or --stage-all, not both.')
     process.exit(1)
   }
 
-  if (options.stage && options.dryRun) {
-    p.log.error('Use either --stage or --dry-run, not both.')
+  if ((options.stage || options.stagePush) && options.dryRun) {
+    p.log.error('Use either --stage/--stage-push or --dry-run, not both.')
     process.exit(1)
   }
 
-  if (options.push && options.dryRun) {
-    p.log.error('Use either --push or --dry-run, not both.')
+  const pushOption = options.stagePush || options.push
+
+  if (pushOption && options.dryRun) {
+    p.log.error('Use either --push/--stage-push or --dry-run, not both.')
     process.exit(1)
   }
 
-  if (options.push && !options.stage && !options.staged && !options.stageAll) {
+  if (options.push && !options.stage && !options.staged && !options.stageAll && !options.stagePush) {
     p.log.error('Use --push with --stage, --staged, or --stage-all.')
     process.exit(1)
   }
 
-  const shouldPromptStage = Boolean(options.stage)
+  const shouldPromptStage = Boolean(options.stage || options.stagePush)
   const shouldStageAll = Boolean(options.stageAll && !options.dryRun)
   const stagedOnly = Boolean(options.staged || shouldPromptStage || shouldStageAll)
   const shouldCreateCommit = stagedOnly && !options.dryRun
-  const shouldPush = Boolean(options.push && shouldCreateCommit)
-  const pushRemote = typeof options.push === 'string' ? options.push : undefined
+  const shouldPush = Boolean(pushOption && shouldCreateCommit)
+  const pushRemote = typeof pushOption === 'string' ? pushOption : undefined
 
   if (shouldPromptStage) {
     const spin = p.spinner()

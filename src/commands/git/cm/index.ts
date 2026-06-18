@@ -12,6 +12,7 @@ export function register(parent: Command): void {
     .option('-s, --stage', 'Select files to stage before generating')
     .option('-a, --stage-all', 'Stage all changes before generating')
     .option('-p, --push [remote]', 'Push to remote after creating the commit, defaults to origin')
+    .option('-c, --stage-push [remote]', 'Select files to stage, commit, then push, defaults to origin')
     .option('-d, --dry-run', 'Generate and print only')
     .option('-b, --body', 'Allow a short commit body')
     .action(async (options: CmOptions) => {
