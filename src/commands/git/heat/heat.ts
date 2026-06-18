@@ -18,6 +18,7 @@ export async function runGitHeat(options: GitHeatOptions): Promise<void> {
   const limit = options.limit ?? (options.days === undefined ? DEFAULT_LIMIT : undefined)
   validatePositiveInteger(limit, '-n/--limit')
   validatePositiveInteger(options.days, '-d/--days')
+  const query = options.query?.trim()
 
   let repoRoot: string
   try {
@@ -36,6 +37,7 @@ export async function runGitHeat(options: GitHeatOptions): Promise<void> {
       target: options.type ?? 'files',
       sort: options.sort ?? 'count',
       relativeTime: options.relativeTime ?? false,
+      query: query || undefined,
     })
   }
   catch (err) {
@@ -99,7 +101,7 @@ async function readGitLog(repoRoot: string, range: { limit?: number, days?: numb
 export function buildHeatReport(
   repoRoot: string,
   gitLog: string,
-  range: { limit?: number, days?: number, target: HeatReport['target'], sort: HeatReport['sort'], relativeTime: boolean },
+  range: { limit?: number, days?: number, target: HeatReport['target'], sort: HeatReport['sort'], relativeTime: boolean, query?: string },
 ): HeatReport {
   const files = new Map<string, PathHeat>()
   let commitCount = 0
@@ -135,6 +137,7 @@ export function buildHeatReport(
     target: range.target,
     sort: range.sort,
     relativeTime: range.relativeTime,
+    query: range.query,
     commitCount,
     files: fileRows,
     directories: directoryRows,

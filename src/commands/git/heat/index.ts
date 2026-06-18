@@ -11,6 +11,7 @@ export function register(parent: Command): void {
     .option('-t, --type <type>', 'Report type: files or directories', parseHeatTarget, 'directories')
     .option('-s, --sort <sort>', 'Sort by count or path', parseHeatSort, 'path')
     .option('-r, --relative-time', 'Show Changed at as relative time')
+    .option('-q, --query <text>', 'Highlight files or directories that contain text')
     .action(async (options: GitHeatOptions) => {
       const { runGitHeat } = await import('./heat')
       await runGitHeat(options)

@@ -8,6 +8,7 @@ export interface GitHeatOptions {
   type?: HeatTarget
   sort?: HeatSort
   relativeTime?: boolean
+  query?: string
 }
 
 export interface ChangeCounts {
@@ -32,6 +33,7 @@ export interface HeatReport {
   target: HeatTarget
   sort: HeatSort
   relativeTime: boolean
+  query?: string
   commitCount: number
   files: PathHeat[]
   directories: PathHeat[]

@@ -1,5 +1,4 @@
 import type { HeatReport, PathHeat } from '../types'
-import path from 'node:path'
 import process from 'node:process'
 import dayjs from 'dayjs'
 import relativeTime from 'dayjs/plugin/relativeTime'
@@ -17,6 +16,7 @@ const COL = { rank: 4, changedAt: 20, kinds: 11 }
 const FIXED_WIDTH = COL.rank + COL.changedAt + COL.kinds
 const EARLIEST_COLOR = '#FFA500'
 const LATEST_COLOR = '#98FB98'
+const MATCH_BACKGROUND = '#FFD54A'
 type TimeMark = 'earliest' | 'latest' | undefined
 
 export function HeatReportView({ report, onDone }: HeatReportViewProps) {
@@ -33,6 +33,7 @@ export function HeatReportView({ report, onDone }: HeatReportViewProps) {
         rows={report.target === 'files' ? report.files : report.directories}
         pathLabel={report.target === 'files' ? 'File' : 'Directory'}
         relativeTime={report.relativeTime}
+        query={report.query}
       />
       <Box marginTop={1}>
         <Text color="gray">
@@ -89,9 +90,10 @@ function Summary({ report }: { report: HeatReport }) {
   )
 }
 
-function HeatTable({ rows, pathLabel, relativeTime }: { rows: PathHeat[], pathLabel: string, relativeTime: boolean }) {
+function HeatTable({ rows, pathLabel, relativeTime, query }: { rows: PathHeat[], pathLabel: string, relativeTime: boolean, query?: string }) {
   const pathWidth = getPathWidth()
   const timeMarks = getTimeMarks(rows)
+  const normalizedQuery = query?.toLowerCase()
 
   return (
     <Box flexDirection="column">
@@ -114,14 +116,14 @@ function HeatTable({ rows, pathLabel, relativeTime }: { rows: PathHeat[], pathLa
               timeMark={timeMarks[index]}
               pathWidth={pathWidth}
               relativeTime={relativeTime}
+              query={normalizedQuery}
             />
           ))}
     </Box>
   )
 }
 
-function HeatRow({ index, row, timeMark, pathWidth, relativeTime }: { index: number, row: PathHeat, timeMark: TimeMark, pathWidth: number, relativeTime: boolean }) {
-  const parsed = splitPath(row.path)
+function HeatRow({ index, row, timeMark, pathWidth, relativeTime, query }: { index: number, row: PathHeat, timeMark: TimeMark, pathWidth: number, relativeTime: boolean, query?: string }) {
   const changedAt = formatChangedAt(row, relativeTime)
 
   return (
@@ -132,18 +134,104 @@ function HeatRow({ index, row, timeMark, pathWidth, relativeTime }: { index: num
       <Cell width={COL.changedAt}><Text color="#EB009B">{changedAt}</Text></Cell>
       <KindCell row={row} />
       <Box width={pathWidth}>
-        {parsed.dir
-          ? (
-              <Text wrap="hard">
-                <Text color="cyan">{parsed.dir}</Text>
-                <Text color="gray" dimColor>/</Text>
-                <Text color="gray">{parsed.base}</Text>
-              </Text>
-            )
-          : <Text color="gray" wrap="hard">{row.path}</Text>}
+        <HighlightedPath path={row.path} query={query} />
       </Box>
     </Box>
   )
+}
+
+function HighlightedPath({ path: filePath, query }: { path: string, query?: string }) {
+  const ranges = query ? getMatchRanges(filePath, query) : []
+  const segments = splitPathSegments(filePath, ranges)
+
+  return (
+    <Text wrap="hard">
+      {segments.map(segment => (
+        <Text
+          key={`${segment.start}:${segment.end}`}
+          bold={segment.highlighted}
+          color={segment.highlighted ? 'black' : segment.color}
+          dimColor={segment.highlighted ? false : segment.dimColor}
+          backgroundColor={segment.highlighted ? MATCH_BACKGROUND : undefined}
+        >
+          {segment.text}
+        </Text>
+      ))}
+    </Text>
+  )
+}
+
+interface PathSegment {
+  start: number
+  end: number
+  text: string
+  color: 'cyan' | 'gray'
+  dimColor: boolean
+  highlighted: boolean
+}
+
+interface MatchRange {
+  start: number
+  end: number
+}
+
+function getMatchRanges(filePath: string, query: string): MatchRange[] {
+  const ranges: MatchRange[] = []
+  const lowerPath = filePath.toLowerCase()
+  let fromIndex = 0
+
+  while (fromIndex < lowerPath.length) {
+    const index = lowerPath.indexOf(query, fromIndex)
+    if (index === -1)
+      break
+
+    ranges.push({ start: index, end: index + query.length })
+    fromIndex = index + query.length
+  }
+
+  return ranges
+}
+
+function splitPathSegments(filePath: string, ranges: MatchRange[]): PathSegment[] {
+  const boundaries = new Set<number>([0, filePath.length])
+  const slashIndex = getDisplaySlashIndex(filePath)
+
+  if (slashIndex !== -1) {
+    boundaries.add(slashIndex)
+    boundaries.add(slashIndex + 1)
+  }
+
+  for (const range of ranges) {
+    boundaries.add(range.start)
+    boundaries.add(range.end)
+  }
+
+  const points = [...boundaries].sort((a, b) => a - b)
+  const segments: PathSegment[] = []
+
+  for (let i = 0; i < points.length - 1; i += 1) {
+    const start = points[i]!
+    const end = points[i + 1]!
+    if (start === end)
+      continue
+
+    segments.push({
+      start,
+      end,
+      text: filePath.slice(start, end),
+      color: slashIndex !== -1 && start < slashIndex ? 'cyan' : 'gray',
+      dimColor: slashIndex !== -1 && start === slashIndex && end === slashIndex + 1,
+      highlighted: ranges.some(range => start >= range.start && end <= range.end),
+    })
+  }
+
+  return segments
+}
+
+function getDisplaySlashIndex(filePath: string): number {
+  if (filePath === '.')
+    return -1
+  return filePath.lastIndexOf('/')
 }
 
 function getTimeMarks(rows: PathHeat[]): TimeMark[] {
@@ -228,15 +316,4 @@ function KindMark({ active }: { active: boolean }) {
 function getPathWidth(): number {
   const columns = process.stdout.columns || 80
   return Math.max(1, columns - FIXED_WIDTH - 2)
-}
-
-function splitPath(filePath: string): { dir: string, base: string } {
-  if (filePath === '.')
-    return { dir: '', base: '.' }
-
-  const dir = path.dirname(filePath)
-  return {
-    dir: dir === '.' ? '' : dir,
-    base: path.basename(filePath),
-  }
 }
