@@ -35,6 +35,7 @@ export async function runGitHeat(options: GitHeatOptions): Promise<void> {
       days: options.days,
       target: options.type ?? 'files',
       sort: options.sort ?? 'count',
+      relativeTime: options.relativeTime ?? false,
     })
   }
   catch (err) {
@@ -98,7 +99,7 @@ async function readGitLog(repoRoot: string, range: { limit?: number, days?: numb
 export function buildHeatReport(
   repoRoot: string,
   gitLog: string,
-  range: { limit?: number, days?: number, target: HeatReport['target'], sort: HeatReport['sort'] },
+  range: { limit?: number, days?: number, target: HeatReport['target'], sort: HeatReport['sort'], relativeTime: boolean },
 ): HeatReport {
   const files = new Map<string, PathHeat>()
   let commitCount = 0
@@ -133,6 +134,7 @@ export function buildHeatReport(
       : `last ${range.limit ?? DEFAULT_LIMIT} commits`,
     target: range.target,
     sort: range.sort,
+    relativeTime: range.relativeTime,
     commitCount,
     files: fileRows,
     directories: directoryRows,

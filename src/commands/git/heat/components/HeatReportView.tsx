@@ -1,8 +1,12 @@
 import type { HeatReport, PathHeat } from '../types'
 import path from 'node:path'
 import process from 'node:process'
+import dayjs from 'dayjs'
+import relativeTime from 'dayjs/plugin/relativeTime'
 import { Box, Text } from 'ink'
 import React, { useEffect } from 'react'
+
+dayjs.extend(relativeTime)
 
 interface HeatReportViewProps {
   report: HeatReport
@@ -25,6 +29,7 @@ export function HeatReportView({ report, onDone }: HeatReportViewProps) {
       <HeatTable
         rows={report.target === 'files' ? report.files : report.directories}
         pathLabel={report.target === 'files' ? 'File' : 'Directory'}
+        relativeTime={report.relativeTime}
       />
       <Box marginTop={1}>
         <Text color="gray">
@@ -77,7 +82,7 @@ function Summary({ report }: { report: HeatReport }) {
   )
 }
 
-function HeatTable({ rows, pathLabel }: { rows: PathHeat[], pathLabel: string }) {
+function HeatTable({ rows, pathLabel, relativeTime }: { rows: PathHeat[], pathLabel: string, relativeTime: boolean }) {
   const pathWidth = getPathWidth()
 
   return (
@@ -86,37 +91,56 @@ function HeatTable({ rows, pathLabel }: { rows: PathHeat[], pathLabel: string })
         <HeaderCell width={COL.rank}>#</HeaderCell>
         <HeaderCell width={COL.changedAt}>Changed at</HeaderCell>
         <HeaderCell width={COL.kinds}>M A D R C</HeaderCell>
-        <Text bold color="magenta">{pathLabel}</Text>
+        <Box width={pathWidth}>
+          <Text bold color="magenta">{pathLabel}</Text>
+        </Box>
       </Box>
       <Text color="gray">{'─'.repeat(FIXED_WIDTH + pathWidth)}</Text>
       {rows.length === 0
         ? <Text color="gray">No changes found.</Text>
         : rows.map((row, index) => (
-            <HeatRow key={row.path} index={index} row={row} pathWidth={pathWidth} />
+            <HeatRow
+              key={row.path}
+              index={index}
+              row={row}
+              pathWidth={pathWidth}
+              relativeTime={relativeTime}
+            />
           ))}
     </Box>
   )
 }
 
-function HeatRow({ index, row, pathWidth }: { index: number, row: PathHeat, pathWidth: number }) {
+function HeatRow({ index, row, pathWidth, relativeTime }: { index: number, row: PathHeat, pathWidth: number, relativeTime: boolean }) {
   const parsed = splitPath(row.path)
+  const changedAt = formatChangedAt(row, relativeTime)
 
   return (
     <Box flexDirection="row">
       <Cell width={COL.rank}><Text color="gray" dimColor>{String(index + 1)}</Text></Cell>
-      <Cell width={COL.changedAt}><Text color="#4e7f79">{row.lastChangedAt || '-'}</Text></Cell>
+      <Cell width={COL.changedAt}><Text color="#2d4f5c">{changedAt}</Text></Cell>
       <KindCell row={row} />
-      {parsed.dir
-        ? (
-            <Text>
-              <Text color="cyan">{truncateDirectoryPath(parsed.dir, pathWidth - parsed.base.length - 1)}</Text>
-              <Text color="gray" dimColor>/</Text>
-              <Text color="gray">{truncateEnd(parsed.base, pathWidth)}</Text>
-            </Text>
-          )
-        : <Text color="gray">{truncateEnd(row.path, pathWidth)}</Text>}
+      <Box width={pathWidth}>
+        {parsed.dir
+          ? (
+              <Text wrap="hard">
+                <Text color="cyan">{parsed.dir}</Text>
+                <Text color="gray" dimColor>/</Text>
+                <Text color="gray">{parsed.base}</Text>
+              </Text>
+            )
+          : <Text color="gray" wrap="hard">{row.path}</Text>}
+      </Box>
     </Box>
   )
+}
+
+function formatChangedAt(row: PathHeat, relativeTime: boolean): string {
+  if (!row.lastChangedAt)
+    return '-'
+  if (!relativeTime || row.lastChangedAtEpoch <= 0)
+    return row.lastChangedAt
+  return dayjs.unix(row.lastChangedAtEpoch).fromNow()
 }
 
 function HeaderCell({ width, children }: { width: number, children: React.ReactNode }) {
@@ -154,8 +178,8 @@ function KindMark({ active }: { active: boolean }) {
 }
 
 function getPathWidth(): number {
-  const columns = Math.min(process.stdout.columns || 80, 80)
-  return Math.max(28, columns - FIXED_WIDTH - 2)
+  const columns = process.stdout.columns || 80
+  return Math.max(1, columns - FIXED_WIDTH - 2)
 }
 
 function splitPath(filePath: string): { dir: string, base: string } {
@@ -167,63 +191,4 @@ function splitPath(filePath: string): { dir: string, base: string } {
     dir: dir === '.' ? '' : dir,
     base: path.basename(filePath),
   }
-}
-
-function truncateDirectoryPath(value: string, width: number): string {
-  if (width <= 0)
-    return ''
-  if (value.length <= width)
-    return value
-  if (width <= 3)
-    return '.'.repeat(width)
-
-  const parts = value.split('/')
-  if (parts.length === 1)
-    return truncateMiddle(value, width)
-
-  const maxPrefixCount = Math.min(3, parts.length - 1)
-  for (let prefixCount = maxPrefixCount; prefixCount >= 1; prefixCount--) {
-    let best = [...parts.slice(0, prefixCount), '...'].join('/')
-    if (best.length > width)
-      continue
-
-    for (let suffixCount = 1; prefixCount + suffixCount < parts.length; suffixCount++) {
-      const candidate = [
-        ...parts.slice(0, prefixCount),
-        '...',
-        ...parts.slice(parts.length - suffixCount),
-      ].join('/')
-
-      if (candidate.length <= width && candidate.length > best.length)
-        best = candidate
-    }
-
-    return best
-  }
-
-  const fallback = `${parts[0]}/...`
-  return fallback.length <= width ? fallback : truncateMiddle(value, width)
-}
-
-function truncateEnd(value: string, width: number): string {
-  if (width <= 0)
-    return ''
-  if (value.length <= width)
-    return value
-  if (width <= 3)
-    return '.'.repeat(width)
-  return `${value.slice(0, width - 3)}...`
-}
-
-function truncateMiddle(value: string, width: number): string {
-  if (width <= 0)
-    return ''
-  if (value.length <= width)
-    return value
-  if (width <= 3)
-    return '.'.repeat(width)
-
-  const left = Math.ceil((width - 3) / 2)
-  const right = Math.floor((width - 3) / 2)
-  return `${value.slice(0, left)}...${value.slice(value.length - right)}`
 }

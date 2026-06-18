@@ -10,6 +10,7 @@ export function register(parent: Command): void {
     .option('-d, --days <number>', 'Number of recent days to inspect', parseIntArg)
     .option('-t, --type <type>', 'Report type: files or directories', parseHeatTarget, 'directories')
     .option('-s, --sort <sort>', 'Sort by count or path', parseHeatSort, 'path')
+    .option('-r, --relative-time', 'Show Changed at as relative time')
     .action(async (options: GitHeatOptions) => {
       const { runGitHeat } = await import('./heat')
       await runGitHeat(options)
