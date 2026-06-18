@@ -15,6 +15,9 @@ interface HeatReportViewProps {
 
 const COL = { rank: 4, changedAt: 20, kinds: 11 }
 const FIXED_WIDTH = COL.rank + COL.changedAt + COL.kinds
+const EARLIEST_COLOR = '#FFD700'
+const LATEST_COLOR = '#FFA500'
+type TimeMark = 'earliest' | 'latest' | undefined
 
 export function HeatReportView({ report, onDone }: HeatReportViewProps) {
   useEffect(() => {
@@ -35,6 +38,10 @@ export function HeatReportView({ report, onDone }: HeatReportViewProps) {
         <Text color="gray">
           Legend
           {'  '}
+          <Text color={LATEST_COLOR}>#</Text>
+          {' latest  '}
+          <Text color={EARLIEST_COLOR}>#</Text>
+          {' earliest  '}
           <Text color="yellow">M</Text>
           {' modified  '}
           <Text color="green">A</Text>
@@ -84,6 +91,7 @@ function Summary({ report }: { report: HeatReport }) {
 
 function HeatTable({ rows, pathLabel, relativeTime }: { rows: PathHeat[], pathLabel: string, relativeTime: boolean }) {
   const pathWidth = getPathWidth()
+  const timeMarks = getTimeMarks(rows)
 
   return (
     <Box flexDirection="column">
@@ -103,6 +111,7 @@ function HeatTable({ rows, pathLabel, relativeTime }: { rows: PathHeat[], pathLa
               key={row.path}
               index={index}
               row={row}
+              timeMark={timeMarks[index]}
               pathWidth={pathWidth}
               relativeTime={relativeTime}
             />
@@ -111,13 +120,15 @@ function HeatTable({ rows, pathLabel, relativeTime }: { rows: PathHeat[], pathLa
   )
 }
 
-function HeatRow({ index, row, pathWidth, relativeTime }: { index: number, row: PathHeat, pathWidth: number, relativeTime: boolean }) {
+function HeatRow({ index, row, timeMark, pathWidth, relativeTime }: { index: number, row: PathHeat, timeMark: TimeMark, pathWidth: number, relativeTime: boolean }) {
   const parsed = splitPath(row.path)
   const changedAt = formatChangedAt(row, relativeTime)
 
   return (
     <Box flexDirection="row">
-      <Cell width={COL.rank}><Text color="gray" dimColor>{String(index + 1)}</Text></Cell>
+      <Cell width={COL.rank}>
+        <Text color={getRankColor(timeMark)} dimColor={!timeMark}>{String(index + 1)}</Text>
+      </Cell>
       <Cell width={COL.changedAt}><Text color="#EB009B">{changedAt}</Text></Cell>
       <KindCell row={row} />
       <Box width={pathWidth}>
@@ -133,6 +144,43 @@ function HeatRow({ index, row, pathWidth, relativeTime }: { index: number, row: 
       </Box>
     </Box>
   )
+}
+
+function getTimeMarks(rows: PathHeat[]): TimeMark[] {
+  const marks: TimeMark[] = Array.from({ length: rows.length })
+  let earliestIndex = -1
+  let latestIndex = -1
+  let earliestEpoch = Number.POSITIVE_INFINITY
+  let latestEpoch = Number.NEGATIVE_INFINITY
+
+  rows.forEach((row, index) => {
+    if (row.lastChangedAtEpoch <= 0)
+      return
+
+    if (row.lastChangedAtEpoch > latestEpoch) {
+      latestEpoch = row.lastChangedAtEpoch
+      latestIndex = index
+    }
+    if (row.lastChangedAtEpoch < earliestEpoch) {
+      earliestEpoch = row.lastChangedAtEpoch
+      earliestIndex = index
+    }
+  })
+
+  if (latestIndex !== -1)
+    marks[latestIndex] = 'latest'
+  if (earliestIndex !== -1 && earliestIndex !== latestIndex)
+    marks[earliestIndex] = 'earliest'
+
+  return marks
+}
+
+function getRankColor(mark: TimeMark): string {
+  if (mark === 'latest')
+    return LATEST_COLOR
+  if (mark === 'earliest')
+    return EARLIEST_COLOR
+  return 'gray'
 }
 
 function formatChangedAt(row: PathHeat, relativeTime: boolean): string {
