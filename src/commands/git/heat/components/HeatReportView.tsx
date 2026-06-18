@@ -135,22 +135,22 @@ function KindCell({ row }: { row: PathHeat }) {
   return (
     <Cell width={COL.kinds}>
       <Text>
-        <KindMark color="yellow" label="M" active={row.modified > 0} />
+        <KindMark active={row.modified > 0} />
         {' '}
-        <KindMark color="green" label="A" active={row.added > 0} />
+        <KindMark active={row.added > 0} />
         {' '}
-        <KindMark color="red" label="D" active={row.deleted > 0} />
+        <KindMark active={row.deleted > 0} />
         {' '}
-        <KindMark color="magenta" label="R" active={row.renamed > 0} />
+        <KindMark active={row.renamed > 0} />
         {' '}
-        <KindMark color="blue" label="C" active={row.copied > 0} />
+        <KindMark active={row.copied > 0} />
       </Text>
     </Cell>
   )
 }
 
-function KindMark({ color, label, active }: { color: string, label: string, active: boolean }) {
-  return <Text color={active ? color : 'gray'}>{active ? label : '-'}</Text>
+function KindMark({ active }: { active: boolean }) {
+  return <Text color={active ? 'green' : 'gray'}>{active ? '✓' : '-'}</Text>
 }
 
 function getPathWidth(): number {
