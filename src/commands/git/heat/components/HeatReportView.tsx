@@ -15,8 +15,8 @@ interface HeatReportViewProps {
 
 const COL = { rank: 4, changedAt: 20, kinds: 11 }
 const FIXED_WIDTH = COL.rank + COL.changedAt + COL.kinds
-const EARLIEST_COLOR = '#FFD700'
-const LATEST_COLOR = '#FFA500'
+const EARLIEST_COLOR = '#FFA500'
+const LATEST_COLOR = '#98FB98'
 type TimeMark = 'earliest' | 'latest' | undefined
 
 export function HeatReportView({ report, onDone }: HeatReportViewProps) {
