@@ -6,7 +6,6 @@ import * as p from '@clack/prompts'
 import ansis from 'ansis'
 import { createChatCompletionWithUsage } from '../../../config/client'
 import { resolveCmProfile } from '../../../config/cm'
-import { printTitle } from '../../../shared/utils'
 import {
   collectChangeSummary,
   commitWithMessage,
@@ -178,9 +177,6 @@ async function promptForStageFiles(summary: ChangeSummary): Promise<void> {
 }
 
 export async function runGitCm(options: CmOptions): Promise<void> {
-  printTitle()
-  p.intro(ansis.cyan('Git Commit Message'))
-
   if ((options.stage || options.stagePush) && options.stageAll) {
     p.log.error('Use either --stage/--stage-push or --stage-all, not both.')
     process.exit(1)
@@ -209,6 +205,16 @@ export async function runGitCm(options: CmOptions): Promise<void> {
   const shouldCreateCommit = stagedOnly && !options.dryRun
   const shouldPush = Boolean(pushOption && shouldCreateCommit)
   const pushRemote = typeof pushOption === 'string' ? pushOption : undefined
+  const interactive = Boolean(
+    options.stage
+    || options.stagePush
+    || options.staged
+    || options.stageAll
+    || options.push,
+  )
+
+  if (interactive)
+    p.intro(ansis.cyan('Git Commit Message'))
 
   if (shouldPromptStage) {
     const spin = p.spinner()
@@ -240,23 +246,25 @@ export async function runGitCm(options: CmOptions): Promise<void> {
     }
   }
 
-  const spin = p.spinner()
-  spin.start('Collecting git changes...')
+  const spin = interactive ? p.spinner() : undefined
+  spin?.start('Collecting git changes...')
 
   let summary: ChangeSummary
   try {
     summary = await collectChangeSummary({ stagedOnly })
   }
   catch (err) {
-    spin.stop('Failed to collect git changes')
+    spin?.stop('Failed to collect git changes')
     p.log.error((err as Error).message)
     process.exit(1)
   }
 
   if (summary.files.length === 0) {
-    spin.stop(stagedOnly
-      ? 'No staged changes.'
-      : 'No uncommitted changes.')
+    const message = stagedOnly ? 'No staged changes.' : 'No uncommitted changes.'
+    if (spin)
+      spin.stop(message)
+    else
+      p.log.info(message)
     return
   }
 
@@ -265,19 +273,19 @@ export async function runGitCm(options: CmOptions): Promise<void> {
     profile = await resolveCmProfile(options.profile)
   }
   catch (err) {
-    spin.stop('CM profile not configured')
+    spin?.stop('CM profile not configured')
     p.log.error((err as Error).message)
     process.exit(1)
   }
 
-  spin.message(`Generating commit message with ${profile.name}...`)
+  spin?.message(`Generating commit message with ${profile.name}...`)
 
   let generated: GeneratedCommitMessage
   try {
     generated = await generateCommitMessage(profile, summary, options)
   }
   catch (err) {
-    spin.stop('Provider request failed')
+    spin?.stop('Provider request failed')
     p.log.error((err as Error).message)
     p.log.info(`Provider: ${profile.name}`)
     p.log.info(`Base URL: ${profile.baseURL}`)
@@ -286,13 +294,11 @@ export async function runGitCm(options: CmOptions): Promise<void> {
     process.exit(1)
   }
 
-  spin.stop('Commit message generated')
+  spin?.stop('Commit message generated')
   printGeneratedMessage(generated.message, summary, profile, generated.tokenUsage)
 
-  if (!shouldCreateCommit) {
-    p.outro(options.dryRun ? 'Dry run complete' : 'Done')
+  if (!shouldCreateCommit)
     return
-  }
 
   if (!(await hasStagedChanges(summary.repoRoot))) {
     p.log.warn('No staged changes.')
