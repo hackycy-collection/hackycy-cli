@@ -167,10 +167,10 @@ async function promptForStageFiles(summary: ChangeSummary): Promise<void> {
     if (unselectedPaths.length > 0)
       await unstageFiles(summary.repoRoot, unselectedPaths)
     await stageFiles(summary.repoRoot, selectedPaths)
-    stageSpin.stop('Staged selected changes')
+    stageSpin.clear()
   }
   catch (err) {
-    stageSpin.stop('Failed to stage selected changes')
+    stageSpin.clear()
     p.log.error((err as Error).message)
     process.exit(1)
   }
@@ -213,19 +213,16 @@ export async function runGitCm(options: CmOptions): Promise<void> {
     || options.push,
   )
 
-  if (interactive)
-    p.intro(ansis.cyan('Git Commit Message'))
-
   if (shouldPromptStage) {
     const spin = p.spinner()
     spin.start('Collecting git changes...')
     try {
       const summary = await collectChangeSummary()
-      spin.stop('Git changes collected')
+      spin.clear()
       await promptForStageFiles(summary)
     }
     catch (err) {
-      spin.stop('Failed to collect git changes')
+      spin.clear()
       p.log.error((err as Error).message)
       process.exit(1)
     }
@@ -237,10 +234,10 @@ export async function runGitCm(options: CmOptions): Promise<void> {
     try {
       const repoSummary = await collectChangeSummary()
       await stageAllChanges(repoSummary.repoRoot)
-      stageSpin.stop('Staged all changes')
+      stageSpin.clear()
     }
     catch (err) {
-      stageSpin.stop('Failed to stage changes')
+      stageSpin.clear()
       p.log.error((err as Error).message)
       process.exit(1)
     }
@@ -254,7 +251,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
     summary = await collectChangeSummary({ stagedOnly })
   }
   catch (err) {
-    spin?.stop('Failed to collect git changes')
+    spin?.clear()
     p.log.error((err as Error).message)
     process.exit(1)
   }
@@ -273,7 +270,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
     profile = await resolveCmProfile(options.profile)
   }
   catch (err) {
-    spin?.stop('CM profile not configured')
+    spin?.clear()
     p.log.error((err as Error).message)
     process.exit(1)
   }
@@ -285,7 +282,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
     generated = await generateCommitMessage(profile, summary, options)
   }
   catch (err) {
-    spin?.stop('Provider request failed')
+    spin?.clear()
     p.log.error((err as Error).message)
     p.log.info(`Provider: ${profile.name}`)
     p.log.info(`Base URL: ${profile.baseURL}`)
@@ -294,7 +291,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
     process.exit(1)
   }
 
-  spin?.stop('Commit message generated')
+  spin?.clear()
   printGeneratedMessage(generated.message, summary, profile, generated.tokenUsage)
 
   if (!shouldCreateCommit)
@@ -319,10 +316,10 @@ export async function runGitCm(options: CmOptions): Promise<void> {
   commitSpin.start('Creating commit...')
   try {
     await commitWithMessage(summary.repoRoot, generated.message)
-    commitSpin.stop('Commit created')
+    commitSpin.clear()
   }
   catch (err) {
-    commitSpin.stop('git commit failed')
+    commitSpin.clear()
     p.log.error((err as Error).message)
     process.exit(1)
   }
@@ -336,11 +333,11 @@ export async function runGitCm(options: CmOptions): Promise<void> {
   pushSpin.start('Pushing to remote...')
   try {
     await pushChanges(summary.repoRoot, pushRemote)
-    pushSpin.stop('Pushed to remote')
+    pushSpin.clear()
     p.outro(ansis.green('Done'))
   }
   catch (err) {
-    pushSpin.stop('git push failed')
+    pushSpin.clear()
     p.log.error((err as Error).message)
     process.exit(1)
   }
