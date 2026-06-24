@@ -30,11 +30,13 @@ Options:
 
 Commands:
   export                       Export utilities
+  config                        Manage ycy configuration
   git                          Git utilities
   rm [options] [paths...]      Remove files/dirs, or smartly clean project artifacts when no path given
   serve [options] <directory>  Serve static files from a directory
   zip [options] [directory]    Zip a directory into a zip file
-  run                          Run package.json scripts
+  run [path]                   Run package.json scripts
+  task [name]                  Run a configured command group
   upgrade                      Upgrade cli to the latest version
   help [command]               display help for command
 ```

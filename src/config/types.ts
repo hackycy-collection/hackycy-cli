@@ -33,8 +33,17 @@ export interface ForkConfig {
   instances: Record<string, ForkInstanceConfig>
 }
 
+export interface TaskGroupConfig {
+  commands: string[]
+}
+
+export interface TaskConfig {
+  groups: Record<string, TaskGroupConfig>
+}
+
 export interface AppConfig {
   salt: string
   fork: ForkConfig
   cm?: CmConfig
+  task?: TaskConfig
 }

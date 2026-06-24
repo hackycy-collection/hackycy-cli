@@ -84,4 +84,41 @@ export function register(program: Command): void {
       const { runCmConfigTest } = await import('./cm')
       await runCmConfigTest(profile)
     })
+
+  const task = config
+    .command('task')
+    .description('Manage command groups')
+
+  task
+    .command('add')
+    .description('Add a command group')
+    .action(async () => {
+      const { runTaskConfigAdd } = await import('./task')
+      await runTaskConfigAdd()
+    })
+
+  task
+    .command('edit [name]')
+    .description('Edit a command group')
+    .action(async (name?: string) => {
+      const { runTaskConfigEdit } = await import('./task')
+      await runTaskConfigEdit(name)
+    })
+
+  task
+    .command('remove [name]')
+    .description('Remove a command group')
+    .action(async (name?: string) => {
+      const { runTaskConfigRemove } = await import('./task')
+      await runTaskConfigRemove(name)
+    })
+
+  task
+    .command('list [name]')
+    .description('List command groups')
+    .alias('ls')
+    .action(async (name?: string) => {
+      const { runTaskConfigList } = await import('./task')
+      await runTaskConfigList(name)
+    })
 }
