@@ -274,7 +274,7 @@ function CommandPanel({
                 <Text color="gray">{number}</Text>
                 <Text color="gray">  </Text>
                 {isEditing
-                  ? <InputLine value={commandInput.value} cursor={commandInput.cursor} placeholder="pnpm build" width={COMMAND_INPUT_WIDTH} />
+                  ? <InputLine value={commandInput.value} cursor={commandInput.cursor} placeholder="type command here..." width={COMMAND_INPUT_WIDTH} />
                   : <Text inverse={selected}>{clipText(command, COMMAND_INPUT_WIDTH)}</Text>}
               </Box>
             )
@@ -284,7 +284,7 @@ function CommandPanel({
             <Box>
               <Text color="cyan">▸ </Text>
               <Text color="gray">++  </Text>
-              <InputLine value={commandInput.value} cursor={commandInput.cursor} placeholder="pnpm build" width={COMMAND_INPUT_WIDTH} />
+              <InputLine value={commandInput.value} cursor={commandInput.cursor} placeholder="type command here..." width={COMMAND_INPUT_WIDTH} />
             </Box>
           )
         : null}
