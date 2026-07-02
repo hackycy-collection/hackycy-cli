@@ -52,6 +52,7 @@ jobs:
         run: |
           bun build ./src/cli.ts \
             --compile \
+            --no-compile-autoload-dotenv \
             --minify \
             --sourcemap \
             --target bun-${{ matrix.target }} \
