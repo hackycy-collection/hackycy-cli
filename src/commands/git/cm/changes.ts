@@ -1,4 +1,5 @@
 import type { ChangeSummary, FileChange } from './types'
+import { lstat } from 'node:fs/promises'
 import path from 'node:path'
 
 const MAX_TOTAL_CHARS = 24_000
@@ -37,6 +38,19 @@ const SKIP_DIFF_BASENAMES = new Set([
   'yarn.lock',
 ])
 
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await lstat(filePath)
+    return true
+  }
+  catch (err) {
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT')
+      return false
+
+    throw err
+  }
+}
+
 async function runGit(args: string[], cwd?: string, allowFailure = false): Promise<string> {
   const proc = Bun.spawn(['git', ...args], {
     cwd,
@@ -70,7 +84,21 @@ export async function hasStagedChanges(repoRoot: string): Promise<boolean> {
 }
 
 export async function stageFiles(repoRoot: string, filePaths: string[]): Promise<void> {
-  await runGit(['add', '-A', '--', ...filePaths], repoRoot)
+  const existingPaths: string[] = []
+  const missingPaths: string[] = []
+
+  for (const filePath of filePaths) {
+    const exists = await pathExists(path.join(repoRoot, filePath))
+    if (exists)
+      existingPaths.push(filePath)
+    else
+      missingPaths.push(filePath)
+  }
+
+  if (existingPaths.length > 0)
+    await runGit(['add', '-A', '--', ...existingPaths], repoRoot)
+  if (missingPaths.length > 0)
+    await runGit(['update-index', '--remove', '--', ...missingPaths], repoRoot)
 }
 
 export async function unstageFiles(repoRoot: string, filePaths: string[]): Promise<void> {
