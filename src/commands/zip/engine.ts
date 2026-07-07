@@ -1,4 +1,5 @@
 import type {
+  PackageSelection,
   RecommendationConfidence,
   SourceSelectionModel,
   WorkspaceInspection,
@@ -113,6 +114,21 @@ function normalizeSelectedPatterns(selectedPatterns: string[]): string[] {
   return [DEFAULT_GLOB_PATTERN]
 }
 
+function selectablePackages(session: ZipPlanningSession): PackageSelection[] {
+  const seen = new Set<string>()
+  const packages: PackageSelection[] = []
+
+  for (const pkg of [session.workspace.defaultPackage, ...session.workspace.packages]) {
+    if (seen.has(pkg.root))
+      continue
+
+    seen.add(pkg.root)
+    packages.push(pkg)
+  }
+
+  return packages
+}
+
 async function hydrateSourceSelection(session: ZipPlanningSession): Promise<ZipPlanningSession> {
   if (!session.packageRoot || session.sourceSelection)
     return session
@@ -134,21 +150,31 @@ async function hydrateGitRemoteName(session: ZipPlanningSession): Promise<ZipPla
 }
 
 function buildPackageStep(session: ZipPlanningSession): SelectPackageStep {
+  const packages = selectablePackages(session)
+
   return {
     type: 'select-package',
     note: {
       title: 'Monorepo detected',
       lines: [
         `Found ${session.workspace.packages.length} workspace package${session.workspace.packages.length === 1 ? '' : 's'}`,
+        'Current directory is available as .',
         `Signals: ${summarizeItems(session.workspace.reasons)}`,
       ],
     },
-    message: 'Select a workspace package to zip:',
-    options: session.workspace.packages.map(pkg => ({
-      value: pkg.root,
-      label: normalizeRelativePath(session.rootDir, pkg.root),
-      hint: pkg.packageName ? `package: ${pkg.packageName}` : 'workspace package',
-    })),
+    message: 'Select a package to zip:',
+    options: packages.map((pkg) => {
+      const relative = normalizeRelativePath(session.rootDir, pkg.root)
+      const isRootPackage = relative === '.'
+
+      return {
+        value: pkg.root,
+        label: relative,
+        hint: pkg.packageName
+          ? `${isRootPackage ? 'root package' : 'package'}: ${pkg.packageName}`
+          : isRootPackage ? 'workspace root' : 'workspace package',
+      }
+    }),
   }
 }
 
@@ -223,7 +249,7 @@ export async function createZipPlanningSession(dir: string): Promise<ZipPlanning
 export function applyZipPlanningAnswer(session: ZipPlanningSession, answer: ZipPlanningAnswer): ZipPlanningSession {
   switch (answer.type) {
     case 'package-root': {
-      const selectedPackage = session.workspace.packages.find(pkg => pkg.root === path.resolve(answer.value))
+      const selectedPackage = selectablePackages(session).find(pkg => pkg.root === path.resolve(answer.value))
       return {
         ...session,
         packageRoot: path.resolve(answer.value),

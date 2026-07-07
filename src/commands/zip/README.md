@@ -44,7 +44,7 @@
 - `nx.json`
 - `packages/*` 目录布局
 
-一旦识别到 monorepo 信号，命令会扫描 workspace pattern，并先让用户选择一个 package，再继续后面的构建产物识别流程。
+一旦识别到 monorepo 信号，命令会扫描 workspace pattern，并先让用户选择一个 package，再继续后面的构建产物识别流程。选择项会同时包含当前输入目录本身（显示为 `.`）和扫描到的 workspace 子包，因此根目录本身也是完整项目时仍可直接选择并打包它的构建产物。
 
 ## 项目类型识别
 
