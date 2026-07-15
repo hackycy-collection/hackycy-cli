@@ -39,16 +39,12 @@ function normalizeConfig(raw: unknown): AppConfig {
     : isRecord(raw.ai)
       ? raw.ai
       : undefined
-  const task = isRecord(raw.task) ? raw.task : undefined
-  const taskGroups = isRecord(task?.groups) ? task.groups : undefined
-
   return {
     salt,
     fork: {
       instances: instances as AppConfig['fork']['instances'],
     },
     cm: cm as AppConfig['cm'],
-    task: taskGroups ? { groups: taskGroups as NonNullable<AppConfig['task']>['groups'] } : undefined,
   }
 }
 

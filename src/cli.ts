@@ -7,7 +7,6 @@ import { register as registerGit } from './commands/git'
 import { register as registerRm } from './commands/rm'
 import { register as registerRun } from './commands/run'
 import { register as registerServe } from './commands/serve'
-import { register as registerTask } from './commands/task'
 import { register as registerUpgrade } from './commands/upgrade'
 import { register as registerZip } from './commands/zip'
 
@@ -36,7 +35,6 @@ registerRm(program)
 registerServe(program)
 registerZip(program)
 registerRun(program)
-registerTask(program)
 registerUpgrade(program)
 
 program.on('command:*', (operands) => {

@@ -36,7 +36,6 @@ Commands:
   serve [options] <directory>  Serve static files from a directory
   zip [options] [directory]    Zip a directory into a zip file
   run [path]                   Run package.json scripts
-  task [name]                  Run a configured command group
   upgrade                      Upgrade cli to the latest version
   help [command]               display help for command
 ```
