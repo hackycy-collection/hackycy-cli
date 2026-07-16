@@ -44,20 +44,28 @@ export async function exportEnv(options: EnvOptions): Promise<void> {
 
   let selectedFile: string | null = null
 
-  if (envFiles.length > 0) {
-    if (options.env) {
-      const target = `.env.${options.env}`
-      if (!envFiles.includes(target)) {
-        throw new Error(`No .env.${options.env} file found in ${dir}`)
-      }
-      selectedFile = target
+  if (options.env) {
+    const target = `.env.${options.env}`
+    if (!envFiles.includes(target)) {
+      throw new Error(`No .env.${options.env} file found in ${dir}`)
     }
-    else {
-      const choices = envFiles.map((name) => {
-        const suffix = getEnvSuffix(name)!
-        return { value: name, label: suffix }
-      })
+    selectedFile = target
+  }
+  else {
+    const selectableFiles = options.merge
+      ? envFiles
+      : baseFile
+        ? [baseFile, ...envFiles]
+        : envFiles
 
+    if (selectableFiles.length === 1 && selectableFiles[0] === baseFile) {
+      selectedFile = selectableFiles[0]!
+    }
+    else if (selectableFiles.length > 0) {
+      const choices = selectableFiles.map((name) => {
+        const suffix = getEnvSuffix(name)
+        return { value: name, label: suffix ?? 'default' }
+      })
       const selected = await p.select({
         message: 'Select environment',
         options: choices,
@@ -72,16 +80,16 @@ export async function exportEnv(options: EnvOptions): Promise<void> {
     }
   }
 
-  // Parse and merge
+  // Merge .env first only when explicitly requested.
   let result: Record<string, string> = {}
 
-  if (baseFile) {
-    const content = await Bun.file(path.join(dir, baseFile)).text()
-    result = { ...parseEnvFile(content) }
-  }
+  const filesToExport = [
+    ...(options.merge && baseFile ? [baseFile] : []),
+    ...(selectedFile ? [selectedFile] : []),
+  ]
 
-  if (selectedFile) {
-    const content = await Bun.file(path.join(dir, selectedFile)).text()
+  for (const file of filesToExport) {
+    const content = await Bun.file(path.join(dir, file)).text()
     result = { ...result, ...parseEnvFile(content) }
   }
 
