@@ -117,8 +117,23 @@
       border-bottom: 1px solid var(--row-border);
       vertical-align: middle;
     }
-    .name-cell { display: flex; align-items: center; gap: 0.5rem; }
+    .name-cell { display: flex; align-items: center; }
+    .name-cell > a { display: inline-flex; align-items: center; gap: 0.5rem; min-width: 0; }
     .icon { flex-shrink: 0; }
+    .thumbnail {
+      position: relative;
+      display: flex;
+      flex: 0 0 36px;
+      width: 36px;
+      height: 36px;
+      overflow: hidden;
+      border-radius: 4px;
+      background: var(--hover-bg);
+    }
+    .thumbnail img { width: 100%; height: 100%; object-fit: cover; }
+    .thumbnail-fallback { display: none; width: 100%; align-items: center; justify-content: center; }
+    .thumbnail.failed img { display: none; }
+    .thumbnail.failed .thumbnail-fallback { display: flex; }
     .dir-link a { color: var(--link); text-decoration: none; font-weight: 500; }
     .dir-link a:hover { text-decoration: underline; }
     .file-link a { color: var(--file-fg); text-decoration: none; }

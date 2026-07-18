@@ -15,6 +15,7 @@ const indexHtml = indexHtmlAsset as unknown as string
 interface DirectoryEntry {
   name: string
   isDirectory: boolean
+  isPreviewableImage: boolean
   size: number
   mtime: Date
   href: string
@@ -50,6 +51,20 @@ function escapeHtml(str: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;')
+}
+
+const PREVIEWABLE_IMAGE_MIME_TYPES = new Map([
+  ['.avif', 'image/avif'],
+  ['.gif', 'image/gif'],
+  ['.jpeg', 'image/jpeg'],
+  ['.jpg', 'image/jpeg'],
+  ['.png', 'image/png'],
+  ['.svg', 'image/svg+xml'],
+  ['.webp', 'image/webp'],
+])
+
+function getPreviewableImageMimeType(name: string): string | undefined {
+  return PREVIEWABLE_IMAGE_MIME_TYPES.get(path.extname(name).toLowerCase())
 }
 
 // ─── Security ─────────────────────────────────────────────────────────────────
@@ -101,7 +116,7 @@ function isInlineMimeType(mimeType: string): boolean {
 
 async function serveFile(filePath: string, stat: Awaited<ReturnType<typeof fs.stat>>): Promise<Response> {
   const file = Bun.file(filePath)
-  const mimeType = file.type || 'application/octet-stream'
+  const mimeType = getPreviewableImageMimeType(filePath) || file.type || 'application/octet-stream'
   const encoded = encodeURIComponent(path.basename(filePath)).replace(/'/g, '%27')
   const disposition = isInlineMimeType(mimeType)
     ? `inline; filename="${encoded}"; filename*=UTF-8''${encoded}`
@@ -168,13 +183,18 @@ function buildDirectoryHtml(urlPath: string, entries: DirectoryEntry[], uploadEn
     ? '<tr><td colspan="3" class="empty-state">Empty directory</td></tr>'
     : entries.map((e) => {
         const icon = e.isDirectory ? '&#x1F4C1;' : '&#x1F4C4;'
+        const entryIcon = e.isPreviewableImage
+          ? `<span class="thumbnail" aria-hidden="true">
+              <img src="${escapeHtml(e.href)}" alt="" loading="lazy" decoding="async" onerror="this.parentElement.classList.add('failed')">
+              <span class="thumbnail-fallback">&#x1F4C4;</span>
+            </span>`
+          : `<span class="icon" aria-hidden="true">${icon}</span>`
         const sizeStr = e.isDirectory ? '-' : formatFileSize(e.size)
         const dateStr = formatDate(e.mtime)
         const nameClass = e.isDirectory ? 'dir-link' : 'file-link'
         return `<tr>
       <td class="name-cell ${nameClass}">
-        <span class="icon">${icon}</span>
-        <a href="${e.href}">${escapeHtml(e.name)}${e.isDirectory ? '/' : ''}</a>
+        <a href="${escapeHtml(e.href)}">${entryIcon}<span>${escapeHtml(e.name)}${e.isDirectory ? '/' : ''}</span></a>
       </td>
       <td class="size-col">${sizeStr}</td>
       <td class="date-col">${dateStr}</td>
@@ -223,6 +243,7 @@ async function serveDirectory(dirPath: string, urlPath: string, uploadEnabled: b
     entries.push({
       name: dirent.name,
       isDirectory: isDir,
+      isPreviewableImage: !isDir && getPreviewableImageMimeType(dirent.name) !== undefined,
       size: isDir ? 0 : entryStat.size,
       mtime: entryStat.mtime,
       href,
