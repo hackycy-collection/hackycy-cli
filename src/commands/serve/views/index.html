@@ -86,14 +86,19 @@
     .theme-btn {
       flex-shrink: 0;
       margin-top: 0.1rem;
-      padding: 0.35rem 0.65rem;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 32px;
+      height: 28px;
+      padding: 0;
       background: var(--btn-bg);
       color: var(--btn-fg);
       border: 1px solid var(--btn-border);
       border-radius: 6px;
       cursor: pointer;
       font-size: 0.8rem;
-      line-height: 1;
+      line-height: 0;
       transition: background 0.15s, color 0.15s, border-color 0.15s;
       white-space: nowrap;
     }
@@ -117,21 +122,24 @@
       border-bottom: 1px solid var(--row-border);
       vertical-align: middle;
     }
-    .name-cell { display: flex; align-items: center; }
+    .name-cell { display: flex; align-items: center; gap: 0.5rem; }
     .name-cell > a { display: inline-flex; align-items: center; gap: 0.5rem; min-width: 0; }
-    .icon { flex-shrink: 0; }
+    .file-icon {
+      flex: 0 0 24px;
+      width: 24px;
+      height: 24px;
+    }
     .thumbnail {
-      position: relative;
       display: flex;
-      flex: 0 0 36px;
-      width: 36px;
-      height: 36px;
+      flex: 0 0 24px;
+      width: 24px;
+      height: 24px;
       overflow: hidden;
-      border-radius: 4px;
+      border-radius: 3px;
       background: var(--hover-bg);
     }
     .thumbnail img { width: 100%; height: 100%; object-fit: cover; }
-    .thumbnail-fallback { display: none; width: 100%; align-items: center; justify-content: center; }
+    .thumbnail-fallback { display: none; width: 100%; height: 100%; align-items: center; justify-content: center; color: var(--muted); }
     .thumbnail.failed img { display: none; }
     .thumbnail.failed .thumbnail-fallback { display: flex; }
     .dir-link a { color: var(--link); text-decoration: none; font-weight: 500; }
@@ -157,6 +165,9 @@
     .empty-state { padding: 2rem; text-align: center; color: var(--empty); font-style: italic; }
     .upload-btn {
       flex-shrink: 0;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
       margin-top: 0.1rem;
       padding: 0.35rem 0.65rem;
       background: var(--brand);
@@ -172,6 +183,7 @@
     }
     .upload-btn:hover { opacity: 0.8; }
     .upload-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .theme-btn svg, .upload-btn svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
     .progress-wrap { margin-bottom: 1rem; }
     .progress-track { height: 4px; background: var(--border); border-radius: 2px; overflow: hidden; margin-bottom: 0.3rem; }
     .progress-fill { height: 100%; background: var(--brand); border-radius: 2px; width: 0%; transition: width 0.1s ease; }
@@ -192,28 +204,32 @@
       <div class="page-title">{{TITLE}}</div>
       <div class="breadcrumb">{{BREADCRUMB}}</div>
     </div>
-    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle theme">&#9790;</button>
+    <button class="theme-btn" id="themeBtn" onclick="toggleTheme()" title="Toggle theme" aria-label="Toggle theme"></button>
     <input type="file" id="fileInput" class="upload-only" style="display:none">
-    <button class="upload-btn upload-only" id="uploadBtn" onclick="document.getElementById('fileInput').click()" title="Upload file">&#x2B06; Upload</button>
+    <button class="upload-btn upload-only" id="uploadBtn" onclick="document.getElementById('fileInput').click()" title="Upload file"><svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M12 16V4"/><path d="m7 9 5-5 5 5"/><path d="M5 20h14"/></svg><span>Upload</span></button>
   </div>
   <script>
+    var sunIcon = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41"/></svg>';
+    var moonIcon = '<svg viewBox="0 0 24 24" aria-hidden="true" focusable="false"><path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5 8.5 8.5 0 1 0 20.5 14.5z"/></svg>';
+    function renderThemeIcon(theme) {
+      var btn = document.getElementById('themeBtn');
+      btn.innerHTML = theme === 'light' ? sunIcon : moonIcon;
+    }
     function toggleTheme() {
       var html = document.documentElement;
-      var btn = document.getElementById('themeBtn');
       if (html.getAttribute('data-theme') === 'dark') {
         html.setAttribute('data-theme', 'light');
         localStorage.setItem('theme', 'light');
-        btn.textContent = '\u2600';
+        renderThemeIcon('light');
       } else {
         html.setAttribute('data-theme', 'dark');
         localStorage.setItem('theme', 'dark');
-        btn.textContent = '\u263E';
+        renderThemeIcon('dark');
       }
     }
     (function() {
-      var btn = document.getElementById('themeBtn');
       var theme = document.documentElement.getAttribute('data-theme');
-      btn.textContent = theme === 'light' ? '\u2600' : '\u263E';
+      renderThemeIcon(theme);
     })();
   </script>
   <div id="progressWrap" class="progress-wrap upload-only" style="display:none">

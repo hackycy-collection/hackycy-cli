@@ -67,6 +67,10 @@ function getPreviewableImageMimeType(name: string): string | undefined {
   return PREVIEWABLE_IMAGE_MIME_TYPES.get(path.extname(name).toLowerCase())
 }
 
+const FOLDER_ICON = '<svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 6.75A1.75 1.75 0 0 1 4.75 5h5l2 2h7.5A1.75 1.75 0 0 1 21 8.75v9.5A1.75 1.75 0 0 1 19.25 20h-14.5A1.75 1.75 0 0 1 3 18.25z"/></svg>'
+const FILE_ICON = '<svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6.75 3.5h6.5l4.5 4.5v12.25H6.75z"/><path d="M13.25 3.5V8h4.5"/></svg>'
+const PARENT_ICON = '<svg class="file-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 19V5"/><path d="m6.5 10.5 5.5-5.5 5.5 5.5"/></svg>'
+
 // ─── Security ─────────────────────────────────────────────────────────────────
 
 async function resolveSafePath(root: string, urlPath: string): Promise<string | null> {
@@ -174,7 +178,7 @@ function buildDirectoryHtml(urlPath: string, entries: DirectoryEntry[], uploadEn
     ? ''
     : `<tr class="parent-row">
         <td class="name-cell parent-link" colspan="3">
-          <span class="icon">&#x2B06;</span>
+          ${PARENT_ICON}
           <a href="${parentHref}">Parent directory</a>
         </td>
       </tr>`
@@ -182,13 +186,13 @@ function buildDirectoryHtml(urlPath: string, entries: DirectoryEntry[], uploadEn
   const entryRows = entries.length === 0
     ? '<tr><td colspan="3" class="empty-state">Empty directory</td></tr>'
     : entries.map((e) => {
-        const icon = e.isDirectory ? '&#x1F4C1;' : '&#x1F4C4;'
+        const icon = e.isDirectory ? FOLDER_ICON : FILE_ICON
         const entryIcon = e.isPreviewableImage
           ? `<span class="thumbnail" aria-hidden="true">
               <img src="${escapeHtml(e.href)}" alt="" loading="lazy" decoding="async" onerror="this.parentElement.classList.add('failed')">
-              <span class="thumbnail-fallback">&#x1F4C4;</span>
+              <span class="thumbnail-fallback">${FILE_ICON}</span>
             </span>`
-          : `<span class="icon" aria-hidden="true">${icon}</span>`
+          : icon
         const sizeStr = e.isDirectory ? '-' : formatFileSize(e.size)
         const dateStr = formatDate(e.mtime)
         const nameClass = e.isDirectory ? 'dir-link' : 'file-link'
