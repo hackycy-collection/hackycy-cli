@@ -12,3 +12,6 @@ temp
 cache
 .eslintcache
 *.zip
+.agents
+.claude
+skills-lock.json
