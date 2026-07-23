@@ -34,6 +34,8 @@ Commands:
   git                          Git utilities
   rm [options] [paths...]      Remove files/dirs, or smartly clean project artifacts when no path given
   serve [options] <directory>  Serve static files from a directory
+  diff [options] <baseline-directory> <target-directory>
+                               Compare two directories in a browser
   zip [options] [directory]    Zip a directory into a zip file
   run [path]                   Run package.json scripts
   upgrade                      Upgrade cli to the latest version

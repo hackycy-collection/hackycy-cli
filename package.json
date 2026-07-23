@@ -4,9 +4,10 @@
   "version": "0.0.41",
   "description": "hackycy的脚手架工具",
   "trustedDependencies": [
+    "bun",
     "eslint",
-    "simple-git-hooks",
-    "lint-staged"
+    "lint-staged",
+    "simple-git-hooks"
   ],
   "author": "hackycy <hackycy@outlook.com>",
   "license": "MIT",
@@ -22,9 +23,12 @@
   "publishConfig": {
     "access": "public"
   },
-  "sideEffects": false,
+  "sideEffects": [
+    "**/*.css"
+  ],
   "module": "src/index.ts",
   "scripts": {
+    "build": "bun scripts/build.ts",
     "dev": "bun --watch src/index.ts",
     "lint": "eslint --cache .",
     "release": "bumpp",
@@ -34,21 +38,38 @@
   },
   "dependencies": {
     "@clack/prompts": "^1.0.1",
+    "@pierre/diffs": "1.2.12",
+    "@radix-ui/react-checkbox": "^1.3.9",
+    "@radix-ui/react-dialog": "^1.1.21",
+    "@radix-ui/react-scroll-area": "^1.2.16",
+    "@radix-ui/react-tooltip": "^1.2.14",
+    "@tanstack/react-virtual": "^3.14.8",
     "ansis": "^4.2.0",
+    "bun-plugin-tailwind": "^0.1.2",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
     "commander": "^14.0.3",
     "dayjs": "^1.11.19",
     "dotenv": "^17.4.2",
     "fflate": "^0.8.2",
+    "ignore": "^7.0.6",
     "ink": "^7.0.0",
-    "react": "^19.2.5",
+    "lucide-react": "^1.25.0",
+    "react": "19.2.8",
     "react-devtools-core": "^7.0.1",
-    "reveal-file": "^0.1.2"
+    "react-dom": "^19.2.8",
+    "react-resizable-panels": "^4.12.2",
+    "reveal-file": "^0.1.2",
+    "tailwind-merge": "^3.6.0",
+    "tailwindcss": "^4.3.3",
+    "tw-animate-css": "^1.4.0"
   },
   "devDependencies": {
     "@antfu/eslint-config": "^6.7.3",
     "@types/bun": "^1.3.12",
     "@types/node": "^24.11.0",
     "@types/react": "^19.2.14",
+    "@types/react-dom": "^19.2.3",
     "bumpp": "^10.4.1",
     "eslint": "^9.39.3",
     "lint-staged": "^16.3.1",

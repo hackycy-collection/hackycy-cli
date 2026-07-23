@@ -4,7 +4,7 @@ import antfu from '@antfu/eslint-config'
 export default antfu(
   {
     type: 'lib',
-    ignores: ['CLAUDE.md'],
+    ignores: ['CLAUDE.md', 'CONTEXT.md'],
     rules: {
       'no-console': 'off',
       'ts/explicit-function-return-type': 'off',

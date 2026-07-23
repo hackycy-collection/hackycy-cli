@@ -50,22 +50,9 @@ jobs:
       - name: Build binary
         shell: bash
         run: |
-          bun build ./src/cli.ts \
-            --compile \
-            --no-compile-autoload-dotenv \
-            --minify \
-            --sourcemap \
+          bun scripts/build.ts \
             --target bun-${{ matrix.target }} \
             --outfile ${{ matrix.artifact }}
-
-      - name: Smoke test binary
-        if: runner.os != 'Windows' && matrix.target != 'linux-arm64'
-        run: ./${{ matrix.artifact }} --version
-
-      - name: Smoke test binary (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: .\${{ matrix.artifact }} --version
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

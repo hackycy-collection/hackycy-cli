@@ -73,7 +73,7 @@ function parseChecksumsFile(content: string): Map<string, string> {
 }
 
 async function sha256Hex(data: ArrayBuffer | Uint8Array): Promise<string> {
-  const input = data instanceof Uint8Array ? data : new Uint8Array(data)
+  const input = Uint8Array.from(data instanceof Uint8Array ? data : new Uint8Array(data))
   const digest = await crypto.subtle.digest('SHA-256', input)
   return Array.from(new Uint8Array(digest))
     .map(byte => byte.toString(16).padStart(2, '0'))

@@ -14,4 +14,7 @@ cache
 *.zip
 .agents
 .claude
+.tmp
 skills-lock.json
+playwright-report
+test-results
