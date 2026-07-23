@@ -74,11 +74,11 @@ describe('ComparisonWorkspace', () => {
     })
     const snapshot = await workspace.refresh().result
 
-    expect(snapshot.list({ includeUnchanged: true }).entries.map(entry => [entry.path, entry.kind, entry.status])).toEqual([
-      ['changed-link', 'symlink', 'modified'],
-      ['loop-a', 'symlink', 'unchanged'],
-      ['loop-b', 'symlink', 'unchanged'],
-      ['same-link', 'symlink', 'unchanged'],
+    expect(snapshot.list({ includeUnchanged: true }).entries.map(entry => [entry.path, 'baseline' in entry ? entry.baseline : undefined, 'target' in entry ? entry.target : undefined, entry.status])).toEqual([
+      ['changed-link', { kind: 'symlink', linkTarget: '../outside-one' }, { kind: 'symlink', linkTarget: '../outside-two' }, 'modified'],
+      ['loop-a', { kind: 'symlink', linkTarget: 'loop-b' }, { kind: 'symlink', linkTarget: 'loop-b' }, 'unchanged'],
+      ['loop-b', { kind: 'symlink', linkTarget: 'loop-a' }, { kind: 'symlink', linkTarget: 'loop-a' }, 'unchanged'],
+      ['same-link', { kind: 'symlink', linkTarget: 'missing-target' }, { kind: 'symlink', linkTarget: 'missing-target' }, 'unchanged'],
     ])
   })
 
@@ -96,11 +96,46 @@ describe('ComparisonWorkspace', () => {
     const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
     const snapshot = await workspace.refresh().result
 
-    expect(snapshot.list({ includeUnchanged: true }).entries.map(entry => [entry.path, entry.kind, entry.status])).toEqual([
-      ['README.md', 'file', 'added'],
-      ['Readme.md', 'file', 'deleted'],
-      ['kind-change', 'symlink', 'modified'],
+    expect(snapshot.list({ includeUnchanged: true }).entries.map(entry => [entry.path, 'baseline' in entry ? entry.baseline : undefined, 'target' in entry ? entry.target : undefined, entry.status])).toEqual([
+      ['README.md', undefined, { kind: 'file', size: 10 }, 'added'],
+      ['Readme.md', { kind: 'file', size: 10 }, undefined, 'deleted'],
+      ['kind-change', { kind: 'file', size: 12 }, { kind: 'symlink', linkTarget: 'missing-target' }, 'modified'],
     ])
+  })
+
+  test('records Entry State independently for each side of a kind change', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    await Promise.all([
+      writeFile(path.join(baseline, 'kind-change'), 'regular file'),
+      symlink('missing-target', path.join(target, 'kind-change')),
+    ])
+
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+
+    expect(snapshot.list({}).entries).toEqual([{
+      id: 1,
+      path: 'kind-change',
+      status: 'modified',
+      baseline: { kind: 'file', size: 12 },
+      target: { kind: 'symlink', linkTarget: 'missing-target' },
+    }])
+  })
+
+  test('matches a kind filter against either Entry State', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    await Promise.all([
+      writeFile(path.join(baseline, 'kind-change'), 'regular file'),
+      symlink('missing-target', path.join(target, 'kind-change')),
+    ])
+
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+
+    expect([
+      snapshot.list({ kinds: ['file'] }).entries.map(entry => entry.path),
+      snapshot.list({ kinds: ['symlink'] }).entries.map(entry => entry.path),
+    ]).toEqual([['kind-change'], ['kind-change']])
   })
 
   test('applies hierarchical Target Directory gitignore rules to both trees', async () => {
@@ -408,6 +443,229 @@ describe('ComparisonWorkspace', () => {
     })
   })
 
+  test('returns a bounded server-generated Text Difference for a modified file', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    await Promise.all([
+      writeFile(path.join(baseline, 'changed.txt'), 'alpha\nbefore\nomega\n'),
+      writeFile(path.join(target, 'changed.txt'), 'alpha\nafter\nomega\n'),
+    ])
+
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+    const entry = snapshot.list({}).entries[0]!
+
+    expect(await snapshot.textDiff(entry.id, { contextLines: 1 })).toEqual({
+      status: 'ready',
+      path: 'changed.txt',
+      comparisonStatus: 'modified',
+      contextLines: 1,
+      baselineEncoding: 'utf-8',
+      targetEncoding: 'utf-8',
+      addedLines: 1,
+      deletedLines: 1,
+      patch: '--- baseline\n+++ target\n@@ -1,3 +1,3 @@\n alpha\n-before\n+after\n omega\n',
+    })
+  })
+
+  test('rejects Text Difference context outside the supported range', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    await Promise.all([
+      writeFile(path.join(baseline, 'changed.txt'), 'before\n'),
+      writeFile(path.join(target, 'changed.txt'), 'after\n'),
+    ])
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+    const entry = snapshot.list({}).entries[0]!
+
+    await expect(snapshot.textDiff(entry.id, { contextLines: 21 })).rejects.toThrow('contextLines must be an integer between 0 and 20')
+  })
+
+  test('does not provide a Text Difference for an Unchanged Entry', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    await Promise.all([
+      writeFile(path.join(baseline, 'same.txt'), 'same\n'),
+      writeFile(path.join(target, 'same.txt'), 'same\n'),
+    ])
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+    const entry = snapshot.list({ includeUnchanged: true }).entries[0]!
+
+    await expect(snapshot.textDiff(entry.id)).rejects.toThrow('Comparison Entry not found')
+  })
+
+  test('uses /dev/null for Added and Deleted Text Differences', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    await Promise.all([
+      writeFile(path.join(baseline, 'deleted.txt'), 'old\n'),
+      writeFile(path.join(target, 'added.txt'), 'new\n'),
+    ])
+
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+    const entries = snapshot.list({}).entries
+    const results = await Promise.all(entries.map(entry => snapshot.textDiff(entry.id)))
+
+    expect(results.map(result => [result.path, result.comparisonStatus, 'patch' in result ? result.patch : undefined])).toEqual([
+      ['added.txt', 'added', '--- /dev/null\n+++ target\n@@ -0,0 +1,1 @@\n+new\n'],
+      ['deleted.txt', 'deleted', '--- baseline\n+++ /dev/null\n@@ -1,1 +0,0 @@\n-old\n'],
+    ])
+  })
+
+  test('distinguishes encoding-only changes from Text Differences', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    const utf16le = Uint8Array.from([
+      0xFF,
+      0xFE,
+      0x68,
+      0x00,
+      0x65,
+      0x00,
+      0x6C,
+      0x00,
+      0x6C,
+      0x00,
+      0x6F,
+      0x00,
+      0x0A,
+      0x00,
+    ])
+    await Promise.all([
+      writeFile(path.join(baseline, 'message.txt'), 'hello\n'),
+      writeFile(path.join(target, 'message.txt'), utf16le),
+    ])
+
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+    const entry = snapshot.list({}).entries[0]!
+
+    expect(await snapshot.textDiff(entry.id)).toEqual({
+      status: 'no_textual_changes',
+      path: 'message.txt',
+      comparisonStatus: 'modified',
+      reason: 'encoding_or_bom_only',
+      baselineEncoding: 'utf-8',
+      targetEncoding: 'utf-16le',
+    })
+  })
+
+  test('reports binary content as an unavailable Text Difference', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    await Promise.all([
+      writeFile(path.join(baseline, 'data.bin'), Uint8Array.from([0xC3, 0x28])),
+      writeFile(path.join(target, 'data.bin'), Uint8Array.from([0xC3, 0x29])),
+    ])
+
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+    const entry = snapshot.list({}).entries[0]!
+
+    expect(await snapshot.textDiff(entry.id)).toEqual({
+      status: 'unavailable',
+      path: 'data.bin',
+      comparisonStatus: 'modified',
+      reason: 'non_text',
+    })
+  })
+
+  test('reports a kind change as an unavailable Text Difference', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    await Promise.all([
+      writeFile(path.join(baseline, 'reference'), 'text\n'),
+      symlink('missing-target', path.join(target, 'reference')),
+    ])
+
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+    const entry = snapshot.list({}).entries[0]!
+
+    expect(await snapshot.textDiff(entry.id)).toEqual({
+      status: 'unavailable',
+      path: 'reference',
+      comparisonStatus: 'modified',
+      reason: 'mixed_entry_kinds',
+    })
+  })
+
+  test('does not force Guarded content into a Text Difference', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    await writeFile(path.join(target, 'guarded.txt'), 'x\n'.repeat(50_000))
+
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+    const entry = snapshot.list({}).entries[0]!
+
+    expect(await snapshot.textDiff(entry.id)).toEqual({
+      status: 'unavailable',
+      path: 'guarded.txt',
+      comparisonStatus: 'added',
+      reason: 'source_too_large',
+      targetSize: 100_000,
+      targetLineCount: 50_001,
+    })
+  })
+
+  test('rejects a complete Text Difference above the output budget', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    await writeFile(path.join(target, 'large-change.txt'), `${'x'.repeat(800)}\n`.repeat(400))
+
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+    const entry = snapshot.list({}).entries[0]!
+    const result = await snapshot.textDiff(entry.id)
+
+    expect(result).toEqual({
+      status: 'unavailable',
+      path: 'large-change.txt',
+      comparisonStatus: 'added',
+      reason: 'output_too_large',
+      addedLines: 400,
+      deletedLines: 0,
+      outputBytes: expect.any(Number),
+    })
+    expect('outputBytes' in result ? result.outputBytes : 0).toBeGreaterThan(256 * 1024)
+  })
+
+  test('stops a Text Difference that exceeds the complexity budget', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    await writeFile(path.join(target, 'complex-change.txt'), '0123456789abcdef\n'.repeat(6_000))
+
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+    const entry = snapshot.list({}).entries[0]!
+
+    expect(await snapshot.textDiff(entry.id)).toEqual({
+      status: 'unavailable',
+      path: 'complex-change.txt',
+      comparisonStatus: 'added',
+      reason: 'complexity_limit',
+    })
+  }, 8_000)
+
+  test('rejects Text Difference work above the concurrency limit', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    const content = '0123456789abcdef\n'.repeat(1_000)
+    await Promise.all([
+      writeFile(path.join(target, 'first.txt'), content),
+      writeFile(path.join(target, 'second.txt'), content),
+      writeFile(path.join(target, 'third.txt'), content),
+    ])
+
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+    const entries = snapshot.list({}).entries
+    const first = snapshot.textDiff(entries[0]!.id)
+    const second = snapshot.textDiff(entries[1]!.id)
+    const third = await snapshot.textDiff(entries[2]!.id)
+
+    expect(third).toEqual({
+      status: 'unavailable',
+      path: 'third.txt',
+      comparisonStatus: 'added',
+      reason: 'server_busy',
+    })
+    await Promise.all([first, second])
+  }, 8_000)
+
   test('returns stale instead of mixing changed filesystem content into a snapshot', async () => {
     const { baseline, target } = await makeComparisonDirectories()
     await Promise.all([
@@ -428,6 +686,12 @@ describe('ComparisonWorkspace', () => {
 
     expect(await snapshot.content(entry.id, 'target')).toEqual({ status: 'stale' })
     expect(await snapshot.blob(entry.id, 'target')).toEqual({ status: 'stale' })
+    expect(await snapshot.textDiff(entry.id)).toEqual({
+      status: 'unavailable',
+      path: 'changing.txt',
+      comparisonStatus: 'modified',
+      reason: 'stale',
+    })
   })
 
   test('publishes unreadable regular files as Comparison Issues', async () => {
@@ -479,7 +743,12 @@ describe('ComparisonWorkspace', () => {
     unsubscribe()
     expect(changed).toBe(true)
     expect(snapshot.list({ includeUnchanged: true }).entries).toEqual([
-      expect.objectContaining({ path: 'changing.txt', status: 'modified', kind: 'file' }),
+      expect.objectContaining({
+        path: 'changing.txt',
+        status: 'modified',
+        baseline: { kind: 'file', size: 6 },
+        target: { kind: 'file', size: 6 },
+      }),
     ])
   })
 

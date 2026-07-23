@@ -3,6 +3,7 @@ import type {
   BlobContent,
   ComparisonEntry,
   ComparisonEntryKind,
+  ComparisonEntryState,
   ComparisonListEntry,
   ComparisonSide,
   ComparisonSnapshot,
@@ -13,6 +14,7 @@ import type {
   RefreshRun,
   StatusCounts,
   TextContent,
+  TextDiffResult,
   TextEncoding,
   TreeNode,
   WorkspaceProgress,
@@ -22,6 +24,7 @@ import { Buffer } from 'node:buffer'
 import { constants } from 'node:fs'
 import { lstat, open, readdir, readFile, readlink, realpath } from 'node:fs/promises'
 import path from 'node:path'
+import { FILE_HEADERS_ONLY, formatPatch, structuredPatch } from 'diff'
 import ignore from 'ignore'
 
 interface DiscoveredEntry {
@@ -657,11 +660,24 @@ function absoluteComparisonPath(root: string, comparisonPath: string): string {
   return path.join(root, ...comparisonPath.split('/'))
 }
 
+function entryState(entry: DiscoveredEntry | undefined): ComparisonEntryState | undefined {
+  if (!entry)
+    return undefined
+  return entry.kind === 'file'
+    ? { kind: 'file', size: entry.size }
+    : { kind: 'symlink', linkTarget: entry.linkTarget! }
+}
+
+function displayKind(entry: ComparisonEntry): ComparisonEntryKind {
+  return entry.target?.kind ?? entry.baseline!.kind
+}
+
 class Workspace implements ComparisonWorkspace {
   private publishedSnapshot?: ComparisonSnapshot
   private workspaceState: WorkspaceState = { phase: 'idle' }
   private readonly listeners = new Set<(state: WorkspaceState) => void>()
   private activeRefresh?: AbortController
+  private activeTextDifferences = 0
   private lastProgressPublication = 0
 
   constructor(
@@ -872,9 +888,8 @@ class Workspace implements ComparisonWorkspace {
             id: index + 1,
             path: comparisonPath,
             status,
-            kind: target?.kind ?? baseline!.kind,
-            baselineSize: baseline?.size,
-            targetSize: target?.size,
+            baseline: entryState(baseline),
+            target: entryState(target),
           }
           progress.comparedEntries++
           this.publishProgress('comparing', progress)
@@ -907,7 +922,7 @@ class Workspace implements ComparisonWorkspace {
         return entry?.id === entryId ? entry : undefined
       }
       const entryTreeNode = (entry: ComparisonListEntry): Extract<TreeNode, { kind: 'file' | 'symlink' | 'issue' }> => ({
-        kind: entry.kind,
+        kind: entry.status === 'issue' ? 'issue' : displayKind(entry),
         name: entry.path.slice(entry.path.lastIndexOf('/') + 1),
         path: entry.path,
         id: entry.id,
@@ -931,7 +946,13 @@ class Workspace implements ComparisonWorkspace {
               ? query.statuses.includes(entry.status)
               : query.includeUnchanged || entry.status !== 'unchanged'
             return statusMatches
-              && (!query.kinds?.length || query.kinds.includes(entry.kind))
+              && (!query.kinds?.length || (
+                entry.status === 'issue'
+                  ? query.kinds.includes('issue')
+                  : query.kinds.some(kind => kind !== 'issue' && (
+                      entry.baseline?.kind === kind || entry.target?.kind === kind
+                    ))
+              ))
               && (!pathSearch || entry.path.toLowerCase().includes(pathSearch))
           }
           const limit = Math.min(Math.max(query.limit ?? 100, 1), 500)
@@ -1005,8 +1026,6 @@ class Workspace implements ComparisonWorkspace {
           const target = targetSources[sourceIndex]
           return {
             ...entry,
-            baselineLinkTarget: baseline?.linkTarget,
-            targetLinkTarget: target?.linkTarget,
             presentation: await classifyPresentation(
               entry,
               baseline,
@@ -1028,6 +1047,157 @@ class Workspace implements ComparisonWorkspace {
             absoluteComparisonPath(root, entry.path),
             force,
           )
+        },
+        textDiff: async (entryId, options): Promise<TextDiffResult> => {
+          const entry = entryById(entryId)
+          if (!entry || entry.status === 'issue' || entry.status === 'unchanged')
+            throw new Error('Comparison Entry not found')
+          const contextLines = options?.contextLines ?? 3
+          if (!Number.isInteger(contextLines) || contextLines < 0 || contextLines > 20)
+            throw new Error('contextLines must be an integer between 0 and 20')
+          if (entry.baseline && entry.target && entry.baseline.kind !== entry.target.kind) {
+            return {
+              status: 'unavailable',
+              path: entry.path,
+              comparisonStatus: entry.status,
+              reason: 'mixed_entry_kinds',
+            }
+          }
+          if (this.activeTextDifferences >= 2) {
+            return {
+              status: 'unavailable',
+              path: entry.path,
+              comparisonStatus: entry.status,
+              reason: 'server_busy',
+            }
+          }
+          this.activeTextDifferences++
+          try {
+            const sourceIndex = entryId - 1
+            const [baselineContent, targetContent] = await Promise.all([
+              loadTextContent(
+                baselineSources[sourceIndex],
+                absoluteComparisonPath(baselineDirectory, entry.path),
+                false,
+              ),
+              loadTextContent(
+                targetSources[sourceIndex],
+                absoluteComparisonPath(targetDirectory, entry.path),
+                false,
+              ),
+            ])
+            if (baselineContent.status === 'binary' || targetContent.status === 'binary') {
+              return {
+                status: 'unavailable',
+                path: entry.path,
+                comparisonStatus: entry.status,
+                reason: 'non_text',
+              }
+            }
+            if (
+              baselineContent.status === 'guarded' || baselineContent.status === 'blocked'
+              || targetContent.status === 'guarded' || targetContent.status === 'blocked'
+            ) {
+              return {
+                status: 'unavailable',
+                path: entry.path,
+                comparisonStatus: entry.status,
+                reason: 'source_too_large',
+                ...(baselineContent.status === 'guarded' || baselineContent.status === 'blocked'
+                  ? {
+                      baselineSize: baselineContent.size,
+                      ...('lineCount' in baselineContent && baselineContent.lineCount !== undefined
+                        ? { baselineLineCount: baselineContent.lineCount }
+                        : {}),
+                    }
+                  : {}),
+                ...(targetContent.status === 'guarded' || targetContent.status === 'blocked'
+                  ? {
+                      targetSize: targetContent.size,
+                      ...('lineCount' in targetContent && targetContent.lineCount !== undefined
+                        ? { targetLineCount: targetContent.lineCount }
+                        : {}),
+                    }
+                  : {}),
+              }
+            }
+            if (baselineContent.status === 'stale' || targetContent.status === 'stale') {
+              return {
+                status: 'unavailable',
+                path: entry.path,
+                comparisonStatus: entry.status,
+                reason: 'stale',
+              }
+            }
+            if (!['ready', 'missing'].includes(baselineContent.status) || !['ready', 'missing'].includes(targetContent.status))
+              throw new Error('Comparison Entry does not have readable text on both sides')
+            const baselineText = baselineContent.status === 'ready' ? baselineContent.text : ''
+            const targetText = targetContent.status === 'ready' ? targetContent.text : ''
+            if (
+              entry.status === 'modified'
+              && baselineContent.status === 'ready'
+              && targetContent.status === 'ready'
+              && baselineText === targetText
+            ) {
+              return {
+                status: 'no_textual_changes',
+                path: entry.path,
+                comparisonStatus: 'modified',
+                reason: 'encoding_or_bom_only',
+                baselineEncoding: baselineContent.encoding,
+                targetEncoding: targetContent.encoding,
+              }
+            }
+
+            const structured = await new Promise<NonNullable<ReturnType<typeof structuredPatch>> | undefined>((resolve) => {
+              structuredPatch(
+                baselineContent.status === 'missing' ? '/dev/null' : 'baseline',
+                targetContent.status === 'missing' ? '/dev/null' : 'target',
+                baselineText,
+                targetText,
+                undefined,
+                undefined,
+                { context: contextLines, timeout: 5_000, callback: resolve },
+              )
+            })
+            if (!structured) {
+              return {
+                status: 'unavailable',
+                path: entry.path,
+                comparisonStatus: entry.status,
+                reason: 'complexity_limit',
+              }
+            }
+            const addedLines = structured.hunks.reduce((count, hunk) => count + hunk.lines.filter(line => line.startsWith('+')).length, 0)
+            const deletedLines = structured.hunks.reduce((count, hunk) => count + hunk.lines.filter(line => line.startsWith('-')).length, 0)
+            const patch = formatPatch(structured, FILE_HEADERS_ONLY)
+            const outputBytes = Buffer.byteLength(patch)
+            if (outputBytes > 256 * 1024) {
+              return {
+                status: 'unavailable',
+                path: entry.path,
+                comparisonStatus: entry.status,
+                reason: 'output_too_large',
+                addedLines,
+                deletedLines,
+                outputBytes,
+              }
+            }
+            return {
+              status: 'ready',
+              path: entry.path,
+              comparisonStatus: entry.status,
+              contextLines,
+              ...(baselineContent.status === 'ready' ? { baselineEncoding: baselineContent.encoding } : {}),
+              ...(targetContent.status === 'ready' ? { targetEncoding: targetContent.encoding } : {}),
+              addedLines,
+              deletedLines,
+              patch,
+            }
+          }
+          finally {
+            this.activeTextDifferences--
+          }
         },
         async blob(entryId: number, side: ComparisonSide): Promise<BlobContent> {
           const entry = entryById(entryId)

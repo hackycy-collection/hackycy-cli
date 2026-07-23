@@ -1,11 +1,17 @@
 import type {
+  ComparisonEntry,
+  ComparisonEntryKind,
+  ComparisonIssue,
   ComparisonItemKind,
+  ComparisonListEntry,
   ComparisonResultStatus,
   ComparisonSide,
   ComparisonSnapshot,
   ComparisonWorkspace,
+  EntryDetail,
   RefreshRun,
 } from './types'
+import { createDiffMcpHandler } from './mcp'
 import diffWebApp from './web/index.html'
 
 export interface RunningDiffServer {
@@ -75,6 +81,39 @@ function comparisonSide(request: Request): ComparisonSide | Response {
 const COMPARISON_STATUSES = new Set<ComparisonResultStatus>(['added', 'deleted', 'modified', 'unchanged', 'issue'])
 const ENTRY_KINDS = new Set<ComparisonItemKind>(['file', 'symlink', 'issue'])
 
+function browserEntry(entry: ComparisonEntry): {
+  id: number
+  path: string
+  status: ComparisonEntry['status']
+  kind: ComparisonEntryKind
+  baselineSize?: number
+  targetSize?: number
+} {
+  return {
+    id: entry.id,
+    path: entry.path,
+    status: entry.status,
+    kind: entry.target?.kind ?? entry.baseline!.kind,
+    ...(entry.baseline?.kind === 'file' ? { baselineSize: entry.baseline.size } : {}),
+    ...(entry.target?.kind === 'file' ? { targetSize: entry.target.size } : {}),
+  }
+}
+
+function browserListEntry(entry: ComparisonListEntry): ReturnType<typeof browserEntry> | ComparisonIssue {
+  return entry.status === 'issue' ? entry : browserEntry(entry)
+}
+
+function browserEntryDetail(detail: EntryDetail): Record<string, unknown> {
+  if (detail.status === 'issue')
+    return { ...detail }
+  return {
+    ...browserEntry(detail),
+    presentation: detail.presentation,
+    ...(detail.baseline?.kind === 'symlink' ? { baselineLinkTarget: detail.baseline.linkTarget } : {}),
+    ...(detail.target?.kind === 'symlink' ? { targetLinkTarget: detail.target.linkTarget } : {}),
+  }
+}
+
 function listValues<T extends string>(query: URLSearchParams, name: string, allowed: Set<T>): T[] | Response {
   const values = query.getAll(name).flatMap(value => value.split(',')).filter(Boolean)
   return values.every((value): value is T => allowed.has(value as T))
@@ -110,10 +149,18 @@ export function startDiffHttpServer(options: {
     )
     return refresh
   }
+  const startRefresh = (): boolean => {
+    if (activeRefresh || ['discovering', 'comparing', 'publishing'].includes(options.workspace.state().phase))
+      return false
+    beginRefresh()
+    return true
+  }
+  const handleMcp = createDiffMcpHandler(options.workspace, startRefresh)
   const server = Bun.serve({
     hostname: options.address,
     port: options.port,
     routes: {
+      '/mcp': handleMcp,
       '/api/state': request => requireMethod(request, 'GET') ?? json({
         version: 1,
         workspace: options.workspace.state(),
@@ -159,10 +206,8 @@ export function startDiffHttpServer(options: {
           activeRefresh?.cancel()
           return new Response(null, { status: 204, headers: API_HEADERS })
         }
-        if (activeRefresh || ['discovering', 'comparing', 'publishing'].includes(options.workspace.state().phase))
+        if (!startRefresh())
           return error('REFRESH_ACTIVE', 'A refresh is already active', 409)
-
-        beginRefresh()
         return json({ accepted: true }, 202)
       },
       '/api/entries': (request) => {
@@ -188,7 +233,7 @@ export function startDiffHttpServer(options: {
           const anchor = rawAnchor === null ? undefined : Number(rawAnchor)
           if (anchor !== undefined && (!Number.isSafeInteger(anchor) || anchor < 1))
             return error('INVALID_REQUEST', 'anchor must be a positive integer', 400)
-          return json(snapshot.list({
+          const page = snapshot.list({
             cursor: query.get('cursor') ?? undefined,
             anchor,
             limit,
@@ -196,7 +241,8 @@ export function startDiffHttpServer(options: {
             statuses,
             kinds,
             path: query.get('path') ?? undefined,
-          }))
+          })
+          return json({ ...page, entries: page.entries.map(browserListEntry) })
         }
         catch (cause) {
           return error('INVALID_REQUEST', cause instanceof Error ? cause.message : String(cause), 400)
@@ -243,7 +289,7 @@ export function startDiffHttpServer(options: {
         if (id instanceof Response)
           return id
         try {
-          return json(await snapshot.detail(id))
+          return json(browserEntryDetail(await snapshot.detail(id)))
         }
         catch (cause) {
           return error('ENTRY_NOT_FOUND', cause instanceof Error ? cause.message : String(cause), 404)

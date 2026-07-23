@@ -54,8 +54,11 @@ export async function runDiffCommand(options: DiffCommandOptions): Promise<void>
 
   const [localUrl, ...networkUrls] = formatDiffUrls(options.public, server.url.port)
   console.log(`Directory diff: ${localUrl}`)
+  console.log(`MCP endpoint:   ${localUrl}/mcp`)
   for (const url of networkUrls)
     console.log(`Network: ${url}`)
+  for (const url of networkUrls)
+    console.log(`Network MCP: ${url}/mcp`)
   console.log(`Baseline: ${baselineDirectory}`)
   console.log(`Target:   ${targetDirectory}`)
 

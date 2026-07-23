@@ -25,10 +25,13 @@ export interface ComparisonEntry {
   id: number
   path: string
   status: ComparisonStatus
-  kind: ComparisonEntryKind
-  baselineSize?: number
-  targetSize?: number
+  baseline?: ComparisonEntryState
+  target?: ComparisonEntryState
 }
+
+export type ComparisonEntryState
+  = | { kind: 'file', size: number }
+    | { kind: 'symlink', linkTarget: string }
 
 export interface ComparisonIssue {
   id: number
@@ -92,8 +95,6 @@ export type EntryPresentation = 'text' | 'image' | 'binary' | 'symlink' | 'overs
 export type EntryDetail
   = | (ComparisonEntry & {
     presentation: Exclude<EntryPresentation, 'issue'>
-    baselineLinkTarget?: string
-    targetLinkTarget?: string
   })
   | (ComparisonIssue & { presentation: 'issue' })
 
@@ -104,6 +105,47 @@ export type TextContent
     | { status: 'guarded', size: number, lineCount: number }
     | { status: 'blocked', size: number, lineCount?: number }
     | { status: 'binary' | 'missing' | 'stale' }
+
+export interface TextDiffOptions {
+  contextLines?: number
+}
+
+export interface ReadyTextDiff {
+  status: 'ready'
+  path: string
+  comparisonStatus: Exclude<ComparisonStatus, 'unchanged'>
+  contextLines: number
+  baselineEncoding?: TextEncoding
+  targetEncoding?: TextEncoding
+  addedLines: number
+  deletedLines: number
+  patch: string
+}
+
+export interface NoTextualChanges {
+  status: 'no_textual_changes'
+  path: string
+  comparisonStatus: 'modified'
+  reason: 'encoding_or_bom_only'
+  baselineEncoding: TextEncoding
+  targetEncoding: TextEncoding
+}
+
+export interface UnavailableTextDiff {
+  status: 'unavailable'
+  path: string
+  comparisonStatus: Exclude<ComparisonStatus, 'unchanged'>
+  reason: 'non_text' | 'mixed_entry_kinds' | 'source_too_large' | 'stale' | 'complexity_limit' | 'output_too_large' | 'server_busy'
+  baselineSize?: number
+  baselineLineCount?: number
+  targetSize?: number
+  targetLineCount?: number
+  addedLines?: number
+  deletedLines?: number
+  outputBytes?: number
+}
+
+export type TextDiffResult = ReadyTextDiff | NoTextualChanges | UnavailableTextDiff
 
 export type BlobContent
   = | { status: 'ready', bytes: Uint8Array, mimeType: string, filename: string }
@@ -132,6 +174,7 @@ export interface ComparisonSnapshot {
   search: (query: string, statuses?: ComparisonResultStatus[], limit?: number) => SearchPage
   detail: (entryId: number) => Promise<EntryDetail>
   content: (entryId: number, side: ComparisonSide, force?: boolean) => Promise<TextContent>
+  textDiff: (entryId: number, options?: TextDiffOptions) => Promise<TextDiffResult>
   blob: (entryId: number, side: ComparisonSide) => Promise<BlobContent>
 }
 
