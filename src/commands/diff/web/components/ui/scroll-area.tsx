@@ -41,7 +41,7 @@ function Scrollbar({ orientation }: { orientation: 'vertical' | 'horizontal' }):
       orientation={orientation}
       className={cn(
         'z-10 flex touch-none select-none p-px transition-opacity data-[state=hidden]:opacity-0',
-        orientation === 'vertical' ? 'right-0 top-0 h-full w-2.5' : 'bottom-0 left-0 h-2.5 w-full',
+        orientation === 'vertical' ? 'right-0 top-0 h-full w-[5px]' : 'bottom-0 left-0 h-[5px] w-full',
       )}
     >
       <ScrollAreaPrimitive.Thumb className="relative flex-1 rounded-full bg-border/80 hover:bg-muted-foreground/70" />

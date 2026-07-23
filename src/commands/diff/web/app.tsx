@@ -113,6 +113,26 @@ export function App(): React.JSX.Element {
     })
   }
 
+  const closeOtherEntries = (entry: Entry): void => {
+    setOpenTabs(current => current.filter(tab => tab.id === entry.id))
+    setActiveEntryId(entry.id)
+  }
+
+  const closeEntriesToRight = (entry: Entry): void => {
+    setOpenTabs((current) => {
+      const index = current.findIndex(tab => tab.id === entry.id)
+      const next = index === -1 ? current : current.slice(0, index + 1)
+      if (activeEntryId !== undefined && !next.some(tab => tab.id === activeEntryId))
+        setActiveEntryId(entry.id)
+      return next
+    })
+  }
+
+  const closeAllEntries = (): void => {
+    setOpenTabs([])
+    setActiveEntryId(undefined)
+  }
+
   const refresh = async (): Promise<void> => {
     await apiJson('/api/refresh', { method: 'POST' })
   }
@@ -143,7 +163,7 @@ export function App(): React.JSX.Element {
   const rootName = (value: string): string => value.split(/[\\/]/).at(-1) ?? value
   const editor = (
     <main className="flex h-full min-h-0 flex-col bg-feed">
-      <EditorTabs tabs={openTabs} activeId={activeEntryId} onSelect={entry => setActiveEntryId(entry.id)} onClose={closeEntry} />
+      <EditorTabs tabs={openTabs} activeId={activeEntryId} onSelect={entry => setActiveEntryId(entry.id)} onClose={closeEntry} onCloseOthers={closeOtherEntries} onCloseToRight={closeEntriesToRight} onCloseAll={closeAllEntries} />
       <ScrollArea className="min-h-0 flex-1 bg-background" scrollbars="both">
         {!snapshotId && (
           <EmptyState
