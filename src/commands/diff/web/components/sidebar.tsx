@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { apiJson } from '../api'
 import { cn } from '../lib/utils'
 import { Input } from './ui/input'
+import { ScrollArea } from './ui/scroll-area'
 
 interface VisibleNode {
   node: TreeNode
@@ -142,7 +143,7 @@ export function Sidebar({
           <Input value={search} onChange={event => onSearch(event.target.value)} placeholder="Search files or folders" className="pl-8" aria-label="Search files or folders" />
         </div>
       </div>
-      <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto py-1">
+      <ScrollArea viewportRef={scrollRef} className="min-h-0 flex-1" viewportClassName="py-1">
         {!searching && search.trim() && displayedNodes.length === 0 && (
           <div className="px-3 py-6 text-center text-xs text-muted-foreground">No matching files or folders</div>
         )}
@@ -177,7 +178,7 @@ export function Sidebar({
           })}
         </div>
         {searchPage?.truncated && <div className="px-3 py-2 text-center text-[11px] text-muted-foreground">Showing the first 200 matches</div>}
-      </div>
+      </ScrollArea>
     </aside>
   )
 }

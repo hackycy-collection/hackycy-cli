@@ -23,6 +23,17 @@ const statusLetter = {
   issue: '!',
 }
 
+const overlayScrollbarCss = `
+  [data-code] {
+    scrollbar-gutter: auto;
+    scrollbar-width: none;
+  }
+
+  [data-code]::-webkit-scrollbar {
+    height: 0;
+  }
+`
+
 async function cachedJson<T>(key: string, url: string, signal: AbortSignal): Promise<T> {
   const cached = contentCache.get<T>(key)
   if (cached !== undefined)
@@ -182,6 +193,7 @@ export function DiffPanel({
                 overflow: wrap ? 'wrap' : 'scroll',
                 disableFileHeader: true,
                 themeType: theme,
+                unsafeCSS: overlayScrollbarCss,
                 parseDiffOptions: ignoreWhitespace ? { ignoreWhitespace: true } : undefined,
               }}
             />

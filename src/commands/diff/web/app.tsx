@@ -10,6 +10,7 @@ import { DiffPanel } from './components/diff-panel'
 import { EditorTabs } from './components/editor-tabs'
 import { Sidebar } from './components/sidebar'
 import { Button } from './components/ui/button'
+import { ScrollArea } from './components/ui/scroll-area'
 import { Sheet, SheetContent } from './components/ui/sheet'
 import { Tooltip } from './components/ui/tooltip'
 import { contentCache } from './lib/content-cache'
@@ -143,7 +144,7 @@ export function App(): React.JSX.Element {
   const editor = (
     <main className="flex h-full min-h-0 flex-col bg-feed">
       <EditorTabs tabs={openTabs} activeId={activeEntryId} onSelect={entry => setActiveEntryId(entry.id)} onClose={closeEntry} />
-      <div className="min-h-0 flex-1 overflow-auto bg-background">
+      <ScrollArea className="min-h-0 flex-1 bg-background" scrollbars="both">
         {!snapshotId && (
           <EmptyState
             title={state?.workspace.phase === 'canceled' ? 'Comparison canceled' : state?.workspace.error ?? 'Indexing directories'}
@@ -154,7 +155,7 @@ export function App(): React.JSX.Element {
           <DiffPanel key={`${snapshotId}:${activeEntry.id}`} entry={activeEntry} snapshotId={snapshotId} diffStyle={effectiveStyle} wrap={wrap} ignoreWhitespace={ignoreWhitespace} theme={theme} />
         )}
         {snapshotId && !activeEntry && <EmptyState title="Select a file to compare" />}
-      </div>
+      </ScrollArea>
     </main>
   )
 
