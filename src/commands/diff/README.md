@@ -11,7 +11,7 @@ ycy diff [options] <baseline-directory> <target-directory>
 
 Options:
   -p, --port <number>       Port to serve on (default: 1205)
-  -a, --address <address>   Address to bind to (default: 127.0.0.1)
+      --public              Make the diff available on the local network
   -x, --exclude <glob>      Add an exclusion; may be repeated
       --no-gitignore        Do not apply Target Directory .gitignore files
 ```
@@ -51,7 +51,7 @@ bun scripts/build.ts --outfile .tmp/ycy
 | Path | Responsibility |
 | --- | --- |
 | `index.ts` | Commander registration and CLI option parsing. |
-| `run.ts` | Root resolution, workspace/server composition, process signals, and LAN warning. |
+| `run.ts` | Root resolution, workspace/server composition, process signals, and LAN URL presentation. |
 | `types.ts` | Domain types and the internal workspace/snapshot interfaces. |
 | `workspace.ts` | Traversal, ignore rules, byte comparison, snapshots, queries, content classification, and stale checks. |
 | `server.ts` | Same-origin HTTP adapter, request validation, security headers, SSE, and server lifecycle. |
@@ -212,7 +212,7 @@ A single decoded line over 1 MiB is always Blocked.
 
 ## Security Invariants
 
-- Default binding is `127.0.0.1`. A non-loopback address is an explicit unauthenticated LAN share and must retain the CLI warning.
+- Default binding is `127.0.0.1`. `--public` explicitly binds `0.0.0.0` for an unauthenticated LAN share and prints every non-internal IPv4 URL.
 - Do not add permissive CORS headers.
 - Refresh mutations reject a non-matching `Origin`.
 - Content routes accept only a snapshot ID, opaque entry ID, and side enum.
@@ -245,7 +245,7 @@ The former ADRs are consolidated here:
 1. **Target `.gitignore` controls both trees.** The comparison is directional. Applying each tree's rules independently can create false Added or Deleted entries when ignore files differ.
 2. **Text rendering uses `@pierre/diffs`.** It provides React 19 support, split/unified modes, virtualization, Shiki highlighting, wrapping, and portable workers. The tradeoff is a larger embedded frontend and dependency coupling.
 3. **Snapshots are immutable and in memory.** Metadata and indexes stay resident while file contents load lazily. This avoids a comparison database and precomputed patch storage; process restart discards the snapshot.
-4. **The server binds to loopback by default.** Its API exposes source contents without authentication, so wider network access must be explicit and visibly warned about.
+4. **The server binds to loopback by default.** Its API exposes source contents without authentication, so `--public` is required before sharing it on the local network.
 
 ## Extending The Module
 

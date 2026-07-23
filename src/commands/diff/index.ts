@@ -15,13 +15,13 @@ export function register(program: Command): void {
     .command('diff <baseline-directory> <target-directory>')
     .description('Compare two directories in a browser')
     .option('-p, --port <number>', 'Port to serve on', parsePort, 1205)
-    .option('-a, --address <address>', 'Address to bind to', '127.0.0.1')
+    .option('--public', 'Make the diff available on the local network')
     .option('-x, --exclude <glob>', 'Add an exclusion', (value, values: string[]) => [...values, value], [])
     .option('--no-gitignore', 'Do not apply Target Directory .gitignore files')
     .action(async (
       baselineDirectory: string,
       targetDirectory: string,
-      options: { address: string, port: number, exclude: string[], gitignore: boolean },
+      options: { public: boolean, port: number, exclude: string[], gitignore: boolean },
     ) => {
       const { runDiffCommand } = await import('./run')
       await runDiffCommand({ baselineDirectory, targetDirectory, ...options })
