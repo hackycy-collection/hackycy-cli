@@ -776,6 +776,26 @@ describe('ComparisonWorkspace', () => {
     ])
   })
 
+  test('does not publish one-sided metadata that changes after discovery', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    const targetPath = path.join(target, 'changing-added.txt')
+    await writeFile(targetPath, 'before')
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    let changed = false
+    const unsubscribe = workspace.observe((state) => {
+      if (!changed && state.phase === 'comparing') {
+        changed = true
+        writeFileSync(targetPath, 'after!')
+      }
+    })
+
+    await expect(workspace.refresh().result).rejects.toThrow(
+      'Comparison Entry changed before snapshot publication',
+    )
+    unsubscribe()
+    expect(workspace.snapshot()).toBeUndefined()
+  })
+
   test('loads byte-exact image and binary blobs through opaque entry IDs', async () => {
     const { baseline, target } = await makeComparisonDirectories()
     const imageBytes = Uint8Array.from([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A])
@@ -894,6 +914,46 @@ describe('ComparisonWorkspace', () => {
       baselineDirectory: baseline,
       targetDirectory: baseline,
     })).rejects.toThrow('must be different')
+  })
+
+  test('rejects a Refresh after a fixed comparison root is replaced by a symlink', async () => {
+    if (process.platform === 'win32')
+      return
+    const { baseline, target } = await makeComparisonDirectories()
+    const outside = path.join(path.dirname(target), 'outside')
+    await mkdir(outside)
+    await writeFile(path.join(outside, 'secret.txt'), 'must stay outside the Comparison Workspace')
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const original = await workspace.refresh().result
+
+    await rm(target, { recursive: true })
+    await symlink(outside, target)
+
+    await expect(workspace.refresh().result).rejects.toThrow(
+      'Target Directory changed after the Comparison Workspace was created',
+    )
+    expect(workspace.snapshot()?.summary.id).toBe(original.summary.id)
+    expect(workspace.snapshot()?.list({ includeUnchanged: true }).entries).toEqual([])
+  })
+
+  test('keeps published snapshot data immutable to in-process callers', async () => {
+    const { baseline, target } = await makeComparisonDirectories()
+    await writeFile(path.join(target, 'added.txt'), 'content')
+    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const snapshot = await workspace.refresh().result
+    const entry = snapshot.list({}).entries[0]!
+
+    expect(Reflect.set(entry, 'path', 'tampered.txt')).toBe(false)
+    expect(entry.status === 'issue' ? undefined : Reflect.set(entry.target!, 'size', 999)).toBe(false)
+    expect(Reflect.set(snapshot.summary.counts, 'added', 999)).toBe(false)
+    expect(Reflect.set(snapshot, 'summary', {})).toBe(false)
+    expect(snapshot.list({}).entries[0]).toEqual({
+      id: 1,
+      path: 'added.txt',
+      status: 'added',
+      target: { kind: 'file', size: 7 },
+    })
+    expect(snapshot.summary.counts.added).toBe(1)
   })
 
   test('uses bytes rather than timestamps to decide content equality', async () => {

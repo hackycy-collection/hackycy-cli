@@ -42,6 +42,11 @@ interface DiscoveryResult {
   issues: Map<string, string>
 }
 
+interface DirectoryIdentity {
+  device: number
+  inode: number
+}
+
 interface IgnoreDiscovery {
   matchers: Map<string, IgnoreMatcher>
   issues: Map<string, string>
@@ -534,6 +539,28 @@ async function refreshDiscoveredEntry(entry: DiscoveredEntry, absolutePath: stri
   throw new Error('Comparison Entry changed to an unsupported filesystem kind')
 }
 
+function hasSameDiscoveredIdentity(left: DiscoveredEntry, right: DiscoveredEntry): boolean {
+  return left.kind === right.kind
+    && left.size === right.size
+    && left.device === right.device
+    && left.inode === right.inode
+    && left.modifiedAt === right.modifiedAt
+    && left.changedAt === right.changedAt
+    && left.linkTarget === right.linkTarget
+}
+
+async function assertDiscoveredEntryStable(entry: DiscoveredEntry, absolutePath: string): Promise<void> {
+  let current: DiscoveredEntry
+  try {
+    current = await refreshDiscoveredEntry(entry, absolutePath)
+  }
+  catch {
+    throw new Error('Comparison Entry changed before snapshot publication')
+  }
+  if (!hasSameDiscoveredIdentity(entry, current))
+    throw new Error('Comparison Entry changed before snapshot publication')
+}
+
 async function compareWithRetry(
   baseline: DiscoveredEntry,
   target: DiscoveredEntry,
@@ -672,6 +699,32 @@ function displayKind(entry: ComparisonEntry): ComparisonEntryKind {
   return entry.target?.kind ?? entry.baseline!.kind
 }
 
+function freezeListEntry(entry: ComparisonListEntry): ComparisonListEntry {
+  if (entry.status === 'issue')
+    return Object.freeze(entry)
+  if (entry.baseline)
+    Object.freeze(entry.baseline)
+  if (entry.target)
+    Object.freeze(entry.target)
+  return Object.freeze(entry)
+}
+
+async function assertFixedDirectory(
+  label: 'Baseline Directory' | 'Target Directory',
+  directory: string,
+  identity: DirectoryIdentity,
+): Promise<void> {
+  let stat: Awaited<ReturnType<typeof lstat>>
+  try {
+    stat = await lstat(directory)
+  }
+  catch {
+    throw new Error(`${label} changed after the Comparison Workspace was created`)
+  }
+  if (!stat.isDirectory() || stat.dev !== identity.device || stat.ino !== identity.inode)
+    throw new Error(`${label} changed after the Comparison Workspace was created`)
+}
+
 class Workspace implements ComparisonWorkspace {
   private publishedSnapshot?: ComparisonSnapshot
   private workspaceState: WorkspaceState = { phase: 'idle' }
@@ -683,6 +736,7 @@ class Workspace implements ComparisonWorkspace {
   constructor(
     private readonly baselineDirectory: string,
     private readonly targetDirectory: string,
+    private readonly rootIdentities: { baseline: DirectoryIdentity, target: DirectoryIdentity },
     private readonly useGitignore: boolean,
     private readonly exclusions: Bun.Glob[],
   ) {}
@@ -739,6 +793,13 @@ class Workspace implements ComparisonWorkspace {
     this.publishState({ phase, progress: { ...progress } })
   }
 
+  private async assertFixedRoots(): Promise<void> {
+    await Promise.all([
+      assertFixedDirectory('Baseline Directory', this.baselineDirectory, this.rootIdentities.baseline),
+      assertFixedDirectory('Target Directory', this.targetDirectory, this.rootIdentities.target),
+    ])
+  }
+
   private async buildSnapshot(signal: AbortSignal): Promise<ComparisonSnapshot> {
     const progress: WorkspaceProgress = {
       discoveredEntries: 0,
@@ -748,6 +809,8 @@ class Workspace implements ComparisonWorkspace {
     }
     this.publishProgress('discovering', progress, true)
     try {
+      signal.throwIfAborted()
+      await this.assertFixedRoots()
       const ignoreDiscovery: IgnoreDiscovery = this.useGitignore
         ? await collectTargetIgnoreMatchers(this.targetDirectory, this.exclusions, signal)
         : {
@@ -786,6 +849,7 @@ class Workspace implements ComparisonWorkspace {
           onDiscovered,
         ),
       ])
+      await this.assertFixedRoots()
       signal.throwIfAborted()
       mergeIssues(issueMessages, baselineDiscovery.issues)
       mergeIssues(issueMessages, targetDiscovery.issues)
@@ -899,8 +963,35 @@ class Workspace implements ComparisonWorkspace {
         { length: Math.min(8, Math.max(paths.length, 1)) },
         () => compareNext(),
       ))
+      await this.assertFixedRoots()
+      signal.throwIfAborted()
+      await mapConcurrent(
+        paths.map((comparisonPath, index) => ({ comparisonPath, index })),
+        MAX_DIRECTORY_CONCURRENCY,
+        async ({ comparisonPath, index }) => {
+          signal.throwIfAborted()
+          await Promise.all([
+            baselineSources[index]
+              ? assertDiscoveredEntryStable(
+                  baselineSources[index],
+                  absoluteComparisonPath(this.baselineDirectory, comparisonPath),
+                )
+              : undefined,
+            targetSources[index]
+              ? assertDiscoveredEntryStable(
+                  targetSources[index],
+                  absoluteComparisonPath(this.targetDirectory, comparisonPath),
+                )
+              : undefined,
+          ])
+        },
+      )
+      await this.assertFixedRoots()
+      signal.throwIfAborted()
 
-      const entries = comparedEntries.filter((entry): entry is ComparisonListEntry => entry !== undefined)
+      const entries = comparedEntries
+        .filter((entry): entry is ComparisonListEntry => entry !== undefined)
+        .map(freezeListEntry)
       const counts = emptyCounts()
       let issueCount = 0
       for (const entry of entries) {
@@ -930,15 +1021,16 @@ class Workspace implements ComparisonWorkspace {
         ...(entry.status === 'issue' ? { message: entry.message } : {}),
       })
       const directorySearchNodes = [...tree.values()].flatMap(indexedChildren => indexedChildren.directories)
+      const summary = Object.freeze({
+        id,
+        baselineDirectory: this.baselineDirectory,
+        targetDirectory: this.targetDirectory,
+        createdAt: new Date().toISOString(),
+        counts: Object.freeze({ ...counts }),
+        issues: issueCount,
+      })
       const snapshot: ComparisonSnapshot = {
-        summary: {
-          id,
-          baselineDirectory: this.baselineDirectory,
-          targetDirectory: this.targetDirectory,
-          createdAt: new Date().toISOString(),
-          counts,
-          issues: issueCount,
-        },
+        summary,
         list(query) {
           const pathSearch = query.path?.trim().toLowerCase()
           const matches = (entry: ComparisonListEntry): boolean => {
@@ -1222,6 +1314,7 @@ class Workspace implements ComparisonWorkspace {
           }
         },
       }
+      Object.freeze(snapshot)
 
       this.publishedSnapshot = snapshot
       this.publishState({ phase: 'ready', snapshotId: id })
@@ -1262,6 +1355,10 @@ export async function createComparisonWorkspace(options: ComparisonWorkspaceOpti
   return new Workspace(
     baselineDirectory,
     targetDirectory,
+    {
+      baseline: { device: baselineStat.dev, inode: baselineStat.ino },
+      target: { device: targetStat.dev, inode: targetStat.ino },
+    },
     options.gitignore !== false,
     (options.exclusions ?? []).map(pattern => new Bun.Glob(pattern)),
   )

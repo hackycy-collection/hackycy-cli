@@ -25,7 +25,7 @@ The comparison is directional:
 - Modified exists on both sides but differs in kind, symlink target, size, or bytes.
 - Unchanged exists on both sides with the same kind and identical bytes or symlink target.
 
-The command resolves both roots to real absolute paths, starts the HTTP server, prints the URL, and builds the first snapshot. Equal roots are rejected. Nested roots are valid because traversal never follows symlinks.
+The command resolves both roots to real absolute paths, records their directory identities, starts the HTTP server, prints the URL, and builds the first snapshot. Equal roots are rejected. Nested roots are valid because traversal never follows symlinks. A Refresh fails closed if either root has been replaced since service start.
 
 ## Local Development
 
@@ -124,6 +124,7 @@ Do not add dependencies, build output, editor metadata, or other project-specifi
 - Kind changes at one Comparison Path are Modified.
 - Sockets, devices, FIFOs, unreadable entries, unreadable Target `.gitignore` files, and repeatedly mutating entries become visible Comparison Issues.
 - Discovery and reads use recorded device, inode, size, mtime, and ctime fingerprints.
+- Every captured source fingerprint and both fixed root identities are revalidated before snapshot publication.
 - Content requests reopen by the snapshot-recorded path with no-follow behavior and revalidate the fingerprint before and after reading.
 - A path that changed after snapshot publication returns stale data status instead of mixing current bytes with old metadata.
 
@@ -180,6 +181,60 @@ All API responses use `Cache-Control: no-store` and versioned error objects. Sna
 | Streamable HTTP | `/mcp` | Stateless MCP tools over the same Comparison Workspace. |
 
 The browser HTTP adapter does not generate patches. It sends text content to `@pierre/diffs` browser workers. The MCP adapter separately generates bounded Unified Diffs through `ComparisonSnapshot`. Bundled hashed assets are immutable-cacheable; the HTML shell remains `no-store`.
+
+## MCP Client Integration
+
+Start one long-running diff service for the directory pair the client should inspect:
+
+```bash
+ycy diff --port 1205 /absolute/path/to/baseline /absolute/path/to/target
+```
+
+Keep that process running. The printed `MCP endpoint` is the Streamable HTTP URL to register; with the default port it is `http://127.0.0.1:1205/mcp`. The roots cannot be changed through MCP. Start another service, normally on another port, for a different directory pair.
+
+Register the local endpoint with a client that supports Streamable HTTP. For Codex CLI:
+
+```bash
+codex mcp add ycy-diff --url http://127.0.0.1:1205/mcp
+```
+
+For Claude Code, use an HTTP transport and choose the configuration scope explicitly:
+
+```bash
+claude mcp add --transport http --scope project ycy-diff http://127.0.0.1:1205/mcp
+```
+
+Clients that use the `.mcp.json` convention can use the equivalent project configuration:
+
+```json
+{
+  "mcpServers": {
+    "ycy-diff": {
+      "type": "http",
+      "url": "http://127.0.0.1:1205/mcp"
+    }
+  }
+}
+```
+
+Configuration field names vary between clients; select the Streamable HTTP or HTTP transport, not stdio or the legacy SSE transport. No command, environment variable, bearer token, or OAuth setting is required.
+
+After connecting, use this tool sequence:
+
+1. Call `get_comparison` and retain the returned `snapshot_id`.
+2. Discover work with `list_changes`, `search_changes`, or `list_issues` using that `snapshot_id`.
+3. Pass an `entry_id` from a changed entry to `get_text_diff` when a textual explanation is needed.
+4. Call `refresh_comparison` after the directories change and poll `get_comparison` until the phase is `ready`, `error`, or `canceled`. Replace cached Snapshot IDs, Entry IDs, and cursors only after a new snapshot is successfully published; an error or cancellation leaves the prior snapshot authoritative.
+
+The server is stateless at the MCP transport layer, but its read references are snapshot-bound. A `snapshot_changed` error means the client must restart at `get_comparison`; `invalid_cursor` means it must restart that listing. `get_text_diff` can return an unavailable result for non-text, stale, oversized, too-complex, or capacity-limited content without making the whole comparison fail.
+
+For access from another machine on a trusted local network, start the service with `--public` and register one of the printed `Network MCP` URLs:
+
+```bash
+ycy diff --public --port 1205 /absolute/path/to/baseline /absolute/path/to/target
+```
+
+`--public` exposes both the browser application and the complete read-only MCP workspace on `0.0.0.0` without authentication or TLS. Do not use it on an untrusted network or expose the port through a public firewall, tunnel, or router. Browser-origin MCP requests must be same-origin and use an address permitted by the active binding; normal agent clients may omit `Origin`.
 
 ## MCP Interface
 
@@ -241,7 +296,7 @@ A single decoded line over 1 MiB is always Blocked.
 - Default binding is `127.0.0.1`. `--public` explicitly binds `0.0.0.0` for an unauthenticated LAN share and prints every non-internal IPv4 URL.
 - `/mcp` follows the same binding and authorization decision as the browser interface; it does not add authentication.
 - Do not add permissive CORS headers.
-- MCP requests with an `Origin` header require an exact same-origin match. Agent requests without `Origin` remain valid.
+- MCP requests with an `Origin` header require an exact same-origin match and a hostname permitted by the active binding. Agent requests without `Origin` remain valid.
 - Refresh mutations reject a non-matching `Origin`.
 - Content routes accept only a snapshot ID, opaque entry ID, and side enum.
 - No upload, edit, merge, delete, or arbitrary-path route belongs in this server.

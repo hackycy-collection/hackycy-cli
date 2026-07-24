@@ -155,7 +155,7 @@ export function startDiffHttpServer(options: {
     beginRefresh()
     return true
   }
-  const handleMcp = createDiffMcpHandler(options.workspace, startRefresh)
+  const handleMcp = createDiffMcpHandler(options.workspace, startRefresh, API_HEADERS, options.address)
   const server = Bun.serve({
     hostname: options.address,
     port: options.port,

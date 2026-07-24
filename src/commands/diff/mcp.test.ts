@@ -49,10 +49,18 @@ async function startFixture(): Promise<{ client: Client, baseline: string, targe
   }
 }
 
+function expectSecurityHeaders(response: Response): void {
+  expect(response.headers.get('cache-control')).toBe('no-store')
+  expect(response.headers.get('x-content-type-options')).toBe('nosniff')
+  expect(response.headers.get('referrer-policy')).toBe('no-referrer')
+  expect(response.headers.get('content-security-policy')).toContain('default-src \'self\'')
+}
+
 test('publishes the fixed Directory Comparison tool interface', async () => {
   const { client } = await startFixture()
 
-  expect((await client.listTools()).tools.map(tool => tool.name)).toEqual([
+  const tools = (await client.listTools()).tools
+  expect(tools.map(tool => tool.name)).toEqual([
     'get_comparison',
     'refresh_comparison',
     'list_changes',
@@ -60,6 +68,7 @@ test('publishes the fixed Directory Comparison tool interface', async () => {
     'search_changes',
     'get_text_diff',
   ])
+  expect(tools.find(tool => tool.name === 'refresh_comparison')?.annotations?.idempotentHint).toBe(false)
 })
 
 test('returns the current Comparison Snapshot as structured knowledge', async () => {
@@ -241,7 +250,7 @@ test('starts one asynchronous Refresh and reports concurrent requests as already
   let phase: unknown
   for (let attempt = 0; attempt < 50 && phase !== 'canceled'; attempt++) {
     const comparison = await client.callTool({ name: 'get_comparison', arguments: {} })
-    phase = comparison.structuredContent?.phase
+    phase = (comparison.structuredContent as { phase?: unknown } | undefined)?.phase
     if (phase !== 'canceled')
       await Bun.sleep(5)
   }
@@ -271,7 +280,62 @@ test('rejects cross-origin MCP requests without enabling CORS', async () => {
   })
 
   expect(response.status).toBe(403)
+  expectSecurityHeaders(response)
   expect(response.headers.get('access-control-allow-origin')).toBeNull()
+})
+
+test('rejects a same-origin request whose host is not allowed by the server binding', async () => {
+  const { url } = await startFixture()
+  const rebindingOrigin = `http://attacker.example:${url.port}`
+
+  const response = await fetch(new URL('/mcp', url), {
+    method: 'POST',
+    headers: {
+      'Accept': 'application/json, text/event-stream',
+      'Content-Type': 'application/json',
+      'Host': `attacker.example:${url.port}`,
+      'Origin': rebindingOrigin,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'dns-rebinding-test', version: '1.0.0' },
+      },
+    }),
+  })
+
+  expect(response.status).toBe(403)
+  expectSecurityHeaders(response)
+})
+
+test('applies no-store and security headers to successful MCP responses', async () => {
+  const { url } = await startFixture()
+
+  const response = await fetch(new URL('/mcp', url), {
+    method: 'POST',
+    headers: {
+      'Accept': 'application/json, text/event-stream',
+      'Content-Type': 'application/json',
+      'Origin': url.origin,
+    },
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2025-06-18',
+        capabilities: {},
+        clientInfo: { name: 'response-header-test', version: '1.0.0' },
+      },
+    }),
+  })
+
+  expect(response.status).toBe(200)
+  expectSecurityHeaders(response)
 })
 
 test('serves independent clients without MCP session state', async () => {

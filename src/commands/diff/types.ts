@@ -13,32 +13,32 @@ export interface StatusCounts {
 }
 
 export interface SnapshotSummary {
-  id: string
-  baselineDirectory: string
-  targetDirectory: string
-  createdAt: string
-  counts: StatusCounts
-  issues: number
+  readonly id: string
+  readonly baselineDirectory: string
+  readonly targetDirectory: string
+  readonly createdAt: string
+  readonly counts: Readonly<StatusCounts>
+  readonly issues: number
 }
 
 export interface ComparisonEntry {
-  id: number
-  path: string
-  status: ComparisonStatus
-  baseline?: ComparisonEntryState
-  target?: ComparisonEntryState
+  readonly id: number
+  readonly path: string
+  readonly status: ComparisonStatus
+  readonly baseline?: ComparisonEntryState
+  readonly target?: ComparisonEntryState
 }
 
 export type ComparisonEntryState
-  = | { kind: 'file', size: number }
-    | { kind: 'symlink', linkTarget: string }
+  = | { readonly kind: 'file', readonly size: number }
+    | { readonly kind: 'symlink', readonly linkTarget: string }
 
 export interface ComparisonIssue {
-  id: number
-  path: string
-  status: 'issue'
-  kind: 'issue'
-  message: string
+  readonly id: number
+  readonly path: string
+  readonly status: 'issue'
+  readonly kind: 'issue'
+  readonly message: string
 }
 
 export type ComparisonListEntry = ComparisonEntry | ComparisonIssue

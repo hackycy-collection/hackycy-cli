@@ -1,7 +1,8 @@
 import type { ComparisonEntry, ComparisonEntryState, ComparisonWorkspace, TextDiffResult } from './types'
+import { isIP } from 'node:net'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js'
-import { z } from 'zod/v3'
+import { z } from 'zod/v4'
 
 const changeStatusSchema = z.enum(['added', 'deleted', 'modified'])
 const entryKindSchema = z.enum(['file', 'symlink'])
@@ -165,7 +166,7 @@ function createServer(_workspace: ComparisonWorkspace, startRefresh: () => boole
 
   server.registerTool('refresh_comparison', {
     description: 'Start an asynchronous Refresh of the fixed Comparison Workspace.',
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false },
     inputSchema: {},
     outputSchema: {
       accepted: z.boolean(),
@@ -363,15 +364,46 @@ function createServer(_workspace: ComparisonWorkspace, startRefresh: () => boole
 export function createDiffMcpHandler(
   workspace: ComparisonWorkspace,
   startRefresh: () => boolean,
+  responseHeaders: HeadersInit,
+  bindingAddress: string,
 ): (request: Request) => Promise<Response> {
+  const withResponseHeaders = (response: Response): Response => {
+    const headers = new Headers(response.headers)
+    new Headers(responseHeaders).forEach((value, name) => headers.set(name, value))
+    return new Response(response.body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    })
+  }
+
   return async (request) => {
     const origin = request.headers.get('Origin')
-    if (origin && origin !== new URL(request.url).origin) {
-      return Response.json({
+    const requestUrl = new URL(request.url)
+    let originUrl: URL | undefined
+    try {
+      originUrl = origin ? new URL(origin) : undefined
+    }
+    catch {
+      originUrl = undefined
+    }
+    const originHostname = originUrl?.hostname.replace(/^\[|\]$/g, '')
+    const hostnameAllowed = originHostname !== undefined && (
+      originHostname === 'localhost'
+      || originHostname === bindingAddress
+      || (bindingAddress === '0.0.0.0' && isIP(originHostname) !== 0)
+    )
+    if (origin && (
+      !originUrl
+      || origin !== originUrl.origin
+      || originUrl.origin !== requestUrl.origin
+      || !hostnameAllowed
+    )) {
+      return withResponseHeaders(Response.json({
         jsonrpc: '2.0',
         id: null,
         error: { code: -32000, message: 'MCP requests must be same-origin' },
-      }, { status: 403 })
+      }, { status: 403 }))
     }
     const transport = new WebStandardStreamableHTTPServerTransport({
       enableJsonResponse: true,
@@ -379,6 +411,6 @@ export function createDiffMcpHandler(
     })
     const server = createServer(workspace, startRefresh)
     await server.connect(transport)
-    return transport.handleRequest(request)
+    return withResponseHeaders(await transport.handleRequest(request))
   }
 }
