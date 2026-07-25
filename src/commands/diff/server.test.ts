@@ -1,5 +1,6 @@
 import type { RunningDiffServer } from './server'
-import { mkdir, mkdtemp, rm, symlink, truncate, writeFile } from 'node:fs/promises'
+import type { ComparisonSnapshot, ComparisonWorkspace, WorkspaceState } from './types'
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -8,6 +9,35 @@ import { createComparisonWorkspace } from './workspace'
 
 const temporaryDirectories: string[] = []
 const servers: RunningDiffServer[] = []
+
+function createCancelableWorkspace(): ComparisonWorkspace {
+  let state: WorkspaceState = { phase: 'idle' }
+  const listeners = new Set<(nextState: WorkspaceState) => void>()
+  const publish = (nextState: WorkspaceState): void => {
+    state = nextState
+    for (const listener of listeners)
+      listener(state)
+  }
+
+  return {
+    state: () => state,
+    refresh() {
+      let cancel = (): void => {}
+      const result = new Promise<ComparisonSnapshot>(() => {
+        cancel = () => {
+          publish({ phase: 'canceled' })
+        }
+      })
+      publish({ phase: 'discovering' })
+      return { result, cancel }
+    },
+    snapshot: () => undefined,
+    observe(listener) {
+      listeners.add(listener)
+      return () => listeners.delete(listener)
+    },
+  }
+}
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => server.stop()))
@@ -178,19 +208,7 @@ describe('DiffHttpServer', () => {
   })
 
   test('tracks and cancels the initial refresh started by the HTTP server', async () => {
-    const root = await mkdtemp(path.join(tmpdir(), 'ycy-diff-http-cancel-'))
-    temporaryDirectories.push(root)
-    const baseline = path.join(root, 'baseline')
-    const target = path.join(root, 'target')
-    await Promise.all([mkdir(baseline), mkdir(target)])
-    const baselineLarge = path.join(baseline, 'large.bin')
-    const targetLarge = path.join(target, 'large.bin')
-    await Promise.all([writeFile(baselineLarge, ''), writeFile(targetLarge, '')])
-    await Promise.all([
-      truncate(baselineLarge, 100 * 1024 * 1024 * 1024),
-      truncate(targetLarge, 100 * 1024 * 1024 * 1024),
-    ])
-    const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
+    const workspace = createCancelableWorkspace()
     const server = startDiffHttpServer({ workspace, address: '127.0.0.1', port: 0, initialRefresh: true })
     servers.push(server)
 

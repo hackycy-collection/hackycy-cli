@@ -57,9 +57,11 @@ describe('ComparisonWorkspace', () => {
 
   test('compares symbolic links by their stored target without following them', async () => {
     const { baseline, target } = await makeComparisonDirectories()
+    const baselineLinkTarget = path.join('..', 'outside-one')
+    const targetLinkTarget = path.join('..', 'outside-two')
     await Promise.all([
-      symlink('../outside-one', path.join(baseline, 'changed-link')),
-      symlink('../outside-two', path.join(target, 'changed-link')),
+      symlink(baselineLinkTarget, path.join(baseline, 'changed-link')),
+      symlink(targetLinkTarget, path.join(target, 'changed-link')),
       symlink('missing-target', path.join(baseline, 'same-link')),
       symlink('missing-target', path.join(target, 'same-link')),
       symlink('loop-b', path.join(baseline, 'loop-a')),
@@ -75,7 +77,7 @@ describe('ComparisonWorkspace', () => {
     const snapshot = await workspace.refresh().result
 
     expect(snapshot.list({ includeUnchanged: true }).entries.map(entry => [entry.path, 'baseline' in entry ? entry.baseline : undefined, 'target' in entry ? entry.target : undefined, entry.status])).toEqual([
-      ['changed-link', { kind: 'symlink', linkTarget: '../outside-one' }, { kind: 'symlink', linkTarget: '../outside-two' }, 'modified'],
+      ['changed-link', { kind: 'symlink', linkTarget: baselineLinkTarget }, { kind: 'symlink', linkTarget: targetLinkTarget }, 'modified'],
       ['loop-a', { kind: 'symlink', linkTarget: 'loop-b' }, { kind: 'symlink', linkTarget: 'loop-b' }, 'unchanged'],
       ['loop-b', { kind: 'symlink', linkTarget: 'loop-a' }, { kind: 'symlink', linkTarget: 'loop-a' }, 'unchanged'],
       ['same-link', { kind: 'symlink', linkTarget: 'missing-target' }, { kind: 'symlink', linkTarget: 'missing-target' }, 'unchanged'],
@@ -606,7 +608,8 @@ describe('ComparisonWorkspace', () => {
 
   test('rejects a complete Text Difference above the output budget', async () => {
     const { baseline, target } = await makeComparisonDirectories()
-    await writeFile(path.join(target, 'large-change.txt'), `${'x'.repeat(800)}\n`.repeat(400))
+    const largeChange = `${'x'.repeat(300 * 1024)}\n`
+    await writeFile(path.join(target, 'large-change.txt'), largeChange)
 
     const workspace = await createComparisonWorkspace({ baselineDirectory: baseline, targetDirectory: target })
     const snapshot = await workspace.refresh().result
@@ -618,7 +621,7 @@ describe('ComparisonWorkspace', () => {
       path: 'large-change.txt',
       comparisonStatus: 'added',
       reason: 'output_too_large',
-      addedLines: 400,
+      addedLines: 1,
       deletedLines: 0,
       outputBytes: expect.any(Number),
     })

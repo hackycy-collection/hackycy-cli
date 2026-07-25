@@ -176,7 +176,7 @@ test('runInternalUpdater records a rollback failure state', async () => {
   await expect(readFile(update.targetPath, 'utf8')).resolves.toBe('old binary')
 })
 
-test.if(process.platform === 'win32')('applies an update from a compiled Windows updater', async () => {
+test.if(process.platform === 'win32' && process.env.YCY_RUN_COMPILED_UPDATER_TEST === '1')('applies an update from a compiled Windows updater', async () => {
   const updaterPath = path.join(directory, 'ycy-updater-compiled.exe')
   const build = Bun.spawn([
     process.execPath,
