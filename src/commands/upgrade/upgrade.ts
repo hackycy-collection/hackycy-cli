@@ -6,6 +6,7 @@ import { log, outro, spinner } from '@clack/prompts'
 import ansis from 'ansis'
 import { version as currentVersion } from '../../../package.json'
 import { printTitle } from '../../shared/utils'
+import { createUpdateTransaction, getInternalUpdateArgs, getUpdateStatePath, readUpdateState, writeUpdateState } from './updater'
 
 const REPO = 'hackycy/hackycy-cli'
 const API_URL = `https://api.github.com/repos/${REPO}/releases/latest`
@@ -114,72 +115,6 @@ function verifyBinaryExecutable(filePath: string, expectedVersion: string): void
   }
 }
 
-function finalizeBackup(backupPath: string | null): void {
-  if (backupPath && fs.existsSync(backupPath)) {
-    fs.unlinkSync(backupPath)
-  }
-}
-
-function restoreBackup(targetPath: string, backupPath: string | null): void {
-  if (!backupPath || !fs.existsSync(backupPath)) {
-    return
-  }
-
-  if (fs.existsSync(targetPath)) {
-    fs.unlinkSync(targetPath)
-  }
-
-  fs.renameSync(backupPath, targetPath)
-}
-
-async function replaceBinary(tempFile: string, targetPath: string): Promise<string | null> {
-  const backupPath = fs.existsSync(targetPath) ? `${targetPath}.backup` : null
-
-  try {
-    // Remove any existing backup
-    if (backupPath && fs.existsSync(backupPath)) {
-      fs.unlinkSync(backupPath)
-    }
-
-    // Set executable permission on Unix
-    if (process.platform !== 'win32') {
-      fs.chmodSync(tempFile, 0o755)
-    }
-
-    // Backup current binary
-    if (backupPath) {
-      fs.renameSync(targetPath, backupPath)
-    }
-
-    try {
-      // Move new binary into place
-      fs.renameSync(tempFile, targetPath)
-    }
-    catch (err: unknown) {
-      // Cross-device rename fallback
-      if ((err as NodeJS.ErrnoException).code === 'EXDEV') {
-        fs.copyFileSync(tempFile, targetPath)
-        fs.unlinkSync(tempFile)
-      }
-      else {
-        throw err
-      }
-    }
-
-    clearQuarantine(targetPath)
-    return backupPath
-  }
-  catch (err) {
-    // Restore backup if something went wrong
-    restoreBackup(targetPath, backupPath)
-    // Clean up temp file
-    if (fs.existsSync(tempFile)) {
-      fs.unlinkSync(tempFile)
-    }
-    throw err
-  }
-}
-
 export async function upgradeCli(): Promise<void> {
   printTitle()
 
@@ -279,46 +214,71 @@ export async function upgradeCli(): Promise<void> {
       return
     }
 
-    // Write to temp file
-    const tempFileName = process.platform === 'win32'
-      ? `ycy-update-${Date.now()}.exe`
-      : `ycy-update-${Date.now()}`
-    const tempFile = path.join(os.tmpdir(), tempFileName)
-    await Bun.write(tempFile, arrayBuffer)
+    const currentExePath = process.execPath
+    const transactionId = crypto.randomUUID()
+    const targetDir = path.dirname(currentExePath)
+    const targetName = path.basename(currentExePath)
+    const stagedPath = path.join(targetDir, `${targetName}.new.${transactionId}`)
+    const backupPath = path.join(targetDir, `${targetName}.backup.${transactionId}`)
+    const updaterPath = path.join(os.tmpdir(), `ycy-updater-${transactionId}${path.extname(currentExePath)}`)
+    const statePath = getUpdateStatePath(currentExePath)
+
+    if (readUpdateState(statePath)?.status === 'pending') {
+      throw new Error('An update is already in progress.')
+    }
+
+    await Bun.write(stagedPath, arrayBuffer)
 
     if (process.platform !== 'win32') {
-      fs.chmodSync(tempFile, 0o755)
+      fs.chmodSync(stagedPath, 0o755)
     }
-    clearQuarantine(tempFile)
-    verifyBinaryExecutable(tempFile, latestVersion)
+    clearQuarantine(stagedPath)
+    verifyBinaryExecutable(stagedPath, latestVersion)
 
     downloadSpin.stop('Download complete!')
 
-    // 4. Replace current binary
-    const replaceSpin = spinner()
-    replaceSpin.start('Installing update...')
-
-    const currentExePath = process.execPath
-    const backupPath = await replaceBinary(tempFile, currentExePath)
-
     try {
-      const installedHash = await sha256Hex(await Bun.file(currentExePath).arrayBuffer())
-      if (installedHash !== expectedHash) {
-        throw new Error('Installed binary checksum verification failed.')
+      fs.copyFileSync(currentExePath, updaterPath, fs.constants.COPYFILE_EXCL)
+      if (process.platform !== 'win32') {
+        fs.chmodSync(updaterPath, 0o755)
       }
+      clearQuarantine(updaterPath)
 
-      verifyBinaryExecutable(currentExePath, latestVersion)
-      finalizeBackup(backupPath)
+      const transaction = createUpdateTransaction({
+        transactionId,
+        parentPid: process.pid,
+        targetPath: currentExePath,
+        stagedPath,
+        backupPath,
+        expectedHash,
+        expectedVersion: latestVersion,
+        statePath,
+        updaterPath,
+      })
+      writeUpdateState(transaction)
+
+      const updater = Bun.spawn([updaterPath, ...getInternalUpdateArgs(transaction)], {
+        stdin: 'ignore',
+        stdout: 'ignore',
+        stderr: 'ignore',
+        windowsHide: true,
+      })
+      updater.unref()
     }
     catch (error) {
-      restoreBackup(currentExePath, backupPath)
+      if (fs.existsSync(stagedPath)) {
+        fs.unlinkSync(stagedPath)
+      }
+      if (fs.existsSync(updaterPath)) {
+        fs.unlinkSync(updaterPath)
+      }
+      if (fs.existsSync(statePath)) {
+        fs.unlinkSync(statePath)
+      }
       throw error
     }
 
-    replaceSpin.stop('Installation complete!')
-
-    log.success(`Updated ycy to ${ansis.green(`v${latestVersion}`)}`)
-    outro('Restart your terminal to use the new version.')
+    outro(`Update to ${ansis.green(`v${latestVersion}`)} has been scheduled and will finish after ycy exits.`)
   }
   catch (error) {
     log.error(`Update failed: ${error instanceof Error ? error.message : String(error)}`)

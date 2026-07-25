@@ -9,6 +9,7 @@ import { register as registerRm } from './commands/rm'
 import { register as registerRun } from './commands/run'
 import { register as registerServe } from './commands/serve'
 import { register as registerUpgrade } from './commands/upgrade'
+import { consumeUpdateState, formatUpdateState, INTERNAL_UPDATE_COMMAND, INTERNAL_UPDATE_VERIFY_ENV, runInternalUpdater } from './commands/upgrade/updater'
 import { register as registerZip } from './commands/zip'
 
 function errorHandler(error: Error): void {
@@ -25,23 +26,48 @@ function errorHandler(error: Error): void {
 process.on('uncaughtException', errorHandler)
 process.on('unhandledRejection', errorHandler)
 
-const program = new Command()
-  .name('ycy')
-  .version(version)
+const internalUpdateIndex = process.argv.indexOf(INTERNAL_UPDATE_COMMAND)
 
-registerExport(program)
-registerDiff(program)
-registerConfig(program)
-registerGit(program)
-registerRm(program)
-registerServe(program)
-registerZip(program)
-registerRun(program)
-registerUpgrade(program)
+if (internalUpdateIndex !== -1) {
+  try {
+    await runInternalUpdater(process.argv.slice(internalUpdateIndex + 1))
+  }
+  catch {
+    process.exitCode = 1
+  }
+}
+else {
+  const updateState = process.env[INTERNAL_UPDATE_VERIFY_ENV] === '1'
+    ? null
+    : consumeUpdateState(process.execPath)
+  if (updateState?.status === 'pending') {
+    console.error(formatUpdateState(updateState))
+    process.exitCode = 1
+  }
+  else {
+    if (updateState) {
+      console.log(formatUpdateState(updateState))
+    }
 
-program.on('command:*', (operands) => {
-  console.error(`error: unknown command '${operands[0]}'`)
-  process.exit(1)
-})
+    const program = new Command()
+      .name('ycy')
+      .version(version)
 
-program.parse()
+    registerExport(program)
+    registerDiff(program)
+    registerConfig(program)
+    registerGit(program)
+    registerRm(program)
+    registerServe(program)
+    registerZip(program)
+    registerRun(program)
+    registerUpgrade(program)
+
+    program.on('command:*', (operands) => {
+      console.error(`error: unknown command '${operands[0]}'`)
+      process.exit(1)
+    })
+
+    program.parse()
+  }
+}

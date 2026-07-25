@@ -18,6 +18,8 @@ curl -fsSL https://raw.githubusercontent.com/hackycy/hackycy-cli/main/scripts/in
 powershell -c "irm https://raw.githubusercontent.com/hackycy/hackycy-cli/main/scripts/install.ps1 | iex"
 ```
 
+> Windows users upgrading from v0.0.46 or earlier must run this installer once before using `ycy upgrade`.
+
 ## 运行
 
 ``` bash
