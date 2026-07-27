@@ -35,7 +35,7 @@ Commands:
   config                        Manage ycy configuration
   git                          Git utilities
   rm [options] [paths...]      Remove files/dirs, or smartly clean project artifacts when no path given
-  serve [options] <directory>  Serve static files from a directory
+  serve [options] [directory]  Serve static files from a directory (defaults to current directory)
   diff [options] <baseline-directory> <target-directory>
                                Compare two directories in a browser
   zip [options] [directory]    Zip a directory into a zip file
