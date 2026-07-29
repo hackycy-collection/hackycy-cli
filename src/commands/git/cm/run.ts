@@ -40,14 +40,13 @@ function formatTokenCount(value: number | undefined): string {
 
 function formatTokenUsage(usage: ChatCompletionTokenUsage | undefined): string {
   if (!usage)
-    return 'Token usage: unavailable from provider'
+    return 'Tokens: unavailable'
 
   return [
-    'Token usage:',
-    `prompt ${formatTokenCount(usage.promptTokens)}`,
-    `completion ${formatTokenCount(usage.completionTokens)}`,
-    `total ${formatTokenCount(usage.totalTokens)}`,
-  ].join(' ')
+    `Tokens: ${formatTokenCount(usage.promptTokens)} prompt`,
+    `${formatTokenCount(usage.completionTokens)} completion`,
+    `${formatTokenCount(usage.totalTokens)} total`,
+  ].join(' / ')
 }
 
 function buildMessages(
@@ -107,26 +106,33 @@ async function generateCommitMessage(
   }
 }
 
-function printGeneratedMessage(
+export function formatGeneratedMessage(
   message: string,
-  summary: ChangeSummary,
   profile: ResolvedCmProfile,
   tokenUsage: ChatCompletionTokenUsage | undefined,
-): void {
+  truncated: boolean,
+): string {
   const lines = [
     ansis.green(message),
     '',
-    ansis.bold('Changed files:'),
-    ...summary.files.map(file => ansis.dim(file.status)),
-    '',
-    ansis.dim(`CM profile: ${profile.name} (${profile.model})`),
+    ansis.dim(`Profile: ${profile.name} (${profile.model})`),
     ansis.dim(formatTokenUsage(tokenUsage)),
   ]
 
-  if (summary.truncated)
-    lines.push(ansis.yellow('Some diffs were omitted or truncated to save tokens.'))
+  if (truncated)
+    lines.push(ansis.yellow('Diff context was truncated to fit the token budget.'))
 
-  p.note(lines.join('\n'), 'Generated commit message')
+  return lines.join('\n')
+}
+
+function printGeneratedMessage(
+  message: string,
+  profile: ResolvedCmProfile,
+  tokenUsage: ChatCompletionTokenUsage | undefined,
+  truncated: boolean,
+): void {
+  const output = formatGeneratedMessage(message, profile, tokenUsage, truncated)
+  p.note(output, 'Commit message', { format: line => line })
 }
 
 async function promptForStageFiles(summary: ChangeSummary): Promise<void> {
@@ -244,7 +250,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
   }
 
   const spin = interactive ? p.spinner() : undefined
-  spin?.start('Collecting git changes...')
+  spin?.start(stagedOnly ? 'Collecting staged changes...' : 'Collecting git changes...')
 
   let summary: ChangeSummary
   try {
@@ -292,7 +298,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
   }
 
   spin?.clear()
-  printGeneratedMessage(generated.message, summary, profile, generated.tokenUsage)
+  printGeneratedMessage(generated.message, profile, generated.tokenUsage, summary.truncated)
 
   if (!shouldCreateCommit)
     return
@@ -304,7 +310,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
   }
 
   const confirmed = await p.confirm({
-    message: 'Create commit with this message?',
+    message: 'Create this commit?',
   })
 
   if (p.isCancel(confirmed) || !confirmed) {
@@ -325,7 +331,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
   }
 
   if (!shouldPush) {
-    p.outro(ansis.green('Done'))
+    p.outro(ansis.green('Commit created'))
     return
   }
 
@@ -334,7 +340,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
   try {
     await pushChanges(summary.repoRoot, pushRemote)
     pushSpin.clear()
-    p.outro(ansis.green('Done'))
+    p.outro(ansis.green('Commit created and pushed'))
   }
   catch (err) {
     pushSpin.clear()
