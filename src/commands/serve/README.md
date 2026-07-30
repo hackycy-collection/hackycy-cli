@@ -23,11 +23,13 @@ CLI registration (index.ts)
      -> ServeWorkspace (workspace.ts)
      -> ServeHttpServer (server.ts)
         -> JSON and file HTTP adapter
+        -> ThumbnailService and two persistent conversion workers
         -> embedded React application (web/)
 ```
 
 - `workspace.ts` owns root confinement, symlink policy, metadata, text decoding, and atomic upload naming. Callers pass only POSIX relative paths.
 - `server.ts` maps workspace results to HTTP, validates methods and mutation origins, implements cache and Range semantics, and serves the embedded HTML bundle.
+- `thumbnail-service.ts` owns input limits, request coalescing, the bounded worker queue, and the session-only LRU. `thumbnail-worker.ts` performs WASM decoding and WebP conversion off the HTTP thread.
 - `web/` owns History navigation, sorting, virtualization, preview state, theme, and the three-worker upload queue. It never constructs absolute filesystem paths.
 - Shared Radix/Tailwind primitives live under `src/shared/web` and are consumed by both `serve` and `diff`.
 
@@ -41,16 +43,20 @@ CLI registration (index.ts)
 | `POST /api/upload?path=` | One multipart file per request when `--manage` is enabled. |
 | `POST /api/operations` | Validated create-directory, rename, copy, move, and permanent-delete commands in management mode. |
 | `GET\|HEAD /files/*` | Original file bytes; `?download=1` forces attachment. |
+| `GET\|HEAD /thumbnails/*` | 160×160 WebP thumbnail for JPEG, PNG, WebP, AVIF, or GIF input. |
 
 The former direct file URL shape is intentionally not retained. A served path such as `docs/readme.txt` is available at `/files/docs/readme.txt`; `/browse/docs` is the browser route.
 
-Errors use `{ version: 1, error: { code, message } }`. Directory and text responses are not cacheable. Original files support ETag, Last-Modified, HEAD, and one byte range. Only `/files/*` enables wildcard CORS.
+Errors use `{ version: 1, error: { code, message } }`. Directory and text responses are not cacheable. Original files support ETag, Last-Modified, HEAD, and one byte range. Thumbnail responses support ETag, Last-Modified, and conditional 304 responses. Only `/files/*` enables wildcard CORS.
 
 ## Filesystem And Management Invariants
 
 - The root is resolved once at startup. Absolute paths, backslashes, dot segments, malformed URL encoding, and paths whose real target escapes the root are rejected.
 - Internal symlinks may be followed. Escaping, unreadable, or unsupported entries are listed as unavailable without exposing their targets.
 - Text preview checks the 2 MiB size limit before reading and treats invalid supported encodings as binary.
+- Thumbnail input is capped at 64 MiB and 50 million pixels. SVG is never sent to the raster converter. Failed or oversized thumbnails remain file icons in the main browser and never trigger an original-image fallback.
+- Thumbnail conversion uses two persistent workers, at most 128 queued tasks, a five-second task timeout, and replacement of a timed-out worker. Concurrent requests for the same file revision share one conversion.
+- Thumbnail output stays in a process-local LRU keyed by path, size, and modification time. The cache holds at most 1000 entries or 32 MiB, writes nothing to the served directory, and is discarded when the server stops.
 - Each upload is capped at 1 GiB, written to a temporary file in the destination directory, then published atomically with a hard link.
 - Existing names are never overwritten. Collisions receive `name (1).ext` through `name (9999).ext`.
 - The served root cannot be renamed, moved, copied, or deleted. Directories cannot be copied or moved into themselves.
@@ -61,7 +67,8 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 ## Web Application Invariants
 
 - Directory URLs use `/browse/<encoded-path>` and browser History; preview selection uses the `preview` query parameter.
-- List and grid views virtualize rows with `@tanstack/react-virtual`. Directories remain ahead of files for every sort. Search filters only the loaded directory.
+- List and grid views virtualize fixed-size rows with `@tanstack/react-virtual`, rendering four extra list rows or one extra grid row around the viewport. Grid columns are measured before entries mount and only change at layout breakpoints. Directories remain ahead of files for every sort. Search filters only the loaded directory.
+- Main-list image elements load only `thumbnailUrl`, with lazy asynchronous low-priority decoding. Original `fileUrl` bytes are reserved for preview, opening, and download.
 - Selection follows desktop file-manager conventions: click selects, Ctrl/Cmd toggles, Shift selects a range, and double-click or Enter opens an entry.
 - Cut, copy, and paste use an in-memory browser clipboard. It survives directory navigation but not a page reload and never reads or writes the system clipboard.
 - Images, audio, video, and PDF use browser-native presentation. Text is rendered as escaped content; HTML and XML are never executed in the preview.
@@ -72,6 +79,7 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 
 ```bash
 bun test src/commands/serve
+bun run test:serve:performance
 bun test src/commands/diff
 bun run typecheck
 bun run lint --no-cache

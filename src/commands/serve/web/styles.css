@@ -548,6 +548,11 @@ button.details-heading:hover {
   user-select: none;
 }
 
+.virtual-list-row,
+.virtual-grid-row {
+  contain: layout paint style;
+}
+
 .details-row:hover,
 .grid-entry:hover {
   background: var(--muted);

@@ -24,6 +24,8 @@ const IMAGE_MIME_TYPES = new Map([
   ['.webp', 'image/webp'],
 ])
 
+const THUMBNAIL_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.webp'])
+
 export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
 export const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
 
@@ -241,6 +243,9 @@ async function browserEntry(root: string, directoryPath: string, name: string): 
   const extensionMimeType = IMAGE_MIME_TYPES.get(path.extname(name).toLowerCase())
   const mimeType = extensionMimeType ?? Bun.file(resolved).type ?? 'application/octet-stream'
   const urlPath = `/files/${encodedPath(relativePath)}`
+  const thumbnailUrl = THUMBNAIL_EXTENSIONS.has(path.extname(name).toLowerCase())
+    ? `/thumbnails/${encodedPath(relativePath)}`
+    : undefined
   return {
     name,
     path: relativePath,
@@ -251,6 +256,7 @@ async function browserEntry(root: string, directoryPath: string, name: string): 
     mimeType,
     previewKind: previewKind(mimeType),
     fileUrl: urlPath,
+    thumbnailUrl,
     downloadUrl: `${urlPath}?download=1`,
   }
 }

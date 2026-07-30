@@ -12,6 +12,7 @@ export interface DirectoryEntry {
   previewKind: PreviewKind
   browseUrl?: string
   fileUrl?: string
+  thumbnailUrl?: string
   downloadUrl?: string
 }
 

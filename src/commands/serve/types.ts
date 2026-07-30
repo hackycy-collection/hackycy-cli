@@ -19,6 +19,7 @@ export interface ServeDirectoryEntry {
   previewKind: ServePreviewKind
   browseUrl?: string
   fileUrl?: string
+  thumbnailUrl?: string
   downloadUrl?: string
 }
 

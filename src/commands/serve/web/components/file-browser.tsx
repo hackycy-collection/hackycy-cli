@@ -18,7 +18,7 @@ import {
   Scissors,
   Trash2,
 } from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+import { useLayoutEffect, useRef, useState } from 'react'
 import { ScrollArea } from '../../../../shared/web/components/ui/scroll-area'
 import { cn } from '../../../../shared/web/lib/utils'
 import { EntryGlyph } from './entry-glyph'
@@ -34,16 +34,18 @@ export function formatFileSize(bytes: number | undefined): string {
   return `${value.toFixed(unit === 0 ? 0 : value >= 10 ? 0 : 1)} ${units[unit]}`
 }
 
+const fileDateFormatter = new Intl.DateTimeFormat('en-US', {
+  year: 'numeric',
+  month: 'short',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+})
+
 export function formatDate(value: string | undefined): string {
   if (!value)
     return '-'
-  return new Intl.DateTimeFormat('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: '2-digit',
-    hour: '2-digit',
-    minute: '2-digit',
-  }).format(new Date(value))
+  return fileDateFormatter.format(new Date(value))
 }
 
 function formatFileType(entry: DirectoryEntry): string {
@@ -65,10 +67,20 @@ function formatFileType(entry: DirectoryEntry): string {
 }
 
 function EntryVisual({ entry, large = false }: { entry: DirectoryEntry, large?: boolean }): React.JSX.Element {
-  if (entry.previewKind === 'image' && entry.fileUrl) {
+  const [thumbnailFailed, setThumbnailFailed] = useState(false)
+  if (entry.previewKind === 'image' && entry.thumbnailUrl && !thumbnailFailed) {
     return (
       <span className={cn('image-thumbnail overflow-hidden border border-border bg-muted', large ? 'h-[72px] w-full rounded-md' : 'size-7 shrink-0 rounded')}>
-        <img src={entry.fileUrl} alt="" draggable={false} loading="lazy" decoding="async" className="h-full w-full object-cover" />
+        <img
+          src={entry.thumbnailUrl}
+          alt=""
+          draggable={false}
+          loading="lazy"
+          decoding="async"
+          fetchPriority="low"
+          className="h-full w-full object-cover"
+          onError={() => setThumbnailFailed(true)}
+        />
       </span>
     )
   }
@@ -158,7 +170,7 @@ function ListView(props: FileBrowserProps): React.JSX.Element {
     count: props.entries.length + offset,
     getScrollElement: () => viewportRef.current,
     estimateSize: () => rowHeight,
-    overscan: 14,
+    overscan: 4,
   })
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -174,7 +186,7 @@ function ListView(props: FileBrowserProps): React.JSX.Element {
             const creating = props.creatingFolder && row.index === 0
             const entry = creating ? undefined : props.entries[row.index - offset]
             return (
-              <div key={creating ? 'new-folder' : entry!.path} className="absolute left-0 w-full" style={{ height: `${row.size}px`, transform: `translateY(${row.start}px)` }}>
+              <div key={creating ? 'new-folder' : entry!.path} className="virtual-list-row absolute left-0 w-full" style={{ height: `${row.size}px`, transform: `translateY(${row.start}px)` }}>
                 {creating
                   ? <NewFolderRow large={false} busy={props.editingBusy} error={props.editingError} onCommit={props.onCreateFolder} onCancel={props.onCancelEdit} />
                   : <ListEntry entry={entry!} props={props} />}
@@ -218,19 +230,23 @@ function ListEntry({ entry, props }: { entry: DirectoryEntry, props: FileBrowser
 
 function GridView(props: FileBrowserProps): React.JSX.Element {
   const viewportRef = useRef<HTMLDivElement>(null)
-  const [width, setWidth] = useState(640)
-  useEffect(() => {
+  const [columns, setColumns] = useState(0)
+  useLayoutEffect(() => {
     const element = viewportRef.current
     if (!element)
       return
-    const observer = new ResizeObserver(([entry]) => setWidth(entry?.contentRect.width ?? 640))
+    const updateColumns = (width: number): void => {
+      const next = width >= 1200 ? 7 : width >= 980 ? 6 : width >= 780 ? 5 : width >= 580 ? 4 : width >= 390 ? 3 : 2
+      setColumns(current => current === next ? current : next)
+    }
+    updateColumns(element.clientWidth)
+    const observer = new ResizeObserver(([entry]) => updateColumns(entry?.contentRect.width ?? element.clientWidth))
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
-  const columns = width >= 1200 ? 7 : width >= 980 ? 6 : width >= 780 ? 5 : width >= 580 ? 4 : width >= 390 ? 3 : 2
   const itemCount = props.entries.length + (props.creatingFolder ? 1 : 0)
-  const rowCount = Math.ceil(itemCount / columns)
-  const virtualizer = useVirtualizer({ count: rowCount, getScrollElement: () => viewportRef.current, estimateSize: () => 136, overscan: 5 })
+  const rowCount = columns === 0 ? 0 : Math.ceil(itemCount / columns)
+  const virtualizer = useVirtualizer({ count: rowCount, getScrollElement: () => viewportRef.current, estimateSize: () => 136, overscan: 1 })
   return (
     <ScrollArea className="h-full" viewportRef={viewportRef}>
       <div className="relative w-full px-3" style={{ height: `${virtualizer.getTotalSize() + 16}px` }}>
@@ -238,7 +254,7 @@ function GridView(props: FileBrowserProps): React.JSX.Element {
           const start = row.index * columns
           const rowItems = Array.from({ length: columns }, (_, offset) => start + offset).filter(index => index < itemCount)
           return (
-            <div key={row.key} className="absolute left-3 right-3 grid gap-1" style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, transform: `translateY(${row.start + 8}px)` }}>
+            <div key={row.key} className="virtual-grid-row absolute left-3 right-3 grid gap-1" style={{ height: `${row.size}px`, gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))`, transform: `translateY(${row.start + 8}px)` }}>
               {rowItems.map((index) => {
                 const creating = props.creatingFolder && index === 0
                 const entry = creating ? undefined : props.entries[index - (props.creatingFolder ? 1 : 0)]

@@ -1,25 +1,53 @@
 import type { RunningServeServer } from './server'
-import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import type { ThumbnailWorkerRequest } from './thumbnail-worker'
+import { Buffer } from 'node:buffer'
+import { mkdtemp, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { startServeHttpServer } from './server'
+import { THUMBNAIL_MAX_INPUT_BYTES, ThumbnailService } from './thumbnail-service'
 import { createServeWorkspace, MAX_UPLOAD_BYTES } from './workspace'
 
 const temporaryDirectories: string[] = []
 const servers: RunningServeServer[] = []
+
+function onePixelPng(): Buffer {
+  return Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+}
+
+function fakeThumbnailWorker(handle: (worker: Worker, request: ThumbnailWorkerRequest) => void): Worker {
+  const worker = {
+    onerror: null,
+    onmessage: null,
+    postMessage(request: ThumbnailWorkerRequest) {
+      handle(worker as unknown as Worker, request)
+    },
+    terminate() {},
+  }
+  return worker as unknown as Worker
+}
 
 afterEach(async () => {
   await Promise.all(servers.splice(0).map(server => server.stop()))
   await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
 })
 
-async function startFixtureServer(managementEnabled = false): Promise<{ server: RunningServeServer, root: string }> {
+async function startFixtureServer(
+  managementEnabled = false,
+  createThumbnailService?: (workspace: Awaited<ReturnType<typeof createServeWorkspace>>) => ThumbnailService,
+): Promise<{ server: RunningServeServer, root: string }> {
   const root = await mkdtemp(path.join(tmpdir(), 'ycy-serve-http-'))
   temporaryDirectories.push(root)
   await writeFile(path.join(root, 'hello.txt'), 'hello world')
   const workspace = await createServeWorkspace(root)
-  const server = startServeHttpServer({ workspace, address: '127.0.0.1', port: 0, managementEnabled })
+  const server = startServeHttpServer({
+    workspace,
+    address: '127.0.0.1',
+    port: 0,
+    managementEnabled,
+    thumbnailService: createThumbnailService?.(workspace),
+  })
   servers.push(server)
   return { server, root }
 }
@@ -43,6 +71,133 @@ describe('ServeHttpServer', () => {
     expect(response.headers.get('x-content-type-options')).toBe('nosniff')
     expect(response.headers.get('referrer-policy')).toBe('no-referrer')
     expect(response.headers.get('access-control-allow-origin')).toBeNull()
+  })
+
+  test('lists dedicated thumbnail URLs for supported raster formats only', async () => {
+    const { server, root } = await startFixtureServer()
+    await Promise.all([
+      ...['avif', 'gif', 'jpeg', 'jpg', 'png', 'webp'].map(extension => writeFile(path.join(root, `photo.${extension}`), 'format fixture')),
+      writeFile(path.join(root, 'vector.svg'), '<svg xmlns="http://www.w3.org/2000/svg"/>'),
+    ])
+
+    const response = await fetch(new URL('/api/directory?path=', server.url))
+    const listing = await response.json() as { entries: Array<{ name: string, fileUrl?: string, thumbnailUrl?: string }> }
+
+    for (const extension of ['avif', 'gif', 'jpeg', 'jpg', 'png', 'webp']) {
+      expect(listing.entries.find(entry => entry.name === `photo.${extension}`)).toEqual(expect.objectContaining({
+        fileUrl: `/files/photo.${extension}`,
+        thumbnailUrl: `/thumbnails/photo.${extension}`,
+      }))
+    }
+    expect(listing.entries.find(entry => entry.name === 'vector.svg')?.thumbnailUrl).toBeUndefined()
+  })
+
+  test('serves raster thumbnails without routing SVG through the converter', async () => {
+    const { server, root } = await startFixtureServer()
+    await Promise.all([
+      writeFile(path.join(root, 'photo.png'), Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')),
+      writeFile(path.join(root, 'vector.svg'), '<svg xmlns="http://www.w3.org/2000/svg" width="2" height="2"/>'),
+    ])
+
+    const thumbnail = await fetch(new URL('/thumbnails/photo.png', server.url))
+    const head = await fetch(new URL('/thumbnails/photo.png', server.url), { method: 'HEAD' })
+    const svg = await fetch(new URL('/thumbnails/vector.svg', server.url))
+
+    expect(thumbnail.status).toBe(200)
+    expect(thumbnail.headers.get('content-type')).toBe('image/webp')
+    expect(Buffer.from(await thumbnail.arrayBuffer()).subarray(0, 4).toString('ascii')).toBe('RIFF')
+    expect(head.status).toBe(200)
+    expect(head.headers.get('content-length')).toBe(thumbnail.headers.get('content-length'))
+    expect(await head.text()).toBe('')
+    expect(svg.status).toBe(404)
+  })
+
+  test('deduplicates thumbnail requests and invalidates cached output when the file changes', async () => {
+    const { server, root } = await startFixtureServer()
+    const firstPng = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+    await writeFile(path.join(root, 'photo.png'), firstPng)
+
+    const responses = await Promise.all(Array.from({ length: 4 }, () => fetch(new URL('/thumbnails/photo.png', server.url))))
+    const initialEtag = responses[0]!.headers.get('etag')!
+    const cached = await fetch(new URL('/thumbnails/photo.png', server.url), { headers: { 'If-None-Match': initialEtag } })
+    await Bun.sleep(10)
+    await writeFile(path.join(root, 'photo.png'), Buffer.concat([firstPng, Buffer.from([0])]))
+    const changed = await fetch(new URL('/thumbnails/photo.png', server.url))
+
+    expect(responses.every(response => response.status === 200)).toBe(true)
+    expect(new Set(responses.map(response => response.headers.get('etag')))).toEqual(new Set([initialEtag]))
+    expect(cached.status).toBe(304)
+    expect(changed.status).toBe(200)
+    expect(changed.headers.get('etag')).not.toBe(initialEtag)
+  })
+
+  test('rejects unsafe or unsupported thumbnail inputs before conversion', async () => {
+    const { server, root } = await startFixtureServer()
+    const oversizedPixels = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
+    oversizedPixels.writeUInt32BE(10_000, 16)
+    oversizedPixels.writeUInt32BE(5_001, 20)
+    await Promise.all([
+      writeFile(path.join(root, 'broken.jpg'), 'not an image'),
+      writeFile(path.join(root, 'notes.txt'), 'plain text'),
+      writeFile(path.join(root, 'large.jpg'), ''),
+      writeFile(path.join(root, 'too-many-pixels.png'), oversizedPixels),
+    ])
+    await truncate(path.join(root, 'large.jpg'), THUMBNAIL_MAX_INPUT_BYTES + 1)
+
+    const broken = await fetch(new URL('/thumbnails/broken.jpg', server.url))
+    const text = await fetch(new URL('/thumbnails/notes.txt', server.url))
+    const large = await fetch(new URL('/thumbnails/large.jpg', server.url))
+    const tooManyPixels = await fetch(new URL('/thumbnails/too-many-pixels.png', server.url))
+    const escaping = await fetch(new URL('/thumbnails/%2e%2e%2foutside.jpg', server.url))
+
+    expect(broken.status).toBe(422)
+    expect(text.status).toBe(404)
+    expect(large.status).toBe(413)
+    expect(tooManyPixels.status).toBe(413)
+    expect(escaping.status).toBe(403)
+  })
+
+  test('times out a stalled thumbnail worker and recovers with its replacement', async () => {
+    let workerNumber = 0
+    const { server, root } = await startFixtureServer(false, workspace => new ThumbnailService(workspace, {
+      workerCount: 1,
+      timeoutMs: 10,
+      createWorker: () => {
+        const stalls = workerNumber++ === 0
+        return fakeThumbnailWorker((worker, request) => {
+          if (!stalls) {
+            queueMicrotask(() => worker.onmessage?.({
+              data: { id: request.id, ok: true, bytes: new Uint8Array([82, 73, 70, 70]).buffer },
+            } as MessageEvent))
+          }
+        })
+      },
+    }))
+    await writeFile(path.join(root, 'photo.png'), onePixelPng())
+
+    const timedOut = await fetch(new URL('/thumbnails/photo.png', server.url))
+    const recovered = await fetch(new URL('/thumbnails/photo.png', server.url))
+
+    expect(timedOut.status).toBe(504)
+    expect(recovered.status).toBe(200)
+    expect(workerNumber).toBe(2)
+  })
+
+  test('rejects thumbnail work beyond the bounded queue', async () => {
+    const { server, root } = await startFixtureServer(false, workspace => new ThumbnailService(workspace, {
+      workerCount: 1,
+      maxQueued: 2,
+      timeoutMs: 10,
+      createWorker: () => fakeThumbnailWorker(() => {}),
+    }))
+    await Promise.all(Array.from({ length: 4 }, (_, index) => writeFile(path.join(root, `photo-${index}.png`), onePixelPng())))
+
+    const responses = await Promise.all(Array.from(
+      { length: 4 },
+      (_, index) => fetch(new URL(`/thumbnails/photo-${index}.png`, server.url)),
+    ))
+
+    expect(responses.map(response => response.status).sort()).toEqual([503, 504, 504, 504])
   })
 
   test('serves original files under /files with HEAD, download, cache, and CORS semantics', async () => {

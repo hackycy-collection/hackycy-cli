@@ -24,9 +24,13 @@ function parseArguments(): BuildArguments {
 
 const options = parseArguments()
 const result = await Bun.build({
-  entrypoints: [path.resolve('src/cli.ts')],
+  entrypoints: [
+    path.resolve('src/cli.ts'),
+    path.resolve('src/commands/serve/thumbnail-worker.ts'),
+  ],
   minify: true,
   plugins: [tailwind],
+  root: path.resolve('.'),
   sourcemap: 'external',
   target: 'bun',
   compile: {

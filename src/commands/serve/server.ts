@@ -1,6 +1,7 @@
 import type { ServeErrorCode, ServeWorkspace } from './types'
 import { isIP } from 'node:net'
 import { z } from 'zod'
+import { ThumbnailError, ThumbnailService } from './thumbnail-service'
 import { ServeWorkspaceError } from './types'
 import serveWebApp from './web/index.html'
 import { MAX_UPLOAD_BYTES } from './workspace'
@@ -101,8 +102,8 @@ function encodedPath(relativePath: string): string {
   return relativePath.split('/').filter(Boolean).map(encodeURIComponent).join('/')
 }
 
-function requestFilePath(pathname: string): string {
-  const encoded = pathname === '/files' ? '' : pathname.slice('/files/'.length)
+function requestResourcePath(pathname: string, prefix: string): string {
+  const encoded = pathname === prefix ? '' : pathname.slice(prefix.length + 1)
   try {
     return encoded.split('/').filter(Boolean).map(decodeURIComponent).join('/')
   }
@@ -197,7 +198,7 @@ async function serveOriginalFile(request: Request, workspace: ServeWorkspace): P
   const url = new URL(request.url)
   let relativePath: string
   try {
-    relativePath = requestFilePath(url.pathname)
+    relativePath = requestResourcePath(url.pathname, '/files')
   }
   catch (cause) {
     return workspaceError(cause)
@@ -263,13 +264,51 @@ async function serveOriginalFile(request: Request, workspace: ServeWorkspace): P
   }
 }
 
+async function serveThumbnail(request: Request, thumbnails: ThumbnailService): Promise<Response> {
+  if (!['GET', 'HEAD'].includes(request.method))
+    return error('METHOD_NOT_ALLOWED', 'Use GET or HEAD', 405)
+
+  let relativePath: string
+  try {
+    relativePath = requestResourcePath(new URL(request.url).pathname, '/thumbnails')
+  }
+  catch (cause) {
+    return workspaceError(cause)
+  }
+
+  try {
+    const thumbnail = await thumbnails.get(relativePath)
+    const headers = new Headers({
+      'Cache-Control': 'no-cache',
+      'Content-Length': String(thumbnail.bytes.byteLength),
+      'Content-Type': 'image/webp',
+      'ETag': thumbnail.etag,
+      'Last-Modified': thumbnail.modifiedAt.toUTCString(),
+      'Referrer-Policy': 'no-referrer',
+      'X-Content-Type-Options': 'nosniff',
+    })
+    if (isNotModified(request, thumbnail.etag, thumbnail.modifiedAt)) {
+      headers.delete('Content-Length')
+      return new Response(null, { status: 304, headers })
+    }
+    return new Response(request.method === 'HEAD' ? null : thumbnail.bytes, { headers })
+  }
+  catch (cause) {
+    if (cause instanceof ThumbnailError)
+      return error('THUMBNAIL_ERROR', cause.message, cause.status)
+    return workspaceError(cause)
+  }
+}
+
 export function startServeHttpServer(options: {
   workspace: ServeWorkspace
   address: string
   port: number
   managementEnabled: boolean
+  thumbnailService?: ThumbnailService
 }): RunningServeServer {
   configureWebBundleHeaders(serveWebApp)
+  const thumbnails = options.thumbnailService ?? new ThumbnailService(options.workspace)
   // Bun accepts an HTMLBundle for a method route, though its ambient type only lists it for whole-route values.
   const appRoute = {
     GET: serveWebApp as unknown as Response,
@@ -384,6 +423,8 @@ export function startServeHttpServer(options: {
       }
       if (url.pathname === '/files' || url.pathname.startsWith('/files/'))
         return serveOriginalFile(request, options.workspace)
+      if (url.pathname.startsWith('/thumbnails/'))
+        return serveThumbnail(request, thumbnails)
       return error('NOT_FOUND', 'Route not found', 404)
     },
   })
@@ -392,6 +433,7 @@ export function startServeHttpServer(options: {
     url: new URL(server.url),
     finished,
     async stop() {
+      thumbnails.close()
       await server.stop(true)
       finish?.()
     },
