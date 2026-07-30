@@ -1,3 +1,4 @@
+import type { Layout, LayoutChangedMeta } from 'react-resizable-panels'
 import type { DirectoryEntry, DirectoryListing, OperationCommand, OperationResult } from './api'
 import type { ExplorerClipboard, ExplorerSelection, NavigationHistory } from './explorer-state'
 import type { ActivityTask, SortDirection, SortKey, ViewMode } from './types'
@@ -30,7 +31,8 @@ import {
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Group, Panel, Separator } from 'react-resizable-panels'
+import { Group, Panel, Separator, usePanelRef } from 'react-resizable-panels'
+import { v4 as uuidv4 } from 'uuid'
 import { Button } from '../../../shared/web/components/ui/button'
 import { Sheet, SheetContent } from '../../../shared/web/components/ui/sheet'
 import { Tooltip } from '../../../shared/web/components/ui/tooltip'
@@ -54,6 +56,12 @@ import {
   settleClipboard,
   visibleEntries,
 } from './explorer-state'
+import {
+  NAVIGATION_PANEL_MAX_WIDTH,
+  NAVIGATION_PANEL_MIN_WIDTH,
+  NAVIGATION_PANEL_WIDTH_STORAGE_KEY,
+  navigationPanelWidth,
+} from './layout-state'
 
 interface RouteState {
   directoryPath: string
@@ -111,6 +119,14 @@ function useMobile(): boolean {
 
 export function App(): React.JSX.Element {
   const initialRoute = useMemo(routeState, [])
+  const [initialNavigationPanelWidth] = useState(() => {
+    try {
+      return navigationPanelWidth(localStorage.getItem(NAVIGATION_PANEL_WIDTH_STORAGE_KEY))
+    }
+    catch {
+      return navigationPanelWidth(null)
+    }
+  })
   const [directoryPath, setDirectoryPath] = useState(initialRoute.directoryPath)
   const [previewPath, setPreviewPath] = useState(initialRoute.previewPath)
   const [routeError, setRouteError] = useState(initialRoute.error)
@@ -139,7 +155,23 @@ export function App(): React.JSX.Element {
   const [mobileNavigation, setMobileNavigation] = useState(false)
   const [toast, setToast] = useState<string>()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const activeResizeHandleRef = useRef<'navigation' | 'preview' | undefined>(undefined)
+  const navigationPanelRef = usePanelRef()
   const mobile = useMobile()
+
+  const saveNavigationPanelWidth = useCallback((_layout: Layout, meta: LayoutChangedMeta): void => {
+    const activeHandle = activeResizeHandleRef.current
+    activeResizeHandleRef.current = undefined
+    if (!meta.isUserInteraction || activeHandle !== 'navigation')
+      return
+    const width = navigationPanelRef.current?.getSize().inPixels
+    if (width === undefined)
+      return
+    try {
+      localStorage.setItem(NAVIGATION_PANEL_WIDTH_STORAGE_KEY, JSON.stringify(Math.round(width)))
+    }
+    catch {}
+  }, [navigationPanelRef])
 
   useEffect(() => {
     navigationRef.current = navigation
@@ -301,7 +333,7 @@ export function App(): React.JSX.Element {
   }
 
   const runOperation = useCallback(async (label: string, command: OperationCommand): Promise<OperationResult | undefined> => {
-    const id = crypto.randomUUID()
+    const id = uuidv4()
     setActivities(current => [{ id, label, status: 'running', detail: 'Working' }, ...current])
     setOperationBusy(true)
     try {
@@ -460,10 +492,10 @@ export function App(): React.JSX.Element {
     if (files.length === 0 || uploadActive || !listing?.managementEnabled)
       return
     const tasks = files.map(file => ({
-      id: crypto.randomUUID(),
+      id: uuidv4(),
       file,
       activity: {
-        id: crypto.randomUUID(),
+        id: uuidv4(),
         label: file.name,
         status: file.size > listing.maxUploadBytes ? 'error' as const : 'queued' as const,
         progress: 0,
@@ -755,13 +787,34 @@ export function App(): React.JSX.Element {
         {mobile
           ? fileArea
           : (
-              <Group orientation="horizontal" className="h-full" key={previewEntry ? 'preview-open' : 'preview-closed'}>
-                <Panel id="navigation" defaultSize="220px" minSize="180px" maxSize="320px">{navigationPane}</Panel>
-                <Separator className="resize-handle"><span /></Separator>
+              <Group orientation="horizontal" className="h-full" onLayoutChanged={saveNavigationPanelWidth}>
+                <Panel
+                  id="navigation"
+                  panelRef={navigationPanelRef}
+                  defaultSize={initialNavigationPanelWidth}
+                  minSize={NAVIGATION_PANEL_MIN_WIDTH}
+                  maxSize={NAVIGATION_PANEL_MAX_WIDTH}
+                  groupResizeBehavior="preserve-pixel-size"
+                >
+                  {navigationPane}
+                </Panel>
+                <Separator
+                  className="resize-handle"
+                  onPointerDown={() => activeResizeHandleRef.current = 'navigation'}
+                  onKeyDown={() => activeResizeHandleRef.current = 'navigation'}
+                >
+                  <span />
+                </Separator>
                 <Panel id="files" minSize="360px">{fileArea}</Panel>
                 {previewEntry && (
                   <>
-                    <Separator className="resize-handle"><span /></Separator>
+                    <Separator
+                      className="resize-handle"
+                      onPointerDown={() => activeResizeHandleRef.current = 'preview'}
+                      onKeyDown={() => activeResizeHandleRef.current = 'preview'}
+                    >
+                      <span />
+                    </Separator>
                     <Panel id="preview" defaultSize="360px" minSize="300px" maxSize="48%"><PreviewPane entry={previewEntry} onClose={closePreview} /></Panel>
                   </>
                 )}

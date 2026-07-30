@@ -28,13 +28,14 @@ export function NavigationPane({
 }): React.JSX.Element {
   const [entriesByPath, setEntriesByPath] = useState<Record<string, DirectoryEntry[] | undefined>>({})
   const [expanded, setExpanded] = useState<Set<string>>(new Set(['']))
-  const [loading, setLoading] = useState<Set<string>>(new Set())
-  const [errors, setErrors] = useState<Record<string, string | undefined>>({})
+  const [loadedRevisionByPath, setLoadedRevisionByPath] = useState<Record<string, number | undefined>>({})
+  const [loadingRevisionByPath, setLoadingRevisionByPath] = useState<Record<string, number | undefined>>({})
+  const [errors, setErrors] = useState<Record<string, { revision: number, message: string } | undefined>>({})
   const revisionRef = useRef(revision)
   revisionRef.current = revision
 
   const load = useCallback(async (directoryPath: string, requestRevision: number): Promise<void> => {
-    setLoading(current => new Set(current).add(directoryPath))
+    setLoadingRevisionByPath(current => ({ ...current, [directoryPath]: requestRevision }))
     setErrors((current) => {
       const next = { ...current }
       delete next[directoryPath]
@@ -42,33 +43,32 @@ export function NavigationPane({
     })
     try {
       const listing = await apiJson<DirectoryListing>(`/api/directory?path=${encodeURIComponent(directoryPath)}`)
-      if (revisionRef.current === requestRevision)
+      if (revisionRef.current === requestRevision) {
         setEntriesByPath(current => ({ ...current, [directoryPath]: listing.entries }))
+        setLoadedRevisionByPath(current => ({ ...current, [directoryPath]: requestRevision }))
+      }
     }
     catch (cause) {
       if (revisionRef.current === requestRevision) {
         setErrors(current => ({
           ...current,
-          [directoryPath]: cause instanceof Error ? cause.message : String(cause),
+          [directoryPath]: {
+            revision: requestRevision,
+            message: cause instanceof Error ? cause.message : String(cause),
+          },
         }))
       }
     }
     finally {
-      if (revisionRef.current === requestRevision) {
-        setLoading((current) => {
-          const next = new Set(current)
-          next.delete(directoryPath)
-          return next
-        })
-      }
+      setLoadingRevisionByPath((current) => {
+        if (current[directoryPath] !== requestRevision)
+          return current
+        const next = { ...current }
+        delete next[directoryPath]
+        return next
+      })
     }
   }, [])
-
-  useEffect(() => {
-    setEntriesByPath({})
-    setErrors({})
-    setLoading(new Set())
-  }, [revision])
 
   useEffect(() => {
     const ancestors = ancestorPaths(currentPath)
@@ -77,10 +77,26 @@ export function NavigationPane({
 
   useEffect(() => {
     for (const directoryPath of expanded) {
-      if (entriesByPath[directoryPath] === undefined && !loading.has(directoryPath) && errors[directoryPath] === undefined)
+      const error = errors[directoryPath]
+      if (
+        loadedRevisionByPath[directoryPath] !== revision
+        && loadingRevisionByPath[directoryPath] !== revision
+        && error?.revision !== revision
+      ) {
         void load(directoryPath, revision)
+      }
     }
-  }, [entriesByPath, errors, expanded, load, loading, revision])
+  }, [errors, expanded, load, loadedRevisionByPath, loadingRevisionByPath, revision])
+
+  const clearError = (directoryPath: string): void => {
+    setErrors((current) => {
+      if (current[directoryPath] === undefined)
+        return current
+      const next = { ...current }
+      delete next[directoryPath]
+      return next
+    })
+  }
 
   const toggle = (directoryPath: string): void => {
     const opening = !expanded.has(directoryPath)
@@ -89,26 +105,12 @@ export function NavigationPane({
       next.has(directoryPath) ? next.delete(directoryPath) : next.add(directoryPath)
       return next
     })
-    if (opening) {
-      setErrors((current) => {
-        const next = { ...current }
-        delete next[directoryPath]
-        return next
-      })
-    }
+    if (opening)
+      clearError(directoryPath)
   }
 
   const retry = (directoryPath: string): void => {
-    setEntriesByPath((current) => {
-      const next = { ...current }
-      delete next[directoryPath]
-      return next
-    })
-    setErrors((current) => {
-      const next = { ...current }
-      delete next[directoryPath]
-      return next
-    })
+    clearError(directoryPath)
   }
 
   return (
@@ -121,12 +123,12 @@ export function NavigationPane({
             level={0}
             active={currentPath === '' && previewPath === undefined}
             expanded={expanded.has('')}
-            loading={loading.has('')}
+            loading={loadingRevisionByPath[''] === revision}
             root
             onToggle={() => toggle('')}
             onActivate={() => onNavigate('')}
           />
-          {expanded.has('') && errors[''] && <TreeError level={1} message={errors['']} onRetry={() => retry('')} />}
+          {expanded.has('') && errors['']?.revision === revision && <TreeError level={1} message={errors[''].message} onRetry={() => retry('')} />}
           {expanded.has('') && (entriesByPath[''] ?? []).map(entry => (
             <TreeBranch
               key={entry.path}
@@ -136,8 +138,9 @@ export function NavigationPane({
               previewPath={previewPath}
               entriesByPath={entriesByPath}
               expanded={expanded}
-              loading={loading}
+              loadingRevisionByPath={loadingRevisionByPath}
               errors={errors}
+              revision={revision}
               onToggle={toggle}
               onRetry={retry}
               onNavigate={onNavigate}
@@ -157,8 +160,9 @@ function TreeBranch({
   previewPath,
   entriesByPath,
   expanded,
-  loading,
+  loadingRevisionByPath,
   errors,
+  revision,
   onToggle,
   onRetry,
   onNavigate,
@@ -170,8 +174,9 @@ function TreeBranch({
   previewPath?: string
   entriesByPath: Record<string, DirectoryEntry[] | undefined>
   expanded: Set<string>
-  loading: Set<string>
-  errors: Record<string, string | undefined>
+  loadingRevisionByPath: Record<string, number | undefined>
+  errors: Record<string, { revision: number, message: string } | undefined>
+  revision: number
   onToggle: (path: string) => void
   onRetry: (path: string) => void
   onNavigate: (path: string) => void
@@ -180,7 +185,7 @@ function TreeBranch({
   const directory = entry.kind === 'directory'
   const open = directory && expanded.has(entry.path)
   const active = directory ? currentPath === entry.path && previewPath === undefined : previewPath === entry.path
-  const error = errors[entry.path]
+  const error = errors[entry.path]?.revision === revision ? errors[entry.path] : undefined
   return (
     <>
       <TreeRow
@@ -189,11 +194,11 @@ function TreeBranch({
         level={level}
         active={active}
         expanded={open}
-        loading={directory && loading.has(entry.path)}
+        loading={directory && loadingRevisionByPath[entry.path] === revision}
         onToggle={directory ? () => onToggle(entry.path) : undefined}
         onActivate={entry.kind === 'directory' ? () => onNavigate(entry.path) : entry.kind === 'file' ? () => onOpenFile(entry) : undefined}
       />
-      {open && error && <TreeError level={level + 1} message={error} onRetry={() => onRetry(entry.path)} />}
+      {open && error && <TreeError level={level + 1} message={error.message} onRetry={() => onRetry(entry.path)} />}
       {open && (entriesByPath[entry.path] ?? []).map(child => (
         <TreeBranch
           key={child.path}
@@ -203,8 +208,9 @@ function TreeBranch({
           previewPath={previewPath}
           entriesByPath={entriesByPath}
           expanded={expanded}
-          loading={loading}
+          loadingRevisionByPath={loadingRevisionByPath}
           errors={errors}
+          revision={revision}
           onToggle={onToggle}
           onRetry={onRetry}
           onNavigate={onNavigate}
