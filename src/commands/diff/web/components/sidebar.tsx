@@ -2,10 +2,10 @@ import type { ComparisonStatus, FileNode, SearchPage, TreeNode } from '../api'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import { AlertTriangle, ChevronRight, FileText, Folder, FolderOpen, Link as LinkIcon, LoaderCircle, Search } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Input } from '../../../../shared/web/components/ui/input'
+import { ScrollArea } from '../../../../shared/web/components/ui/scroll-area'
+import { cn } from '../../../../shared/web/lib/utils'
 import { apiJson } from '../api'
-import { cn } from '../lib/utils'
-import { Input } from './ui/input'
-import { ScrollArea } from './ui/scroll-area'
 
 interface VisibleNode {
   node: TreeNode

@@ -2,10 +2,10 @@ import type { ComparisonSide, Entry, EntryDetail, TextContent } from '../api'
 import { MultiFileDiff } from '@pierre/diffs/react'
 import { AlertTriangle, FileWarning, ImageOff, Link as LinkIcon } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { Button } from '../../../../shared/web/components/ui/button'
+import { cn } from '../../../../shared/web/lib/utils'
 import { apiJson, blobUrl, contentUrl } from '../api'
 import { contentCache, estimateCacheBytes } from '../lib/content-cache'
-import { cn } from '../lib/utils'
-import { Button } from './ui/button'
 
 const statusLabel = {
   added: 'Added',

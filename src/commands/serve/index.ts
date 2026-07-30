@@ -11,8 +11,8 @@ export function register(program: Command): void {
     .option('-a, --address <string>', 'Address to bind to', '0.0.0.0')
     .option('-u, --upload', 'Enable file uploads', false)
     .action(async (directory: string | undefined, options: Omit<ServeOptions, 'directory'>) => {
-      const { serve } = await import('./serve')
-      await serve({
+      const { runServeCommand } = await import('./run')
+      await runServeCommand({
         directory: directory ?? process.cwd(),
         ...options,
       })

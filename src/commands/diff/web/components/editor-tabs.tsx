@@ -1,8 +1,8 @@
 import type { Entry } from '../api'
 import { CircleX, FileCode2, FileWarning, Link as LinkIcon, X } from 'lucide-react'
 import { useEffect, useLayoutEffect, useRef, useState } from 'react'
-import { cn } from '../lib/utils'
-import { ScrollArea } from './ui/scroll-area'
+import { ScrollArea } from '../../../../shared/web/components/ui/scroll-area'
+import { cn } from '../../../../shared/web/lib/utils'
 
 const statusClass = {
   added: 'bg-green-500',

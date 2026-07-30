@@ -5,17 +5,16 @@ import diffWorkerUrl from '@pierre/diffs/worker/worker-portable.js' with { type:
 import { AlertTriangle, Columns2, GitCompareArrows, List, Menu, Moon, RefreshCw, Square, Sun, Text, WrapText } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 import { Group, Panel, Separator, useDefaultLayout } from 'react-resizable-panels'
+import { Button } from '../../../shared/web/components/ui/button'
+import { ScrollArea } from '../../../shared/web/components/ui/scroll-area'
+import { Sheet, SheetContent } from '../../../shared/web/components/ui/sheet'
+import { Tooltip } from '../../../shared/web/components/ui/tooltip'
+import { cn } from '../../../shared/web/lib/utils'
 import { apiJson } from './api'
 import { DiffPanel } from './components/diff-panel'
 import { EditorTabs } from './components/editor-tabs'
 import { Sidebar } from './components/sidebar'
-import { Button } from './components/ui/button'
-import { ScrollArea } from './components/ui/scroll-area'
-import { Sheet, SheetContent } from './components/ui/sheet'
-import { Tooltip } from './components/ui/tooltip'
 import { contentCache } from './lib/content-cache'
-
-import { cn } from './lib/utils'
 
 function createDiffWorker(): Worker {
   return new Worker(diffWorkerUrl, { type: 'module' })
@@ -255,7 +254,7 @@ export function App(): React.JSX.Element {
               )}
         </div>
       </div>
-      <Sheet open={mobileSidebar} onOpenChange={setMobileSidebar}><SheetContent>{sidebar}</SheetContent></Sheet>
+      <Sheet open={mobileSidebar} onOpenChange={setMobileSidebar}><SheetContent title="Files" description="Comparison file tree">{sidebar}</SheetContent></Sheet>
     </WorkerPoolContextProvider>
   )
 }
