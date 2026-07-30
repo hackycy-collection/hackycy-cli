@@ -20,7 +20,7 @@ export interface DirectoryListing {
   rootName: string
   path: string
   parentPath?: string
-  uploadEnabled: boolean
+  managementEnabled: boolean
   maxUploadBytes: number
   entries: DirectoryEntry[]
 }
@@ -37,6 +37,23 @@ export interface UploadResult {
   size: number
 }
 
+export type OperationCommand
+  = | { action: 'create-directory', parentPath: string, name: string }
+    | { action: 'rename', path: string, newName: string }
+    | { action: 'copy', paths: string[], destinationPath: string }
+    | { action: 'move', paths: string[], destinationPath: string }
+    | { action: 'delete', paths: string[] }
+
+export type OperationItem
+  = | { status: 'ok', sourcePath?: string, destinationPath?: string }
+    | { status: 'error', sourcePath?: string, destinationPath?: string, error: { code: string, message: string } }
+
+export interface OperationResult {
+  version: 1
+  action: OperationCommand['action']
+  items: OperationItem[]
+}
+
 interface ErrorBody {
   error?: { message?: string }
 }
@@ -47,6 +64,14 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok)
     throw new Error(body.error?.message ?? `Request failed (${response.status})`)
   return body
+}
+
+export function applyOperation(operation: OperationCommand): Promise<OperationResult> {
+  return apiJson<OperationResult>('/api/operations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(operation),
+  })
 }
 
 export function uploadFile(

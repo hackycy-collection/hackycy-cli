@@ -1,5 +1,5 @@
 import type { ServeWorkspace } from './types'
-import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -162,5 +162,184 @@ describe('ServeWorkspace', () => {
       'report.txt',
     ])
     await expect(workspace.uploadFile('docs', new File(['bad'], '../secret.txt'))).rejects.toMatchObject({ code: 'INVALID_UPLOAD' })
+  })
+
+  test('creates a directory without overwriting an existing entry', async () => {
+    const { workspace } = await createFixture()
+
+    expect(await workspace.applyOperation({ action: 'create-directory', parentPath: '', name: 'projects' })).toEqual({
+      action: 'create-directory',
+      items: [{ status: 'ok', destinationPath: 'projects' }],
+    })
+    expect((await workspace.listDirectory('')).entries.map(entry => entry.name)).toContain('projects')
+
+    expect(await workspace.applyOperation({ action: 'create-directory', parentPath: '', name: 'projects' })).toEqual({
+      action: 'create-directory',
+      items: [{
+        status: 'error',
+        destinationPath: 'projects',
+        error: { code: 'ALREADY_EXISTS', message: 'An entry with that name already exists' },
+      }],
+    })
+  })
+
+  test('rejects invalid names for create and rename operations', async () => {
+    const { workspace } = await createFixture()
+
+    for (const name of ['', '   ', '.', '..', 'nested/name', 'nested\\name', 'nul\0name']) {
+      expect(await workspace.applyOperation({ action: 'create-directory', parentPath: '', name })).toEqual({
+        action: 'create-directory',
+        items: [{
+          status: 'error',
+          error: { code: 'INVALID_NAME', message: 'Entry name is invalid' },
+        }],
+      })
+    }
+
+    expect(await workspace.applyOperation({ action: 'rename', path: 'Alpha.txt', newName: '../renamed.txt' })).toEqual({
+      action: 'rename',
+      items: [{
+        status: 'error',
+        sourcePath: 'Alpha.txt',
+        error: { code: 'INVALID_NAME', message: 'Entry name is invalid' },
+      }],
+    })
+  })
+
+  test('renames an entry without overwriting another entry', async () => {
+    const { workspace } = await createFixture()
+
+    expect(await workspace.applyOperation({ action: 'rename', path: 'Alpha.txt', newName: 'beta.txt' })).toEqual({
+      action: 'rename',
+      items: [{ status: 'ok', sourcePath: 'Alpha.txt', destinationPath: 'beta.txt' }],
+    })
+    expect(await (await workspace.openFile('beta.txt')).body.text()).toBe('alpha')
+
+    expect(await workspace.applyOperation({ action: 'rename', path: 'zeta.txt', newName: 'beta.txt' })).toEqual({
+      action: 'rename',
+      items: [{
+        status: 'error',
+        sourcePath: 'zeta.txt',
+        destinationPath: 'beta.txt',
+        error: { code: 'ALREADY_EXISTS', message: 'An entry with that name already exists' },
+      }],
+    })
+  })
+
+  test('copies files and directories recursively with collision-safe names', async () => {
+    const { root, workspace } = await createFixture()
+    await writeFile(path.join(root, 'docs', 'guide.txt'), 'guide')
+
+    expect(await workspace.applyOperation({ action: 'copy', paths: ['Alpha.txt', 'docs'], destinationPath: 'docs' })).toEqual({
+      action: 'copy',
+      items: [
+        { status: 'ok', sourcePath: 'Alpha.txt', destinationPath: 'docs/Alpha.txt' },
+        { status: 'error', sourcePath: 'docs', error: { code: 'INVALID_OPERATION', message: 'A directory cannot be copied into itself' } },
+      ],
+    })
+    expect(await (await workspace.openFile('docs/Alpha.txt')).body.text()).toBe('alpha')
+
+    expect(await workspace.applyOperation({ action: 'copy', paths: ['docs'], destinationPath: '' })).toEqual({
+      action: 'copy',
+      items: [{ status: 'ok', sourcePath: 'docs', destinationPath: 'docs (1)' }],
+    })
+    expect(await (await workspace.openFile('docs (1)/guide.txt')).body.text()).toBe('guide')
+  })
+
+  test('copies symlinks without dereferencing them', async () => {
+    const { root, workspace } = await createFixture()
+    const outside = path.join(path.dirname(root), 'outside-copy-target')
+    await mkdir(outside)
+    await writeFile(path.join(outside, 'keep.txt'), 'keep')
+    await Promise.all([
+      symlink('../Alpha.txt', path.join(root, 'docs', 'alpha-link')),
+      symlink(outside, path.join(root, 'docs', 'outside-link')),
+    ])
+
+    expect(await workspace.applyOperation({ action: 'copy', paths: ['docs'], destinationPath: '' })).toEqual({
+      action: 'copy',
+      items: [{ status: 'ok', sourcePath: 'docs', destinationPath: 'docs (1)' }],
+    })
+    expect((await lstat(path.join(root, 'docs (1)', 'alpha-link'))).isSymbolicLink()).toBe(true)
+    expect((await lstat(path.join(root, 'docs (1)', 'outside-link'))).isSymbolicLink()).toBe(true)
+    expect(await readlink(path.join(root, 'docs (1)', 'alpha-link'))).toBe('../Alpha.txt')
+    expect(await readlink(path.join(root, 'docs (1)', 'outside-link'))).toBe(outside)
+    expect(await Bun.file(path.join(outside, 'keep.txt')).text()).toBe('keep')
+  })
+
+  test('rejects mutations through a symlink ancestor that escapes the root', async () => {
+    const { root, workspace } = await createFixture()
+    const outside = path.join(path.dirname(root), 'outside-operation-target')
+    await mkdir(outside)
+    await writeFile(path.join(outside, 'secret.txt'), 'secret')
+    await symlink(outside, path.join(root, 'escape'))
+
+    expect(await workspace.applyOperation({ action: 'create-directory', parentPath: 'escape', name: 'created' })).toEqual({
+      action: 'create-directory',
+      items: [{ status: 'error', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the served directory' } }],
+    })
+    expect(await workspace.applyOperation({ action: 'rename', path: 'escape/secret.txt', newName: 'renamed.txt' })).toEqual({
+      action: 'rename',
+      items: [{ status: 'error', sourcePath: 'escape/secret.txt', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the served directory' } }],
+    })
+    expect(await workspace.applyOperation({ action: 'copy', paths: ['Alpha.txt'], destinationPath: 'escape' })).toEqual({
+      action: 'copy',
+      items: [{ status: 'error', sourcePath: 'Alpha.txt', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the served directory' } }],
+    })
+    expect(await workspace.applyOperation({ action: 'move', paths: ['Alpha.txt'], destinationPath: 'escape' })).toEqual({
+      action: 'move',
+      items: [{ status: 'error', sourcePath: 'Alpha.txt', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the served directory' } }],
+    })
+    expect(await workspace.applyOperation({ action: 'delete', paths: ['escape/secret.txt'] })).toEqual({
+      action: 'delete',
+      items: [{ status: 'error', sourcePath: 'escape/secret.txt', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the served directory' } }],
+    })
+    expect(await Bun.file(path.join(outside, 'secret.txt')).text()).toBe('secret')
+  })
+
+  test('moves entries without overwriting or moving a directory into itself', async () => {
+    const { root, workspace } = await createFixture()
+    await writeFile(path.join(root, 'docs', 'zeta.txt'), 'occupied')
+
+    expect(await workspace.applyOperation({ action: 'move', paths: ['Alpha.txt', 'zeta.txt', 'docs'], destinationPath: 'docs' })).toEqual({
+      action: 'move',
+      items: [
+        { status: 'ok', sourcePath: 'Alpha.txt', destinationPath: 'docs/Alpha.txt' },
+        {
+          status: 'error',
+          sourcePath: 'zeta.txt',
+          destinationPath: 'docs/zeta.txt',
+          error: { code: 'ALREADY_EXISTS', message: 'An entry with that name already exists' },
+        },
+        {
+          status: 'error',
+          sourcePath: 'docs',
+          error: { code: 'INVALID_OPERATION', message: 'A directory cannot be moved into itself' },
+        },
+      ],
+    })
+    expect(await (await workspace.openFile('docs/Alpha.txt')).body.text()).toBe('alpha')
+    await expect(workspace.openFile('Alpha.txt')).rejects.toMatchObject({ code: 'NOT_FOUND' })
+  })
+
+  test('permanently deletes entries without following final symlinks and reports partial failures', async () => {
+    const { root, workspace } = await createFixture()
+    const outside = path.join(path.dirname(root), 'outside-delete-target')
+    await mkdir(outside)
+    await writeFile(path.join(outside, 'keep.txt'), 'keep')
+    await symlink(outside, path.join(root, 'outside-link'))
+
+    expect(await workspace.applyOperation({ action: 'delete', paths: ['Alpha.txt', 'docs', 'outside-link', 'missing.txt', ''] })).toEqual({
+      action: 'delete',
+      items: [
+        { status: 'ok', sourcePath: 'Alpha.txt' },
+        { status: 'ok', sourcePath: 'docs' },
+        { status: 'ok', sourcePath: 'outside-link' },
+        { status: 'error', sourcePath: 'missing.txt', error: { code: 'NOT_FOUND', message: 'Path does not exist' } },
+        { status: 'error', sourcePath: '', error: { code: 'ROOT_IMMUTABLE', message: 'The served root cannot be changed' } },
+      ],
+    })
+    expect((await workspace.listDirectory('')).entries.map(entry => entry.name)).toEqual(['zeta.txt'])
+    expect(await Bun.file(path.join(outside, 'keep.txt')).text()).toBe('keep')
   })
 })

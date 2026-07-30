@@ -2,10 +2,10 @@ export type ViewMode = 'list' | 'grid'
 export type SortKey = 'name' | 'size' | 'modified'
 export type SortDirection = 'asc' | 'desc'
 
-export interface UploadTask {
+export interface ActivityTask {
   id: string
-  filename: string
-  status: 'queued' | 'uploading' | 'done' | 'error'
-  progress: number
+  label: string
+  status: 'queued' | 'running' | 'done' | 'error'
+  progress?: number
   detail?: string
 }

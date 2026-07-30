@@ -50,7 +50,7 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
       workspace,
       address: options.address,
       port: options.port,
-      uploadEnabled: options.upload,
+      managementEnabled: options.manage,
     })
   }
   catch (cause) {
@@ -62,12 +62,12 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
   const messages = urls.map(({ label, url }) => `  ${ansis.dim(label.padEnd(9))} ${ansis.cyan(url)}`)
   messages.push(`  ${ansis.dim('Directory'.padEnd(9))} ${ansis.dim(path.resolve(options.directory))}`)
   messages.push(`  ${ansis.dim('Bind'.padEnd(9))} ${ansis.dim(`${options.address}:${server.url.port}`)}`)
-  messages.push(`  ${ansis.dim('Upload'.padEnd(9))} ${options.upload ? ansis.green('enabled') : ansis.dim('disabled')}`)
+  messages.push(`  ${ansis.dim('Management'.padEnd(11))} ${options.manage ? ansis.green('enabled') : ansis.dim('disabled')}`)
   note(messages.join('\n'), 'Server running')
 
-  if (options.upload && options.address === '0.0.0.0') {
+  if (options.manage && !['127.0.0.1', '::1', 'localhost'].includes(options.address)) {
     note(
-      ansis.yellow('Anyone who can reach this server can upload files into the served directory.'),
+      ansis.yellow('Anyone who can reach this server can upload, move, and permanently delete files in the served directory.'),
       'Trusted networks only',
     )
   }

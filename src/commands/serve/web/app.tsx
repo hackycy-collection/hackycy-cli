@@ -1,14 +1,59 @@
-import type { DirectoryEntry, DirectoryListing } from './api'
-import type { SortDirection, SortKey, UploadTask, ViewMode } from './types'
-import { ArrowDown, ArrowUp, FolderOpen, Grid2X2, HardDrive, List, LoaderCircle, Moon, RefreshCw, Sun, Upload } from 'lucide-react'
+import type { DirectoryEntry, DirectoryListing, OperationCommand, OperationResult } from './api'
+import type { ExplorerClipboard, ExplorerSelection, NavigationHistory } from './explorer-state'
+import type { ActivityTask, SortDirection, SortKey, ViewMode } from './types'
+import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
+import {
+  ArrowLeft,
+  ArrowRight,
+  ArrowUp,
+  ArrowUpDown,
+  ChevronRight,
+  ClipboardPaste,
+  Copy,
+  FolderOpen,
+  FolderPlus,
+  Grid2X2,
+  HardDrive,
+  List,
+  LoaderCircle,
+  Menu,
+  Moon,
+  MoreHorizontal,
+  PanelRight,
+  Pencil,
+  RefreshCw,
+  Scissors,
+  Search,
+  Sun,
+  Trash2,
+  Upload,
+  X,
+} from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Group, Panel, Separator } from 'react-resizable-panels'
 import { Button } from '../../../shared/web/components/ui/button'
+import { Sheet, SheetContent } from '../../../shared/web/components/ui/sheet'
 import { Tooltip } from '../../../shared/web/components/ui/tooltip'
 import { cn } from '../../../shared/web/lib/utils'
-import { apiJson, uploadFile } from './api'
+import { apiJson, applyOperation, uploadFile } from './api'
+import { ActivityCenter } from './components/activity-center'
+import { DeleteDialog } from './components/delete-dialog'
 import { FileBrowser } from './components/file-browser'
-import { PreviewSheet } from './components/preview-sheet'
-import { UploadQueue } from './components/upload-queue'
+import { NavigationPane } from './components/navigation-pane'
+import { PreviewPane, PreviewSheet } from './components/preview-sheet'
+import { RenameDialog } from './components/rename-dialog'
+import {
+  clipboardOperation,
+  createNavigationHistory,
+  entryNameError,
+  moveNavigation,
+  operationActivities,
+  parentDirectoryPath,
+  pushNavigation,
+  selectEntry,
+  settleClipboard,
+  visibleEntries,
+} from './explorer-state'
 
 interface RouteState {
   directoryPath: string
@@ -33,9 +78,7 @@ function routeState(): RouteState {
 }
 
 function browserUrl(relativePath: string): string {
-  if (!relativePath)
-    return '/'
-  return `/browse/${relativePath.split('/').map(encodeURIComponent).join('/')}`
+  return relativePath ? `/browse/${relativePath.split('/').map(encodeURIComponent).join('/')}` : '/'
 }
 
 function useStoredValue<T>(key: string, fallback: () => T): [T, (value: T) => void] {
@@ -55,22 +98,15 @@ function useStoredValue<T>(key: string, fallback: () => T): [T, (value: T) => vo
   return [value, update]
 }
 
-function entryRank(entry: DirectoryEntry): number {
-  return entry.kind === 'directory' ? 0 : entry.kind === 'file' ? 1 : 2
-}
-
-function sortedEntries(entries: DirectoryEntry[], key: SortKey, direction: SortDirection): DirectoryEntry[] {
-  const multiplier = direction === 'asc' ? 1 : -1
-  return [...entries].sort((left, right) => {
-    const rank = entryRank(left) - entryRank(right)
-    if (rank !== 0)
-      return rank
-    if (key === 'name')
-      return multiplier * (left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }) || left.name.localeCompare(right.name))
-    if (key === 'size')
-      return multiplier * ((left.size ?? -1) - (right.size ?? -1)) || left.name.localeCompare(right.name)
-    return multiplier * ((Date.parse(left.modifiedAt ?? '') || 0) - (Date.parse(right.modifiedAt ?? '') || 0)) || left.name.localeCompare(right.name)
-  })
+function useMobile(): boolean {
+  const [mobile, setMobile] = useState(() => matchMedia('(max-width: 899px)').matches)
+  useEffect(() => {
+    const query = matchMedia('(max-width: 899px)')
+    const change = (): void => setMobile(query.matches)
+    query.addEventListener('change', change)
+    return () => query.removeEventListener('change', change)
+  }, [])
+  return mobile
 }
 
 export function App(): React.JSX.Element {
@@ -78,6 +114,8 @@ export function App(): React.JSX.Element {
   const [directoryPath, setDirectoryPath] = useState(initialRoute.directoryPath)
   const [previewPath, setPreviewPath] = useState(initialRoute.previewPath)
   const [routeError, setRouteError] = useState(initialRoute.error)
+  const [navigation, setNavigation] = useState<NavigationHistory>(() => createNavigationHistory(initialRoute.directoryPath))
+  const navigationRef = useRef(navigation)
   const [listing, setListing] = useState<DirectoryListing>()
   const [loadError, setLoadError] = useState<string>()
   const [loading, setLoading] = useState(true)
@@ -86,21 +124,48 @@ export function App(): React.JSX.Element {
   const [sortKey, setSortKey] = useStoredValue<SortKey>('ycy-serve-sort', () => 'name')
   const [sortDirection, setSortDirection] = useStoredValue<SortDirection>('ycy-serve-sort-direction', () => 'asc')
   const [theme, setTheme] = useStoredValue<'light' | 'dark'>('ycy-serve-theme', () => matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
-  const [uploadTasks, setUploadTasks] = useState<UploadTask[]>([])
+  const [query, setQuery] = useState('')
+  const [selection, setSelection] = useState<ExplorerSelection>({ paths: [] })
+  const [clipboard, setClipboard] = useState<ExplorerClipboard>()
+  const [creatingFolder, setCreatingFolder] = useState(false)
+  const [renamingPath, setRenamingPath] = useState<string>()
+  const [editingBusy, setEditingBusy] = useState(false)
+  const [editingError, setEditingError] = useState<string>()
+  const [deleteOpen, setDeleteOpen] = useState(false)
+  const [operationBusy, setOperationBusy] = useState(false)
+  const [activities, setActivities] = useState<ActivityTask[]>([])
   const [uploadActive, setUploadActive] = useState(false)
   const [dragging, setDragging] = useState(false)
+  const [mobileNavigation, setMobileNavigation] = useState(false)
+  const [toast, setToast] = useState<string>()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const mobile = useMobile()
+
+  useEffect(() => {
+    navigationRef.current = navigation
+  }, [navigation])
 
   useEffect(() => {
     document.documentElement.classList.toggle('dark', theme === 'dark')
   }, [theme])
 
   useEffect(() => {
-    const popstate = (): void => {
+    history.replaceState({ serveCursor: 0, servePreview: previewPath !== undefined }, '', window.location.href)
+    const popstate = (event: PopStateEvent): void => {
       const next = routeState()
+      const cursor = typeof event.state?.serveCursor === 'number' ? event.state.serveCursor : undefined
+      if (cursor !== undefined && navigationRef.current.paths[cursor] === next.directoryPath)
+        setNavigation(current => ({ ...current, cursor }))
+      else
+        setNavigation(createNavigationHistory(next.directoryPath))
       setDirectoryPath(next.directoryPath)
       setPreviewPath(next.previewPath)
       setRouteError(next.error)
+      setQuery('')
+      setSelection({ paths: [] })
+      setCreatingFolder(false)
+      setRenamingPath(undefined)
+      setEditingError(undefined)
     }
     window.addEventListener('popstate', popstate)
     return () => window.removeEventListener('popstate', popstate)
@@ -114,6 +179,11 @@ export function App(): React.JSX.Element {
       .then((next) => {
         setListing(next)
         setRouteError(undefined)
+        const available = new Set(next.entries.map(entry => entry.path))
+        setSelection(current => ({
+          paths: current.paths.filter(path => available.has(path)),
+          anchorPath: current.anchorPath && available.has(current.anchorPath) ? current.anchorPath : undefined,
+        }))
       })
       .catch((cause) => {
         if (!controller.signal.aborted)
@@ -126,30 +196,89 @@ export function App(): React.JSX.Element {
     return () => controller.abort()
   }, [directoryPath, reloadVersion])
 
-  const navigate = (path: string): void => {
-    history.pushState({}, '', browserUrl(path))
+  useEffect(() => {
+    if (!toast)
+      return
+    const timeout = window.setTimeout(() => setToast(undefined), 4000)
+    return () => window.clearTimeout(timeout)
+  }, [toast])
+
+  const navigate = useCallback((path: string): void => {
+    if (path === directoryPath) {
+      setMobileNavigation(false)
+      return
+    }
+    const next = pushNavigation(navigationRef.current, path)
+    history.pushState({ serveCursor: next.cursor }, '', browserUrl(path))
+    setNavigation(next)
     setDirectoryPath(path)
     setPreviewPath(undefined)
     setRouteError(undefined)
+    setQuery('')
+    setSelection({ paths: [] })
+    setCreatingFolder(false)
+    setRenamingPath(undefined)
+    setEditingError(undefined)
+    setMobileNavigation(false)
+  }, [directoryPath])
+
+  const moveHistory = (offset: -1 | 1): void => {
+    if (offset === -1 && previewPath) {
+      history.back()
+      return
+    }
+    const next = moveNavigation(navigationRef.current, offset)
+    if (next.cursor === navigationRef.current.cursor)
+      return
+    offset === -1 ? history.back() : history.forward()
   }
 
-  const openPreview = (entry: DirectoryEntry): void => {
+  const openPreview = useCallback((entry: DirectoryEntry): void => {
+    if (entry.kind !== 'file')
+      return
     const url = new URL(window.location.href)
     url.searchParams.set('preview', entry.path)
-    history.pushState({ servePreview: true }, '', url)
+    history.pushState({ serveCursor: navigationRef.current.cursor, servePreview: true }, '', url)
     setPreviewPath(entry.path)
-  }
+    setSelection({ paths: [entry.path], anchorPath: entry.path })
+  }, [])
 
-  const closePreview = (): void => {
+  const openTreeFile = useCallback((entry: DirectoryEntry): void => {
+    if (entry.kind !== 'file')
+      return
+    setMobileNavigation(false)
+    const parentPath = parentDirectoryPath(entry.path)
+    if (parentPath === directoryPath) {
+      openPreview(entry)
+      return
+    }
+
+    const next = pushNavigation(navigationRef.current, parentPath)
+    history.pushState({ serveCursor: next.cursor }, '', browserUrl(parentPath))
+    const previewUrl = new URL(window.location.href)
+    previewUrl.searchParams.set('preview', entry.path)
+    history.pushState({ serveCursor: next.cursor, servePreview: true }, '', previewUrl)
+    setNavigation(next)
+    setDirectoryPath(parentPath)
+    setPreviewPath(entry.path)
+    setRouteError(undefined)
+    setQuery('')
+    setSelection({ paths: [entry.path], anchorPath: entry.path })
+    setCreatingFolder(false)
+    setRenamingPath(undefined)
+    setEditingError(undefined)
+  }, [directoryPath, openPreview])
+
+  const closePreview = useCallback((): void => {
     if (history.state?.servePreview) {
       history.back()
       return
     }
     const url = new URL(window.location.href)
     url.searchParams.delete('preview')
-    history.replaceState({}, '', url)
+    history.replaceState({ serveCursor: navigationRef.current.cursor }, '', url)
     setPreviewPath(undefined)
-  }
+  }, [])
 
   const changeSort = (key: SortKey): void => {
     if (key === sortKey) {
@@ -160,41 +289,201 @@ export function App(): React.JSX.Element {
     setSortDirection('asc')
   }
 
-  const updateUploadTask = (id: string, update: Partial<UploadTask>): void => {
-    setUploadTasks(current => current.map(task => task.id === id ? { ...task, ...update } : task))
+  const chooseSort = (key: SortKey): void => {
+    if (key === sortKey)
+      return
+    setSortKey(key)
+    setSortDirection('asc')
+  }
+
+  const updateActivity = (id: string, update: Partial<ActivityTask>): void => {
+    setActivities(current => current.map(task => task.id === id ? { ...task, ...update } : task))
+  }
+
+  const runOperation = useCallback(async (label: string, command: OperationCommand): Promise<OperationResult | undefined> => {
+    const id = crypto.randomUUID()
+    setActivities(current => [{ id, label, status: 'running', detail: 'Working' }, ...current])
+    setOperationBusy(true)
+    try {
+      const result = await applyOperation(command)
+      const errors = result.items.filter(item => item.status === 'error')
+      setActivities(current => current.flatMap(task => task.id === id ? operationActivities(id, label, result) : [task]))
+      if (errors.length > 0)
+        setToast(errors[0]!.error.message)
+      setReloadVersion(version => version + 1)
+      return result
+    }
+    catch (cause) {
+      const message = cause instanceof Error ? cause.message : String(cause)
+      updateActivity(id, { status: 'error', detail: message })
+      setToast(message)
+      return undefined
+    }
+    finally {
+      setOperationBusy(false)
+    }
+  }, [])
+
+  const entries = useMemo(
+    () => visibleEntries(listing?.entries ?? [], query, sortKey, sortDirection),
+    [listing?.entries, query, sortDirection, sortKey],
+  )
+  const entryMap = useMemo(() => new Map((listing?.entries ?? []).map(entry => [entry.path, entry])), [listing?.entries])
+  const selectedSet = useMemo(() => new Set(selection.paths), [selection.paths])
+  const selectedEntries = selection.paths.map(path => entryMap.get(path)).filter((entry): entry is DirectoryEntry => entry !== undefined)
+  const previewEntry = entryMap.get(previewPath ?? '')
+  const renamingEntry = entryMap.get(renamingPath ?? '')
+  const managementEnabled = listing?.managementEnabled ?? false
+  const visibleError = routeError ?? loadError
+
+  const selectedPathsFor = (entry?: DirectoryEntry): string[] => entry && !selectedSet.has(entry.path) ? [entry.path] : selection.paths
+
+  const startCreateFolder = (): void => {
+    if (!managementEnabled || operationBusy)
+      return
+    setCreatingFolder(true)
+    setRenamingPath(undefined)
+    setEditingError(undefined)
+    setSelection({ paths: [] })
+  }
+
+  const createFolder = async (name: string): Promise<void> => {
+    const error = entryNameError(name)
+    if (error) {
+      setEditingError(error)
+      return
+    }
+    setEditingBusy(true)
+    const result = await runOperation(`Create ${name}`, { action: 'create-directory', parentPath: directoryPath, name })
+    const item = result?.items[0]
+    if (item?.status === 'ok') {
+      setCreatingFolder(false)
+      setEditingError(undefined)
+      if (item.destinationPath)
+        setSelection({ paths: [item.destinationPath], anchorPath: item.destinationPath })
+    }
+    else if (item?.status === 'error') {
+      setEditingError(item.error.message)
+    }
+    setEditingBusy(false)
+  }
+
+  const startRename = (entry: DirectoryEntry): void => {
+    if (!managementEnabled || operationBusy)
+      return
+    setSelection({ paths: [entry.path], anchorPath: entry.path })
+    setCreatingFolder(false)
+    setRenamingPath(entry.path)
+    setEditingError(undefined)
+  }
+
+  const renameEntry = async (name: string): Promise<void> => {
+    const entry = renamingEntry
+    if (!entry)
+      return
+    const error = entryNameError(name)
+    if (error) {
+      setEditingError(error)
+      return
+    }
+    if (name === entry.name) {
+      setRenamingPath(undefined)
+      return
+    }
+    setEditingBusy(true)
+    const result = await runOperation(`Rename ${entry.name}`, { action: 'rename', path: entry.path, newName: name })
+    const item = result?.items[0]
+    if (item?.status === 'ok') {
+      setRenamingPath(undefined)
+      setEditingError(undefined)
+      if (item.destinationPath)
+        setSelection({ paths: [item.destinationPath], anchorPath: item.destinationPath })
+      if (previewPath === entry.path)
+        closePreview()
+    }
+    else if (item?.status === 'error') {
+      setEditingError(item.error.message)
+    }
+    setEditingBusy(false)
+  }
+
+  const copySelection = (mode: 'copy' | 'move', entry?: DirectoryEntry): void => {
+    const paths = selectedPathsFor(entry)
+    if (managementEnabled && paths.length > 0)
+      setClipboard({ mode, paths })
+  }
+
+  const pasteClipboard = async (destinationPath = directoryPath): Promise<void> => {
+    if (!clipboard || operationBusy)
+      return
+    const result = await runOperation(clipboard.mode === 'copy' ? 'Copy items' : 'Move items', clipboardOperation(clipboard, destinationPath))
+    if (!result)
+      return
+    setClipboard(settleClipboard(clipboard, result.items))
+    const destinations = result.items.filter(item => item.status === 'ok' && item.destinationPath).map(item => item.destinationPath!)
+    if (destinationPath === directoryPath && destinations.length > 0)
+      setSelection({ paths: destinations, anchorPath: destinations.at(-1) })
+  }
+
+  const requestDelete = (entry?: DirectoryEntry): void => {
+    const paths = selectedPathsFor(entry)
+    if (managementEnabled && paths.length > 0) {
+      setSelection({ paths, anchorPath: paths.at(-1) })
+      setDeleteOpen(true)
+    }
+  }
+
+  const confirmDelete = async (): Promise<void> => {
+    const paths = selection.paths
+    const result = await runOperation(`Delete ${paths.length} item${paths.length === 1 ? '' : 's'}`, { action: 'delete', paths })
+    if (result) {
+      const deleted = new Set(result.items.filter(item => item.status === 'ok').map(item => item.sourcePath))
+      if (previewPath && deleted.has(previewPath))
+        closePreview()
+      setSelection(current => ({ paths: current.paths.filter(path => !deleted.has(path)) }))
+      setDeleteOpen(false)
+    }
+  }
+
+  const openEntry = useCallback((entry: DirectoryEntry): void => {
+    if (entry.kind === 'directory')
+      navigate(entry.path)
+    else if (entry.kind === 'file')
+      openPreview(entry)
+  }, [navigate, openPreview])
+
+  const selectFile = (entry: DirectoryEntry, modifiers: { toggle: boolean, range: boolean }): void => {
+    setSelection(current => selectEntry(entries.map(item => item.path), current, entry.path, modifiers))
   }
 
   const enqueueUploads = useCallback(async (files: File[]) => {
-    if (files.length === 0 || uploadActive || !listing?.uploadEnabled)
+    if (files.length === 0 || uploadActive || !listing?.managementEnabled)
       return
-    const tasks = files.map<UploadTask>(file => ({
+    const tasks = files.map(file => ({
       id: crypto.randomUUID(),
-      filename: file.name,
-      status: file.size > listing.maxUploadBytes ? 'error' : 'queued',
-      progress: 0,
-      detail: file.size > listing.maxUploadBytes ? 'File exceeds the 1 GiB limit' : undefined,
+      file,
+      activity: {
+        id: crypto.randomUUID(),
+        label: file.name,
+        status: file.size > listing.maxUploadBytes ? 'error' as const : 'queued' as const,
+        progress: 0,
+        detail: file.size > listing.maxUploadBytes ? 'File exceeds the 1 GiB limit' : 'Waiting to upload',
+      },
     }))
-    setUploadTasks(tasks)
+    setActivities(current => [...tasks.map(task => task.activity), ...current])
     setUploadActive(true)
-    const pending = tasks.map((task, index) => ({ task, file: files[index]! })).filter(item => item.task.status === 'queued')
+    const pending = tasks.filter(task => task.activity.status === 'queued')
     let cursor = 0
     const worker = async (): Promise<void> => {
       while (cursor < pending.length) {
         const item = pending[cursor++]!
-        updateUploadTask(item.task.id, { status: 'uploading', progress: 0, detail: 'Uploading' })
+        updateActivity(item.activity.id, { status: 'running', progress: 0, detail: 'Uploading' })
         try {
-          const result = await uploadFile(directoryPath, item.file, progress => updateUploadTask(item.task.id, { progress }))
-          updateUploadTask(item.task.id, {
-            status: 'done',
-            progress: 100,
-            detail: result.filename === item.file.name ? 'Uploaded' : `Saved as ${result.filename}`,
-          })
+          const result = await uploadFile(directoryPath, item.file, progress => updateActivity(item.activity.id, { progress }))
+          updateActivity(item.activity.id, { status: 'done', progress: 100, detail: result.filename === item.file.name ? 'Uploaded' : `Saved as ${result.filename}` })
         }
         catch (cause) {
-          updateUploadTask(item.task.id, {
-            status: 'error',
-            detail: cause instanceof Error ? cause.message : String(cause),
-          })
+          updateActivity(item.activity.id, { status: 'error', detail: cause instanceof Error ? cause.message : String(cause) })
         }
       }
     }
@@ -204,11 +493,22 @@ export function App(): React.JSX.Element {
   }, [directoryPath, listing, uploadActive])
 
   useEffect(() => {
-    if (!listing?.uploadEnabled)
+    if (!listing?.managementEnabled)
       return
     let dragDepth = 0
+    let internalDrag = false
+    const start = (): void => {
+      internalDrag = true
+      dragDepth = 0
+      setDragging(false)
+    }
+    const end = (): void => {
+      internalDrag = false
+      dragDepth = 0
+      setDragging(false)
+    }
     const enter = (event: DragEvent): void => {
-      if (!event.dataTransfer?.types.includes('Files'))
+      if (internalDrag || !event.dataTransfer?.types.includes('Files'))
         return
       event.preventDefault()
       dragDepth++
@@ -220,116 +520,286 @@ export function App(): React.JSX.Element {
       if (dragDepth === 0)
         setDragging(false)
     }
-    const over = (event: DragEvent): void => event.preventDefault()
+    const over = (event: DragEvent): void => {
+      if (!internalDrag && event.dataTransfer?.types.includes('Files'))
+        event.preventDefault()
+    }
     const drop = (event: DragEvent): void => {
+      if (internalDrag) {
+        end()
+        return
+      }
+      if (!event.dataTransfer?.types.includes('Files'))
+        return
       event.preventDefault()
       dragDepth = 0
       setDragging(false)
       void enqueueUploads(Array.from(event.dataTransfer?.files ?? []))
     }
+    document.addEventListener('dragstart', start)
+    document.addEventListener('dragend', end)
     document.addEventListener('dragenter', enter)
     document.addEventListener('dragleave', leave)
     document.addEventListener('dragover', over)
     document.addEventListener('drop', drop)
     return () => {
+      document.removeEventListener('dragstart', start)
+      document.removeEventListener('dragend', end)
       document.removeEventListener('dragenter', enter)
       document.removeEventListener('dragleave', leave)
       document.removeEventListener('dragover', over)
       document.removeEventListener('drop', drop)
     }
-  }, [enqueueUploads, listing?.uploadEnabled])
+  }, [enqueueUploads, listing?.managementEnabled])
 
-  const entries = useMemo(() => sortedEntries(listing?.entries ?? [], sortKey, sortDirection), [listing?.entries, sortDirection, sortKey])
-  const previewEntry = listing?.entries.find(entry => entry.kind === 'file' && entry.path === previewPath)
-  const visibleError = routeError ?? loadError
+  useEffect(() => {
+    const keydown = (event: KeyboardEvent): void => {
+      const target = event.target as HTMLElement | null
+      if (target?.matches('input, textarea, select, [contenteditable="true"]'))
+        return
+      const modifier = event.metaKey || event.ctrlKey
+      if (modifier && event.key.toLowerCase() === 'a') {
+        event.preventDefault()
+        const paths = entries.map(entry => entry.path)
+        setSelection({ paths, anchorPath: paths.at(-1) })
+      }
+      else if (modifier && event.key.toLowerCase() === 'c' && managementEnabled) {
+        event.preventDefault()
+        copySelection('copy')
+      }
+      else if (modifier && event.key.toLowerCase() === 'x' && managementEnabled) {
+        event.preventDefault()
+        copySelection('move')
+      }
+      else if (modifier && event.key.toLowerCase() === 'v' && managementEnabled) {
+        event.preventDefault()
+        void pasteClipboard()
+      }
+      else if (event.key === 'F2' && selectedEntries.length === 1 && managementEnabled) {
+        event.preventDefault()
+        startRename(selectedEntries[0]!)
+      }
+      else if (event.key === 'Delete' && selection.paths.length > 0 && managementEnabled) {
+        event.preventDefault()
+        requestDelete()
+      }
+      else if (event.key === 'Enter' && selectedEntries.length === 1) {
+        event.preventDefault()
+        openEntry(selectedEntries[0]!)
+      }
+      else if (event.key === 'Escape') {
+        if (creatingFolder || renamingPath) {
+          setCreatingFolder(false)
+          setRenamingPath(undefined)
+          setEditingError(undefined)
+        }
+        else if (previewPath) {
+          closePreview()
+        }
+        else {
+          setSelection({ paths: [] })
+        }
+      }
+    }
+    window.addEventListener('keydown', keydown)
+    return () => window.removeEventListener('keydown', keydown)
+  }, [clipboard, closePreview, creatingFolder, entries, managementEnabled, openEntry, previewPath, renamingPath, selectedEntries, selection.paths])
+
+  const refresh = (): void => setReloadVersion(version => version + 1)
+  const cancelEdit = (): void => {
+    setCreatingFolder(false)
+    setRenamingPath(undefined)
+    setEditingError(undefined)
+  }
+
+  const fileArea = (
+    <main className="flex h-full min-h-0 flex-1 flex-col bg-content">
+      {loading && !listing && <CenteredState icon={<LoaderCircle className="size-5 animate-spin" />} label="Loading folder" />}
+      {!loading && visibleError && !listing && <CenteredState icon={<FolderOpen className="size-6" />} label="Folder unavailable" />}
+      {listing && (
+        <FileBrowser
+          entries={entries}
+          viewMode={viewMode}
+          sortKey={sortKey}
+          direction={sortDirection}
+          selectedPaths={selectedSet}
+          managementEnabled={managementEnabled}
+          canPaste={clipboard !== undefined}
+          creatingFolder={creatingFolder}
+          editingBusy={editingBusy}
+          editingError={editingError}
+          emptyLabel={entries.length === 0 && !creatingFolder && !loading ? (query ? 'No items match your search' : 'This folder is empty') : undefined}
+          onSort={changeSort}
+          onSelect={selectFile}
+          onOpen={openEntry}
+          onCreateFolder={name => void createFolder(name)}
+          onCancelEdit={cancelEdit}
+          onCut={entry => copySelection('move', entry)}
+          onCopy={entry => copySelection('copy', entry)}
+          onPaste={destination => void pasteClipboard(destination)}
+          onStartRename={startRename}
+          onDelete={requestDelete}
+          onNewFolder={startCreateFolder}
+          onRefresh={refresh}
+        />
+      )}
+    </main>
+  )
+
+  const navigationPane = (
+    <NavigationPane
+      rootName={listing?.rootName ?? 'Root'}
+      currentPath={directoryPath}
+      previewPath={previewPath}
+      revision={reloadVersion}
+      onNavigate={navigate}
+      onOpenFile={openTreeFile}
+    />
+  )
 
   return (
-    <div className="flex h-dvh min-w-0 flex-col overflow-hidden bg-background text-foreground">
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-border bg-background px-3">
-        <div className="flex min-w-0 items-center gap-2">
-          <span className="flex size-7 shrink-0 items-center justify-center rounded-md bg-zinc-900 text-white dark:bg-zinc-100 dark:text-zinc-950"><HardDrive className="size-4" /></span>
-          <div className="min-w-0 leading-tight">
-            <div className="hidden text-[10px] font-semibold text-muted-foreground sm:block">HACKYCY CLI · FILE SERVER</div>
-            <div className="truncate text-sm font-semibold" title={listing?.rootName}>{listing?.rootName ?? 'File Server'}</div>
-          </div>
+    <div className="explorer-shell">
+      <div className="brand-line" />
+      <header className="title-bar">
+        <Button className="mobile-nav-trigger command-button" size="icon" variant="ghost" aria-label="Open folder navigation" onClick={() => setMobileNavigation(true)}><Menu className="size-4" /></Button>
+        <span className="app-icon"><HardDrive className="size-4" /></span>
+        <div className="min-w-0">
+          <div className="brand-label">HACKYCY CLI · FILE SERVER</div>
+          <div className="truncate text-xs font-semibold" title={listing?.rootName}>{listing?.rootName ?? 'File Server'}</div>
         </div>
-        <div role="toolbar" aria-label="File browser controls" className="ml-auto flex items-center gap-0.5">
-          <label className="flex items-center gap-1 rounded-md border border-border bg-background px-1 text-xs text-muted-foreground sm:px-2">
-            <span className="hidden sm:inline">Sort</span>
-            <select aria-label="Sort files" value={sortKey} className="h-7 w-14 bg-transparent text-foreground outline-none sm:w-auto" onChange={event => changeSort(event.target.value as SortKey)}>
-              <option value="name">Name</option>
-              <option value="size">Size</option>
-              <option value="modified">Modified</option>
-            </select>
-          </label>
-          <Tooltip label={`Sort ${sortDirection === 'asc' ? 'descending' : 'ascending'}`}>
-            <Button aria-label={`Sort ${sortDirection === 'asc' ? 'descending' : 'ascending'}`} size="icon" variant="ghost" onClick={() => setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')}>
-              {sortDirection === 'asc' ? <ArrowUp className="size-4" /> : <ArrowDown className="size-4" />}
-            </Button>
-          </Tooltip>
-          <span className="mx-1 h-4 w-px bg-border" />
-          <div className="flex rounded-md border border-border p-0.5">
-            <Tooltip label="List view"><Button aria-label="List view" aria-pressed={viewMode === 'list'} className={cn('size-7', viewMode === 'list' && 'bg-muted')} size="icon" variant="ghost" onClick={() => setViewMode('list')}><List className="size-3.5" /></Button></Tooltip>
-            <Tooltip label="Grid view"><Button aria-label="Grid view" aria-pressed={viewMode === 'grid'} className={cn('size-7', viewMode === 'grid' && 'bg-muted')} size="icon" variant="ghost" onClick={() => setViewMode('grid')}><Grid2X2 className="size-3.5" /></Button></Tooltip>
-          </div>
-          <Tooltip label="Refresh directory"><Button aria-label="Refresh directory" size="icon" variant="ghost" disabled={loading} onClick={() => setReloadVersion(version => version + 1)}><RefreshCw className={cn('size-4', loading && 'animate-spin')} /></Button></Tooltip>
-          {listing?.uploadEnabled && (
-            <>
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                className="hidden"
-                onChange={(event) => {
-                  void enqueueUploads(Array.from(event.currentTarget.files ?? []))
-                  event.currentTarget.value = ''
-                }}
-              />
-              <Button aria-label="Upload files" className="ml-1" variant="default" disabled={uploadActive} onClick={() => fileInputRef.current?.click()}>
-                <Upload className="size-4" />
-                <span className="hidden sm:inline">Upload</span>
-              </Button>
-            </>
-          )}
-          <Tooltip label={`Use ${theme === 'light' ? 'dark' : 'light'} theme`}><Button aria-label={`Use ${theme === 'light' ? 'dark' : 'light'} theme`} size="icon" variant="ghost" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>{theme === 'light' ? <Moon className="size-4" /> : <Sun className="size-4" />}</Button></Tooltip>
-        </div>
+        <span className={cn('mode-badge', managementEnabled && 'manage')}>{managementEnabled ? 'MANAGEMENT' : 'READ ONLY'}</span>
+        <Tooltip label={`Use ${theme === 'light' ? 'dark' : 'light'} theme`}>
+          <Button aria-label={`Use ${theme === 'light' ? 'dark' : 'light'} theme`} className="ml-auto command-button" size="icon" variant="ghost" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')}>
+            {theme === 'light' ? <Moon className="size-4" /> : <Sun className="size-4" />}
+          </Button>
+        </Tooltip>
       </header>
 
-      <Breadcrumb path={listing?.path ?? directoryPath} rootName={listing?.rootName ?? 'Root'} onNavigate={navigate} />
-
-      {visibleError && (
-        <div role="alert" className="shrink-0 border-b border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-950 dark:bg-red-950 dark:text-red-200">
-          {visibleError}
+      <div className="address-bar">
+        <div className="navigation-buttons">
+          <Tooltip label="Back"><Button className="command-button" size="icon" variant="ghost" aria-label="Back" disabled={!previewPath && navigation.cursor === 0} onClick={() => moveHistory(-1)}><ArrowLeft className="size-4" /></Button></Tooltip>
+          <Tooltip label="Forward"><Button className="command-button" size="icon" variant="ghost" aria-label="Forward" disabled={navigation.cursor >= navigation.paths.length - 1} onClick={() => moveHistory(1)}><ArrowRight className="size-4" /></Button></Tooltip>
+          <Tooltip label="Up"><Button className="command-button" size="icon" variant="ghost" aria-label="Up" disabled={!listing?.parentPath && directoryPath === ''} onClick={() => navigate(listing?.parentPath ?? '')}><ArrowUp className="size-4" /></Button></Tooltip>
         </div>
-      )}
-
-      <main className="min-h-0 flex-1 bg-feed">
-        {loading && !listing && <CenteredState icon={<LoaderCircle className="size-5 animate-spin" />} label="Loading directory" />}
-        {!loading && visibleError && !listing && <CenteredState icon={<FolderOpen className="size-6" />} label="Directory unavailable" />}
-        {listing && entries.length === 0 && !loading && <CenteredState icon={<FolderOpen className="size-7" />} label="This directory is empty" />}
-        {listing && entries.length > 0 && (
-          <FileBrowser
-            entries={entries}
-            viewMode={viewMode}
-            sortKey={sortKey}
-            direction={sortDirection}
-            onSort={changeSort}
-            onOpenDirectory={entry => entry.path && navigate(entry.path)}
-            onOpenFile={openPreview}
+        <Breadcrumb path={listing?.path ?? directoryPath} rootName={listing?.rootName ?? 'Root'} onNavigate={navigate} />
+        <label className="search-box">
+          <Search className="size-3.5 shrink-0 text-muted-foreground" />
+          <input
+            aria-label="Search current folder"
+            value={query}
+            placeholder={`Search ${directoryPath.split('/').at(-1) || listing?.rootName || 'folder'}`}
+            onChange={(event) => {
+              setQuery(event.target.value)
+              setSelection({ paths: [] })
+            }}
           />
-        )}
-      </main>
+          {query && <button type="button" aria-label="Clear search" onClick={() => setQuery('')}><X className="size-3.5" /></button>}
+        </label>
+      </div>
 
-      <footer className="flex h-7 shrink-0 items-center border-t border-border bg-background px-3 text-[11px] text-muted-foreground">
-        <span>{`${listing?.entries.length ?? 0} items`}</span>
+      <div role="toolbar" aria-label="File commands" className="command-bar">
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          className="hidden"
+          onChange={(event) => {
+            void enqueueUploads(Array.from(event.currentTarget.files ?? []))
+            event.currentTarget.value = ''
+          }}
+        />
+        {managementEnabled && <IconCommand icon={<FolderPlus />} label="New folder" disabled={operationBusy} onClick={startCreateFolder} />}
+        {managementEnabled && <IconCommand icon={<Upload />} label="Upload" disabled={uploadActive} onClick={() => fileInputRef.current?.click()} />}
+        {managementEnabled && <span className="command-separator desktop-command" />}
+        {managementEnabled && (
+          <div className="desktop-command flex items-center gap-0.5">
+            <IconCommand icon={<Scissors />} label="Cut" disabled={selection.paths.length === 0} onClick={() => copySelection('move')} />
+            <IconCommand icon={<Copy />} label="Copy" disabled={selection.paths.length === 0} onClick={() => copySelection('copy')} />
+            <IconCommand icon={<ClipboardPaste />} label="Paste" disabled={!clipboard || operationBusy} onClick={() => void pasteClipboard()} />
+            <IconCommand icon={<Pencil />} label="Rename" disabled={selectedEntries.length !== 1 || operationBusy} onClick={() => selectedEntries[0] && startRename(selectedEntries[0])} />
+            <IconCommand icon={<Trash2 />} label="Delete" destructive disabled={selection.paths.length === 0 || operationBusy} onClick={() => requestDelete()} />
+          </div>
+        )}
+        {managementEnabled && <span className="command-separator desktop-command" />}
+        <div className="view-switch desktop-command">
+          <IconCommand icon={<List />} label="Details view" pressed={viewMode === 'list'} onClick={() => setViewMode('list')} />
+          <IconCommand icon={<Grid2X2 />} label="Grid view" pressed={viewMode === 'grid'} onClick={() => setViewMode('grid')} />
+        </div>
+        <IconCommand className="desktop-command" icon={<PanelRight />} label="Preview selected file" disabled={selectedEntries.length !== 1 || selectedEntries[0]?.kind !== 'file'} pressed={previewEntry !== undefined} onClick={() => selectedEntries[0] && openPreview(selectedEntries[0])} />
+        <IconCommand className="desktop-command" icon={<RefreshCw className={loading ? 'animate-spin' : ''} />} label="Refresh" disabled={loading} onClick={refresh} />
+        <MoreMenu
+          mobile={mobile}
+          managementEnabled={managementEnabled}
+          hasSelection={selection.paths.length > 0}
+          oneSelected={selectedEntries.length === 1}
+          canPaste={clipboard !== undefined}
+          sortKey={sortKey}
+          direction={sortDirection}
+          onCut={() => copySelection('move')}
+          onCopy={() => copySelection('copy')}
+          onPaste={() => void pasteClipboard()}
+          onRename={() => selectedEntries[0] && startRename(selectedEntries[0])}
+          onDelete={() => requestDelete()}
+          onList={() => setViewMode('list')}
+          onGrid={() => setViewMode('grid')}
+          onPreview={() => selectedEntries[0] && openPreview(selectedEntries[0])}
+          onRefresh={refresh}
+          onSort={chooseSort}
+          onDirection={setSortDirection}
+        />
+      </div>
+
+      {visibleError && <div role="alert" className="error-banner">{visibleError}</div>}
+
+      <div className="min-h-0 flex-1">
+        {mobile
+          ? fileArea
+          : (
+              <Group orientation="horizontal" className="h-full" key={previewEntry ? 'preview-open' : 'preview-closed'}>
+                <Panel id="navigation" defaultSize="220px" minSize="180px" maxSize="320px">{navigationPane}</Panel>
+                <Separator className="resize-handle"><span /></Separator>
+                <Panel id="files" minSize="360px">{fileArea}</Panel>
+                {previewEntry && (
+                  <>
+                    <Separator className="resize-handle"><span /></Separator>
+                    <Panel id="preview" defaultSize="360px" minSize="300px" maxSize="48%"><PreviewPane entry={previewEntry} onClose={closePreview} /></Panel>
+                  </>
+                )}
+              </Group>
+            )}
+      </div>
+
+      <footer className="status-bar">
+        <span>{`${listing?.entries.length ?? 0} ${(listing?.entries.length ?? 0) === 1 ? 'item' : 'items'}`}</span>
+        {selection.paths.length > 0 && <span>{`${selection.paths.length} selected`}</span>}
+        {query && <span>{`${entries.length} matches`}</span>}
         <span className="ml-auto truncate">{`/${listing?.path ?? directoryPath}`}</span>
       </footer>
 
-      <PreviewSheet entry={previewEntry} onClose={closePreview} />
-      <UploadQueue tasks={uploadTasks} active={uploadActive} onClear={() => setUploadTasks([])} />
+      <Sheet open={mobileNavigation} onOpenChange={setMobileNavigation}>
+        <SheetContent side="left" title="File navigation" description="Browse files and folders" className="mobile-sheet flex w-[min(88vw,340px)] flex-col pt-12">{navigationPane}</SheetContent>
+      </Sheet>
+      {mobile && <PreviewSheet entry={previewEntry} onClose={closePreview} />}
+      <RenameDialog
+        entry={renamingEntry}
+        busy={editingBusy}
+        serverError={editingError}
+        onOpenChange={open => !open && cancelEdit()}
+        onNameChange={() => setEditingError(undefined)}
+        onConfirm={name => void renameEntry(name)}
+      />
+      <DeleteDialog paths={selection.paths} open={deleteOpen} busy={operationBusy} onOpenChange={setDeleteOpen} onConfirm={() => void confirmDelete()} />
+      <ActivityCenter tasks={activities} onClear={() => setActivities([])} />
+      {toast && (
+        <div role="status" className="toast">
+          <span>{toast}</span>
+          <button type="button" aria-label="Dismiss" onClick={() => setToast(undefined)}><X className="size-3.5" /></button>
+        </div>
+      )}
       {dragging && (
-        <div className="pointer-events-none fixed inset-2 z-[80] flex items-center justify-center rounded-md border-2 border-dashed border-cyan-500 bg-cyan-50/95 text-sm font-semibold text-cyan-900 dark:bg-cyan-950/95 dark:text-cyan-100">
-          {`Drop files into /${listing?.path ?? ''}`}
+        <div className="drop-overlay">
+          <Upload className="size-6" />
+          <span>{`Drop files into /${listing?.path ?? ''}`}</span>
         </div>
       )}
     </div>
@@ -339,14 +809,17 @@ export function App(): React.JSX.Element {
 function Breadcrumb({ path, rootName, onNavigate }: { path: string, rootName: string, onNavigate: (path: string) => void }): React.JSX.Element {
   const segments = path.split('/').filter(Boolean)
   return (
-    <nav aria-label="Breadcrumb" className="flex h-10 shrink-0 items-center gap-1 overflow-x-auto border-b border-border bg-muted/40 px-3 text-xs">
-      <button type="button" className="shrink-0 font-medium hover:text-cyan-700 dark:hover:text-cyan-300" onClick={() => onNavigate('')}>{rootName}</button>
+    <nav aria-label="Breadcrumb" className="breadcrumb-box">
+      <button type="button" title={rootName} onClick={() => onNavigate('')}>
+        <HardDrive className="size-3.5 text-accent" />
+        <span className="truncate">{rootName}</span>
+      </button>
       {segments.map((segment, index) => {
         const segmentPath = segments.slice(0, index + 1).join('/')
         return (
-          <span key={segmentPath} className="flex shrink-0 items-center gap-1">
-            <span className="text-muted-foreground">/</span>
-            <button type="button" className="max-w-48 truncate font-medium hover:text-cyan-700 dark:hover:text-cyan-300" title={segment} onClick={() => onNavigate(segmentPath)}>{segment}</button>
+          <span key={segmentPath} className="breadcrumb-segment">
+            <ChevronRight className="size-3 text-muted-foreground" />
+            <button type="button" title={segment} onClick={() => onNavigate(segmentPath)}>{segment}</button>
           </span>
         )
       })}
@@ -354,9 +827,144 @@ function Breadcrumb({ path, rootName, onNavigate }: { path: string, rootName: st
   )
 }
 
+function IconCommand({ icon, label, disabled, destructive = false, pressed, className, onClick }: { icon: React.ReactElement, label: string, disabled?: boolean, destructive?: boolean, pressed?: boolean, className?: string, onClick: () => void }): React.JSX.Element {
+  return (
+    <Tooltip label={label}>
+      <Button aria-label={label} aria-pressed={pressed} className={cn('command-button', destructive && 'destructive', pressed && 'active', className)} size="icon" variant="ghost" disabled={disabled} onClick={onClick}>{icon}</Button>
+    </Tooltip>
+  )
+}
+
+function MoreMenu(props: {
+  mobile: boolean
+  managementEnabled: boolean
+  hasSelection: boolean
+  oneSelected: boolean
+  canPaste: boolean
+  sortKey: SortKey
+  direction: SortDirection
+  onCut: () => void
+  onCopy: () => void
+  onPaste: () => void
+  onRename: () => void
+  onDelete: () => void
+  onList: () => void
+  onGrid: () => void
+  onPreview: () => void
+  onRefresh: () => void
+  onSort: (key: SortKey) => void
+  onDirection: (direction: SortDirection) => void
+}): React.JSX.Element {
+  return (
+    <DropdownMenu.Root modal={false}>
+      <Tooltip label="More commands">
+        <DropdownMenu.Trigger asChild><Button className="command-more command-button ml-auto" size="icon" variant="ghost" aria-label="More commands"><MoreHorizontal /></Button></DropdownMenu.Trigger>
+      </Tooltip>
+      <DropdownMenu.Portal>
+        <DropdownMenu.Content className="menu-content" align="end" sideOffset={4}>
+          {props.mobile && props.managementEnabled && (
+            <DropdownMenu.Item className="menu-item" disabled={!props.hasSelection} onSelect={props.onCut}>
+              <Scissors />
+              <span>Cut</span>
+            </DropdownMenu.Item>
+          )}
+          {props.mobile && props.managementEnabled && (
+            <DropdownMenu.Item className="menu-item" disabled={!props.hasSelection} onSelect={props.onCopy}>
+              <Copy />
+              <span>Copy</span>
+            </DropdownMenu.Item>
+          )}
+          {props.mobile && props.managementEnabled && (
+            <DropdownMenu.Item className="menu-item" disabled={!props.canPaste} onSelect={props.onPaste}>
+              <ClipboardPaste />
+              <span>Paste</span>
+            </DropdownMenu.Item>
+          )}
+          {props.mobile && props.managementEnabled && (
+            <DropdownMenu.Item className="menu-item" disabled={!props.oneSelected} onSelect={props.onRename}>
+              <Pencil />
+              <span>Rename</span>
+            </DropdownMenu.Item>
+          )}
+          {props.mobile && props.managementEnabled && (
+            <DropdownMenu.Item className="menu-item destructive" disabled={!props.hasSelection} onSelect={props.onDelete}>
+              <Trash2 />
+              <span>Delete</span>
+            </DropdownMenu.Item>
+          )}
+          {props.mobile && props.managementEnabled && <DropdownMenu.Separator className="menu-separator" />}
+          {props.mobile && (
+            <DropdownMenu.Item className="menu-item" onSelect={props.onList}>
+              <List />
+              <span>Details view</span>
+            </DropdownMenu.Item>
+          )}
+          {props.mobile && (
+            <DropdownMenu.Item className="menu-item" onSelect={props.onGrid}>
+              <Grid2X2 />
+              <span>Grid view</span>
+            </DropdownMenu.Item>
+          )}
+          {props.mobile && (
+            <DropdownMenu.Item className="menu-item" disabled={!props.oneSelected} onSelect={props.onPreview}>
+              <PanelRight />
+              <span>Preview</span>
+            </DropdownMenu.Item>
+          )}
+          {props.mobile && <DropdownMenu.Separator className="menu-separator" />}
+          <SortSubmenu sortKey={props.sortKey} direction={props.direction} onSort={props.onSort} onDirection={props.onDirection} />
+          {props.mobile && <DropdownMenu.Separator className="menu-separator" />}
+          {props.mobile && (
+            <DropdownMenu.Item className="menu-item" onSelect={props.onRefresh}>
+              <RefreshCw />
+              <span>Refresh</span>
+            </DropdownMenu.Item>
+          )}
+        </DropdownMenu.Content>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Root>
+  )
+}
+
+function SortSubmenu({ sortKey, direction, onSort, onDirection }: {
+  sortKey: SortKey
+  direction: SortDirection
+  onSort: (key: SortKey) => void
+  onDirection: (direction: SortDirection) => void
+}): React.JSX.Element {
+  return (
+    <DropdownMenu.Sub>
+      <DropdownMenu.SubTrigger className="menu-item">
+        <ArrowUpDown />
+        <span>Sort by</span>
+        <ChevronRight className="menu-sub-chevron" />
+      </DropdownMenu.SubTrigger>
+      <DropdownMenu.Portal>
+        <DropdownMenu.SubContent className="menu-content" sideOffset={6} alignOffset={-4}>
+          <DropdownItem label="Name" checked={sortKey === 'name'} onSelect={() => onSort('name')} />
+          <DropdownItem label="Date modified" checked={sortKey === 'modified'} onSelect={() => onSort('modified')} />
+          <DropdownItem label="Size" checked={sortKey === 'size'} onSelect={() => onSort('size')} />
+          <DropdownMenu.Separator className="menu-separator" />
+          <DropdownItem label="Ascending" checked={direction === 'asc'} onSelect={() => onDirection('asc')} />
+          <DropdownItem label="Descending" checked={direction === 'desc'} onSelect={() => onDirection('desc')} />
+        </DropdownMenu.SubContent>
+      </DropdownMenu.Portal>
+    </DropdownMenu.Sub>
+  )
+}
+
+function DropdownItem({ label, checked, onSelect }: { label: string, checked: boolean, onSelect: () => void }): React.JSX.Element {
+  return (
+    <DropdownMenu.Item className="menu-item" onSelect={onSelect}>
+      <span className="menu-check">{checked ? '✓' : ''}</span>
+      <span>{label}</span>
+    </DropdownMenu.Item>
+  )
+}
+
 function CenteredState({ icon, label }: { icon: React.ReactNode, label: string }): React.JSX.Element {
   return (
-    <div className="flex h-full min-h-48 flex-col items-center justify-center gap-2 text-sm text-muted-foreground">
+    <div className="centered-state">
       {icon}
       <span>{label}</span>
     </div>

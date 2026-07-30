@@ -3,6 +3,8 @@ import type {
   ServeDirectoryEntry,
   ServeDirectoryListing,
   ServeFile,
+  ServeOperation,
+  ServeOperationItem,
   ServePreviewKind,
   ServeTextPreview,
   ServeUploadResult,
@@ -53,6 +55,76 @@ function uploadFilename(value: string): string {
   if (!filename || filename === '.' || filename === '..' || filename.includes('/') || filename.includes('\\') || filename.includes('\0'))
     throw new ServeWorkspaceError('INVALID_UPLOAD', 'Upload filename is invalid')
   return filename
+}
+
+function operationName(value: string): string {
+  if (!value.trim() || value === '.' || value === '..' || value.includes('/') || value.includes('\\') || value.includes('\0'))
+    throw new ServeWorkspaceError('INVALID_NAME', 'Entry name is invalid')
+  return value
+}
+
+function operationFailure(cause: unknown, paths: { sourcePath?: string, destinationPath?: string }): ServeOperationItem {
+  const error = cause instanceof ServeWorkspaceError
+    ? cause
+    : new ServeWorkspaceError('UNAVAILABLE', 'Filesystem operation failed')
+  return {
+    status: 'error',
+    ...paths,
+    error: { code: error.code, message: error.message },
+  }
+}
+
+async function operationDirectory(root: string, requestedPath: string): Promise<{ relativePath: string, resolved: string }> {
+  const relativePath = normalizedRelativePath(requestedPath)
+  const resolved = await resolvedInsideRoot(root, absolutePath(root, relativePath))
+  if (!(await fs.stat(resolved)).isDirectory())
+    throw new ServeWorkspaceError('NOT_DIRECTORY', 'Operation target is not a directory')
+  return { relativePath, resolved }
+}
+
+async function operationEntry(root: string, requestedPath: string): Promise<{ relativePath: string, name: string, resolved: string }> {
+  const relativePath = normalizedRelativePath(requestedPath)
+  if (!relativePath)
+    throw new ServeWorkspaceError('ROOT_IMMUTABLE', 'The served root cannot be changed')
+  const segments = relativePath.split('/')
+  const name = segments.pop()!
+  const parent = await operationDirectory(root, segments.join('/'))
+  const resolved = path.join(parent.resolved, name)
+  try {
+    await fs.lstat(resolved)
+  }
+  catch {
+    throw new ServeWorkspaceError('NOT_FOUND', 'Path does not exist')
+  }
+  return { relativePath, name, resolved }
+}
+
+async function requireMissing(candidate: string): Promise<void> {
+  try {
+    await fs.lstat(candidate)
+  }
+  catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === 'ENOENT')
+      return
+    throw cause
+  }
+  throw new ServeWorkspaceError('ALREADY_EXISTS', 'An entry with that name already exists')
+}
+
+async function collisionDestination(directory: string, filename: string): Promise<{ filename: string, resolved: string }> {
+  for (let index = 0; index <= 9999; index++) {
+    const candidateName = collisionFilename(filename, index)
+    const resolved = path.join(directory, candidateName)
+    try {
+      await fs.lstat(resolved)
+    }
+    catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT')
+        return { filename: candidateName, resolved }
+      throw cause
+    }
+  }
+  throw new ServeWorkspaceError('NAME_EXHAUSTED', 'Too many entries have the same name')
 }
 
 function collisionFilename(filename: string, index: number): string {
@@ -322,6 +394,145 @@ export async function createServeWorkspace(directory: string): Promise<ServeWork
           throw error
         throw new ServeWorkspaceError('UNAVAILABLE', error instanceof Error ? error.message : String(error))
       }
+    },
+    async applyOperation(operation: ServeOperation) {
+      if (operation.action === 'create-directory') {
+        let destinationPath: string | undefined
+        try {
+          const parent = await operationDirectory(root, operation.parentPath)
+          const name = operationName(operation.name)
+          destinationPath = [parent.relativePath, name].filter(Boolean).join('/')
+          try {
+            await fs.mkdir(path.join(parent.resolved, name))
+          }
+          catch (cause) {
+            if ((cause as NodeJS.ErrnoException).code === 'EEXIST')
+              throw new ServeWorkspaceError('ALREADY_EXISTS', 'An entry with that name already exists')
+            throw cause
+          }
+          return { action: operation.action, items: [{ status: 'ok' as const, destinationPath }] }
+        }
+        catch (cause) {
+          return { action: operation.action, items: [operationFailure(cause, { destinationPath })] }
+        }
+      }
+
+      if (operation.action === 'rename') {
+        let destinationPath: string | undefined
+        try {
+          const source = await operationEntry(root, operation.path)
+          const name = operationName(operation.newName)
+          const parentPath = source.relativePath.split('/').slice(0, -1).join('/')
+          destinationPath = [parentPath, name].filter(Boolean).join('/')
+          const destination = path.join(path.dirname(source.resolved), name)
+          await requireMissing(destination)
+          await fs.rename(source.resolved, destination)
+          return {
+            action: operation.action,
+            items: [{ status: 'ok' as const, sourcePath: source.relativePath, destinationPath }],
+          }
+        }
+        catch (cause) {
+          return {
+            action: operation.action,
+            items: [operationFailure(cause, { sourcePath: operation.path, destinationPath })],
+          }
+        }
+      }
+
+      if (operation.action === 'copy') {
+        let destination: Awaited<ReturnType<typeof operationDirectory>>
+        try {
+          destination = await operationDirectory(root, operation.destinationPath)
+        }
+        catch (cause) {
+          return {
+            action: operation.action,
+            items: operation.paths.map(sourcePath => operationFailure(cause, { sourcePath })),
+          }
+        }
+        const items: ServeOperationItem[] = []
+        for (const requestedPath of operation.paths) {
+          try {
+            const source = await operationEntry(root, requestedPath)
+            const sourceStat = await fs.lstat(source.resolved)
+            if (sourceStat.isDirectory()) {
+              const sourceDirectory = await fs.realpath(source.resolved)
+              if (isWithinRoot(sourceDirectory, destination.resolved))
+                throw new ServeWorkspaceError('INVALID_OPERATION', 'A directory cannot be copied into itself')
+            }
+            const target = await collisionDestination(destination.resolved, source.name)
+            await fs.cp(source.resolved, target.resolved, {
+              recursive: sourceStat.isDirectory(),
+              dereference: false,
+              errorOnExist: true,
+              force: false,
+            })
+            items.push({
+              status: 'ok',
+              sourcePath: source.relativePath,
+              destinationPath: [destination.relativePath, target.filename].filter(Boolean).join('/'),
+            })
+          }
+          catch (cause) {
+            items.push(operationFailure(cause, { sourcePath: requestedPath }))
+          }
+        }
+        return { action: operation.action, items }
+      }
+
+      if (operation.action === 'move') {
+        let destination: Awaited<ReturnType<typeof operationDirectory>>
+        try {
+          destination = await operationDirectory(root, operation.destinationPath)
+        }
+        catch (cause) {
+          return {
+            action: operation.action,
+            items: operation.paths.map(sourcePath => operationFailure(cause, { sourcePath })),
+          }
+        }
+        const items: ServeOperationItem[] = []
+        for (const requestedPath of operation.paths) {
+          let destinationPath: string | undefined
+          try {
+            const source = await operationEntry(root, requestedPath)
+            const sourceStat = await fs.lstat(source.resolved)
+            if (sourceStat.isDirectory()) {
+              const sourceDirectory = await fs.realpath(source.resolved)
+              if (isWithinRoot(sourceDirectory, destination.resolved))
+                throw new ServeWorkspaceError('INVALID_OPERATION', 'A directory cannot be moved into itself')
+            }
+            destinationPath = [destination.relativePath, source.name].filter(Boolean).join('/')
+            const target = path.join(destination.resolved, source.name)
+            await requireMissing(target)
+            await fs.rename(source.resolved, target)
+            items.push({ status: 'ok', sourcePath: source.relativePath, destinationPath })
+          }
+          catch (cause) {
+            items.push(operationFailure(cause, { sourcePath: requestedPath, destinationPath }))
+          }
+        }
+        return { action: operation.action, items }
+      }
+
+      if (operation.action === 'delete') {
+        const items: ServeOperationItem[] = []
+        for (const requestedPath of operation.paths) {
+          try {
+            const source = await operationEntry(root, requestedPath)
+            const sourceStat = await fs.lstat(source.resolved)
+            await fs.rm(source.resolved, { recursive: sourceStat.isDirectory(), force: false })
+            items.push({ status: 'ok', sourcePath: source.relativePath })
+          }
+          catch (cause) {
+            items.push(operationFailure(cause, { sourcePath: requestedPath }))
+          }
+        }
+        return { action: operation.action, items }
+      }
+
+      throw new ServeWorkspaceError('INVALID_OPERATION', 'Operation is not supported')
     },
   }
 }

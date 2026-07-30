@@ -11,4 +11,14 @@ describe('serve command registration', () => {
     expect(command.usage()).toBe('[options] [directory]')
     expect(command.description()).toContain('defaults to current directory')
   })
+
+  test('requires an explicit management flag for filesystem mutations', () => {
+    const program = new Command()
+    register(program)
+
+    const command = program.commands[0]!
+    expect(command.options.map(option => option.long)).toContain('--manage')
+    expect(command.options.map(option => option.long)).not.toContain('--upload')
+    expect(command.getOptionValue('manage')).toBe(false)
+  })
 })

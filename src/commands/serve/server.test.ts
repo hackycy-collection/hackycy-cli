@@ -14,12 +14,12 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
 })
 
-async function startFixtureServer(uploadEnabled = false): Promise<{ server: RunningServeServer, root: string }> {
+async function startFixtureServer(managementEnabled = false): Promise<{ server: RunningServeServer, root: string }> {
   const root = await mkdtemp(path.join(tmpdir(), 'ycy-serve-http-'))
   temporaryDirectories.push(root)
   await writeFile(path.join(root, 'hello.txt'), 'hello world')
   const workspace = await createServeWorkspace(root)
-  const server = startServeHttpServer({ workspace, address: '127.0.0.1', port: 0, uploadEnabled })
+  const server = startServeHttpServer({ workspace, address: '127.0.0.1', port: 0, managementEnabled })
   servers.push(server)
   return { server, root }
 }
@@ -35,7 +35,7 @@ describe('ServeHttpServer', () => {
       version: 1,
       rootName: path.basename(root),
       path: '',
-      uploadEnabled: false,
+      managementEnabled: false,
       maxUploadBytes: MAX_UPLOAD_BYTES,
       entries: [expect.objectContaining({ name: 'hello.txt', path: 'hello.txt' })],
     })
@@ -182,7 +182,7 @@ describe('ServeHttpServer', () => {
     })
 
     expect(disabled.status).toBe(403)
-    expect(await disabled.json()).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: 'UPLOAD_DISABLED' }) }))
+    expect(await disabled.json()).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: 'MANAGEMENT_DISABLED' }) }))
     expect(missingOrigin.status).toBe(403)
     expect(crossOrigin.status).toBe(403)
     expect(unsupportedMediaType.status).toBe(415)
@@ -197,6 +197,44 @@ describe('ServeHttpServer', () => {
     })
     const listing = await fetch(new URL('/api/directory?path=', enabledFixture.server.url)).then(response => response.json())
     expect(listing.entries).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'notes.txt' })]))
+  })
+
+  test('applies validated filesystem operations only in same-origin management mode', async () => {
+    const disabledFixture = await startFixtureServer(false)
+    const enabledFixture = await startFixtureServer(true)
+    const request = (server: RunningServeServer, body: unknown, origin = server.url.origin): Promise<Response> => fetch(new URL('/api/operations', server.url), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Origin': origin },
+      body: JSON.stringify(body),
+    })
+
+    const disabled = await request(disabledFixture.server, { action: 'delete', paths: ['hello.txt'] })
+    const crossOrigin = await request(enabledFixture.server, { action: 'delete', paths: ['hello.txt'] }, 'https://attacker.example')
+    const invalid = await request(enabledFixture.server, { action: 'copy', paths: [], destinationPath: '' })
+    const unsupportedAction = await request(enabledFixture.server, { action: 'archive', paths: ['hello.txt'] })
+    const created = await request(enabledFixture.server, { action: 'create-directory', parentPath: '', name: 'projects' })
+    const deleted = await request(enabledFixture.server, { action: 'delete', paths: ['hello.txt', 'missing.txt'] })
+
+    expect(disabled.status).toBe(403)
+    expect(await disabled.json()).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: 'MANAGEMENT_DISABLED' }) }))
+    expect(crossOrigin.status).toBe(403)
+    expect(invalid.status).toBe(400)
+    expect(await invalid.json()).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: 'INVALID_OPERATION' }) }))
+    expect(unsupportedAction.status).toBe(400)
+    expect(await unsupportedAction.json()).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: 'INVALID_OPERATION' }) }))
+    expect(await created.json()).toEqual({
+      version: 1,
+      action: 'create-directory',
+      items: [{ status: 'ok', destinationPath: 'projects' }],
+    })
+    expect(await deleted.json()).toEqual({
+      version: 1,
+      action: 'delete',
+      items: [
+        { status: 'ok', sourcePath: 'hello.txt' },
+        { status: 'error', sourcePath: 'missing.txt', error: { code: 'NOT_FOUND', message: 'Path does not exist' } },
+      ],
+    })
   })
 
   test('serves the embedded React shell for root and browser routes only', async () => {

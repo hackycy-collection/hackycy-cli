@@ -2,7 +2,7 @@ export interface ServeOptions {
   directory: string
   port: number
   address: string
-  upload: boolean
+  manage: boolean
 }
 
 export type ServeEntryKind = 'directory' | 'file' | 'unavailable'
@@ -48,22 +48,52 @@ export interface ServeUploadResult {
   size: number
 }
 
+export type ServeOperation
+  = | { action: 'create-directory', parentPath: string, name: string }
+    | { action: 'rename', path: string, newName: string }
+    | { action: 'copy', paths: string[], destinationPath: string }
+    | { action: 'move', paths: string[], destinationPath: string }
+    | { action: 'delete', paths: string[] }
+
+export type ServeOperationItem
+  = | {
+    status: 'ok'
+    sourcePath?: string
+    destinationPath?: string
+  }
+  | {
+    status: 'error'
+    sourcePath?: string
+    destinationPath?: string
+    error: { code: ServeErrorCode, message: string }
+  }
+
+export interface ServeOperationResult {
+  action: ServeOperation['action']
+  items: ServeOperationItem[]
+}
+
 export interface ServeWorkspace {
   listDirectory: (relativePath: string) => Promise<ServeDirectoryListing>
   openFile: (relativePath: string) => Promise<ServeFile>
   readTextPreview: (relativePath: string) => Promise<ServeTextPreview>
   uploadFile: (directoryPath: string, file: File) => Promise<ServeUploadResult>
+  applyOperation: (operation: ServeOperation) => Promise<ServeOperationResult>
 }
 
 export type ServeErrorCode
   = | 'INVALID_PATH'
     | 'INVALID_UPLOAD'
+    | 'INVALID_NAME'
+    | 'INVALID_OPERATION'
     | 'PATH_FORBIDDEN'
     | 'NOT_FOUND'
     | 'NOT_DIRECTORY'
     | 'NOT_FILE'
     | 'TOO_LARGE'
     | 'NAME_EXHAUSTED'
+    | 'ALREADY_EXISTS'
+    | 'ROOT_IMMUTABLE'
     | 'UNAVAILABLE'
 
 export class ServeWorkspaceError extends Error {

@@ -10,10 +10,10 @@ ycy serve [options] [directory]
 Options:
   -p, --port <number>       Port to serve on (default: 1204)
   -a, --address <string>    Address to bind to (default: 0.0.0.0)
-  -u, --upload              Enable file uploads
+  -m, --manage              Enable uploads and filesystem management
 ```
 
-The directory defaults to the current working directory. The default binding is available to the local network; use `--address 127.0.0.1` for local-only access. Upload mode has no authentication and must be used only with a trusted directory and network.
+The directory defaults to the current working directory. The default binding is available to the local network; use `--address 127.0.0.1` for local-only access. Management mode has no authentication and allows upload, copy, move, rename, and permanent deletion. Use it only with a trusted directory and network.
 
 ## Architecture
 
@@ -38,26 +38,32 @@ CLI registration (index.ts)
 | `GET /`, `GET /browse/*` | Embedded React application and browser history fallback. |
 | `GET /api/directory?path=` | Current directory metadata and entries. |
 | `GET /api/text?path=` | UTF-8 or BOM-marked UTF-16 text up to 2 MiB. |
-| `POST /api/upload?path=` | One multipart file per request when `--upload` is enabled. |
+| `POST /api/upload?path=` | One multipart file per request when `--manage` is enabled. |
+| `POST /api/operations` | Validated create-directory, rename, copy, move, and permanent-delete commands in management mode. |
 | `GET\|HEAD /files/*` | Original file bytes; `?download=1` forces attachment. |
 
 The former direct file URL shape is intentionally not retained. A served path such as `docs/readme.txt` is available at `/files/docs/readme.txt`; `/browse/docs` is the browser route.
 
 Errors use `{ version: 1, error: { code, message } }`. Directory and text responses are not cacheable. Original files support ETag, Last-Modified, HEAD, and one byte range. Only `/files/*` enables wildcard CORS.
 
-## Filesystem And Upload Invariants
+## Filesystem And Management Invariants
 
 - The root is resolved once at startup. Absolute paths, backslashes, dot segments, malformed URL encoding, and paths whose real target escapes the root are rejected.
 - Internal symlinks may be followed. Escaping, unreadable, or unsupported entries are listed as unavailable without exposing their targets.
 - Text preview checks the 2 MiB size limit before reading and treats invalid supported encodings as binary.
 - Each upload is capped at 1 GiB, written to a temporary file in the destination directory, then published atomically with a hard link.
 - Existing names are never overwritten. Collisions receive `name (1).ext` through `name (9999).ext`.
-- Upload requests require an exact same Origin and a hostname permitted by the active binding.
+- The served root cannot be renamed, moved, copied, or deleted. Directories cannot be copied or moved into themselves.
+- Rename and move reject collisions. Copy and upload choose collision-safe numbered names. Recursive copy does not dereference symbolic links.
+- Delete is permanent and operates on the final directory entry itself, so deleting a symbolic link never deletes its target.
+- All management requests require an exact same Origin and a hostname permitted by the active binding. Batch operations accept at most 1000 paths and report partial results per item.
 
 ## Web Application Invariants
 
 - Directory URLs use `/browse/<encoded-path>` and browser History; preview selection uses the `preview` query parameter.
-- List and grid views virtualize rows with `@tanstack/react-virtual`. Directories remain ahead of files for every sort.
+- List and grid views virtualize rows with `@tanstack/react-virtual`. Directories remain ahead of files for every sort. Search filters only the loaded directory.
+- Selection follows desktop file-manager conventions: click selects, Ctrl/Cmd toggles, Shift selects a range, and double-click or Enter opens an entry.
+- Cut, copy, and paste use an in-memory browser clipboard. It survives directory navigation but not a page reload and never reads or writes the system clipboard.
 - Images, audio, video, and PDF use browser-native presentation. Text is rendered as escaped content; HTML and XML are never executed in the preview.
 - Theme, view mode, sort key, and direction may be stored locally. Paths and file contents are not persisted.
 - Multi-file upload runs at most three requests concurrently and refreshes the current listing when the queue settles.

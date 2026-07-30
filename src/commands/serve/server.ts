@@ -1,5 +1,6 @@
 import type { ServeErrorCode, ServeWorkspace } from './types'
 import { isIP } from 'node:net'
+import { z } from 'zod'
 import { ServeWorkspaceError } from './types'
 import serveWebApp from './web/index.html'
 import { MAX_UPLOAD_BYTES } from './workspace'
@@ -20,6 +21,16 @@ const API_HEADERS = {
 const APP_CONTENT_SECURITY_POLICY = 'default-src \'self\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\'; img-src \'self\' blob: data:; media-src \'self\'; frame-src \'self\'; connect-src \'self\'; object-src \'none\'; base-uri \'none\'; frame-ancestors \'none\''
 const ACTIVE_FILE_CONTENT_SECURITY_POLICY = 'sandbox; default-src \'none\'; style-src \'unsafe-inline\'; img-src data:; object-src \'none\'; base-uri \'none\'; frame-ancestors \'none\''
 
+const operationPathSchema = z.string().max(4096)
+const operationPathsSchema = z.array(operationPathSchema).min(1).max(1000)
+const operationSchema = z.discriminatedUnion('action', [
+  z.object({ action: z.literal('create-directory'), parentPath: operationPathSchema, name: z.string().max(4096) }).strict(),
+  z.object({ action: z.literal('rename'), path: operationPathSchema, newName: z.string().max(4096) }).strict(),
+  z.object({ action: z.literal('copy'), paths: operationPathsSchema, destinationPath: operationPathSchema }).strict(),
+  z.object({ action: z.literal('move'), paths: operationPathsSchema, destinationPath: operationPathSchema }).strict(),
+  z.object({ action: z.literal('delete'), paths: operationPathsSchema }).strict(),
+])
+
 function configureWebBundleHeaders(bundle: Bun.HTMLBundle): void {
   for (const file of bundle.files ?? []) {
     file.headers['referrer-policy'] = 'no-referrer'
@@ -37,12 +48,16 @@ function configureWebBundleHeaders(bundle: Bun.HTMLBundle): void {
 const ERROR_STATUS: Record<ServeErrorCode, number> = {
   INVALID_PATH: 400,
   INVALID_UPLOAD: 400,
+  INVALID_NAME: 400,
+  INVALID_OPERATION: 409,
   PATH_FORBIDDEN: 403,
   NOT_FOUND: 404,
   NOT_DIRECTORY: 409,
   NOT_FILE: 409,
   TOO_LARGE: 413,
   NAME_EXHAUSTED: 409,
+  ALREADY_EXISTS: 409,
+  ROOT_IMMUTABLE: 409,
   UNAVAILABLE: 500,
 }
 
@@ -78,7 +93,7 @@ function validateMutationOrigin(request: Request, bindingAddress: string): Respo
   const requestUrl = new URL(request.url)
   const origin = request.headers.get('Origin')
   if (!origin || origin !== requestUrl.origin || !bindingAllowsHostname(bindingAddress, requestUrl.hostname))
-    return error('ORIGIN_FORBIDDEN', 'Upload requests must come from the bound same origin', 403)
+    return error('ORIGIN_FORBIDDEN', 'Management requests must come from the bound same origin', 403)
   return undefined
 }
 
@@ -252,7 +267,7 @@ export function startServeHttpServer(options: {
   workspace: ServeWorkspace
   address: string
   port: number
-  uploadEnabled: boolean
+  managementEnabled: boolean
 }): RunningServeServer {
   configureWebBundleHeaders(serveWebApp)
   // Bun accepts an HTMLBundle for a method route, though its ambient type only lists it for whole-route values.
@@ -289,7 +304,7 @@ export function startServeHttpServer(options: {
           return json({
             version: 1,
             ...listing,
-            uploadEnabled: options.uploadEnabled,
+            managementEnabled: options.managementEnabled,
             maxUploadBytes: MAX_UPLOAD_BYTES,
           })
         }
@@ -315,8 +330,8 @@ export function startServeHttpServer(options: {
         const invalidMethod = requireMethod(request, 'POST')
         if (invalidMethod)
           return invalidMethod
-        if (!options.uploadEnabled)
-          return error('UPLOAD_DISABLED', 'Start serve with --upload to enable uploads', 403)
+        if (!options.managementEnabled)
+          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable filesystem management', 403)
         const invalidOrigin = validateMutationOrigin(request, options.address)
         if (invalidOrigin)
           return invalidOrigin
@@ -340,6 +355,32 @@ export function startServeHttpServer(options: {
         catch (cause) {
           return workspaceError(cause)
         }
+      }
+      if (url.pathname === '/api/operations') {
+        const invalidMethod = requireMethod(request, 'POST')
+        if (invalidMethod)
+          return invalidMethod
+        if (!options.managementEnabled)
+          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable filesystem management', 403)
+        const invalidOrigin = validateMutationOrigin(request, options.address)
+        if (invalidOrigin)
+          return invalidOrigin
+        if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
+          return error('UNSUPPORTED_MEDIA_TYPE', 'Filesystem operations must use JSON', 415)
+        let body: unknown
+        try {
+          body = await request.json()
+        }
+        catch {
+          return error('INVALID_OPERATION', 'Request body must be valid JSON', 400)
+        }
+        const operation = operationSchema.safeParse(body)
+        if (!operation.success)
+          return error('INVALID_OPERATION', 'Filesystem operation is invalid', 400)
+        return json({
+          version: 1,
+          ...await options.workspace.applyOperation(operation.data),
+        })
       }
       if (url.pathname === '/files' || url.pathname.startsWith('/files/'))
         return serveOriginalFile(request, options.workspace)
