@@ -6,6 +6,7 @@ import type {
   ServeOperation,
   ServeOperationItem,
   ServePreviewKind,
+  ServeStreamWriteOptions,
   ServeTextPreview,
   ServeUploadResult,
   ServeWorkspace,
@@ -26,6 +27,7 @@ const IMAGE_MIME_TYPES = new Map([
 ])
 
 const THUMBNAIL_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.webp'])
+const DOWNLOAD_TEMPORARY_NAME = /^\.download-[0-9a-f-]{36}\.tmp$/i
 
 export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
 export const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
@@ -137,6 +139,33 @@ function collisionFilename(filename: string, index: number): string {
   const base = lastDot > 0 ? filename.slice(0, lastDot) : filename
   const extension = lastDot > 0 ? filename.slice(lastDot) : ''
   return `${base} (${index})${extension}`
+}
+
+async function publishTemporaryFile(
+  directory: string,
+  directoryPath: string,
+  filename: string,
+  temporaryPath: string,
+  size: number,
+): Promise<ServeUploadResult> {
+  for (let index = 0; index <= 9999; index++) {
+    const finalFilename = collisionFilename(filename, index)
+    const finalPath = path.join(directory, finalFilename)
+    try {
+      await fs.link(temporaryPath, finalPath)
+      await fs.unlink(temporaryPath)
+      return {
+        filename: finalFilename,
+        path: [directoryPath, finalFilename].filter(Boolean).join('/'),
+        size,
+      }
+    }
+    catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== 'EEXIST')
+        throw error
+    }
+  }
+  throw new ServeWorkspaceError('NAME_EXHAUSTED', 'Too many files have the same name')
 }
 
 function syntaxLanguage(filename: string): string | undefined {
@@ -299,7 +328,7 @@ export async function createServeWorkspace(directory: string): Promise<ServeWork
 
       let names: string[]
       try {
-        names = await fs.readdir(resolved)
+        names = (await fs.readdir(resolved)).filter(name => !DOWNLOAD_TEMPORARY_NAME.test(name))
       }
       catch {
         throw new ServeWorkspaceError('UNAVAILABLE', 'Directory cannot be read')
@@ -391,30 +420,64 @@ export async function createServeWorkspace(directory: string): Promise<ServeWork
       const temporaryPath = path.join(directory, `.upload-${crypto.randomUUID()}.tmp`)
       try {
         await Bun.write(temporaryPath, file)
-        for (let index = 0; index <= 9999; index++) {
-          const finalFilename = collisionFilename(filename, index)
-          const finalPath = path.join(directory, finalFilename)
-          try {
-            await fs.link(temporaryPath, finalPath)
-            await fs.unlink(temporaryPath)
-            return {
-              filename: finalFilename,
-              path: [directoryPath, finalFilename].filter(Boolean).join('/'),
-              size: file.size,
-            }
-          }
-          catch (error) {
-            if ((error as NodeJS.ErrnoException).code !== 'EEXIST')
-              throw error
-          }
-        }
-        throw new ServeWorkspaceError('NAME_EXHAUSTED', 'Too many files have the same name')
+        return await publishTemporaryFile(directory, directoryPath, filename, temporaryPath, file.size)
       }
       catch (error) {
         await fs.unlink(temporaryPath).catch(() => {})
         if (error instanceof ServeWorkspaceError)
           throw error
         throw new ServeWorkspaceError('UNAVAILABLE', error instanceof Error ? error.message : String(error))
+      }
+    },
+    async writeFileStream(requestedDirectory, requestedFilename, stream, options: ServeStreamWriteOptions = {}): Promise<ServeUploadResult> {
+      const filename = uploadFilename(requestedFilename)
+      const directoryPath = normalizedRelativePath(requestedDirectory)
+      const directory = await resolvedInsideRoot(root, absolutePath(root, directoryPath))
+      const directoryStat = await fs.stat(directory)
+      if (!directoryStat.isDirectory())
+        throw new ServeWorkspaceError('NOT_DIRECTORY', 'Download target is not a directory')
+
+      const temporaryPath = path.join(directory, `.download-${crypto.randomUUID()}.tmp`)
+      const reader = stream.getReader()
+      const onAbort = (): void => {
+        void reader.cancel(options.signal?.reason).catch(() => {})
+      }
+      options.signal?.addEventListener('abort', onAbort, { once: true })
+      let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+      let size = 0
+      try {
+        handle = await fs.open(temporaryPath, 'w')
+        while (true) {
+          options.signal?.throwIfAborted()
+          const chunk = await reader.read()
+          if (chunk.done)
+            break
+          if (!(chunk.value instanceof Uint8Array))
+            throw new ServeWorkspaceError('UNAVAILABLE', 'Download response contained invalid data')
+          let offset = 0
+          while (offset < chunk.value.byteLength) {
+            const result = await handle.write(chunk.value, { offset })
+            if (result.bytesWritten <= 0)
+              throw new ServeWorkspaceError('UNAVAILABLE', 'Download could not be written')
+            offset += result.bytesWritten
+          }
+          size += chunk.value.byteLength
+          options.onProgress?.(size)
+        }
+        options.signal?.throwIfAborted()
+        await handle.close()
+        handle = undefined
+        return await publishTemporaryFile(directory, directoryPath, filename, temporaryPath, size)
+      }
+      catch (error) {
+        await reader.cancel(error).catch(() => {})
+        await handle?.close().catch(() => {})
+        await fs.unlink(temporaryPath).catch(() => {})
+        throw error
+      }
+      finally {
+        options.signal?.removeEventListener('abort', onAbort)
+        reader.releaseLock()
       }
     },
     async applyOperation(operation: ServeOperation) {

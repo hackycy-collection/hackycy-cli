@@ -67,7 +67,7 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
 
   if (options.manage && !['127.0.0.1', '::1', 'localhost'].includes(options.address)) {
     note(
-      ansis.yellow('Anyone who can reach this server can upload, move, and permanently delete files in the served directory.'),
+      ansis.yellow('Anyone who can reach this server can upload, remotely download, move, and permanently delete files in the served directory.'),
       'Trusted networks only',
     )
   }

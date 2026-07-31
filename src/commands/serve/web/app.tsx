@@ -1,5 +1,5 @@
 import type { Layout, LayoutChangedMeta } from 'react-resizable-panels'
-import type { DirectoryEntry, DirectoryListing, OperationCommand, OperationResult } from './api'
+import type { DirectoryEntry, DirectoryListing, DownloadList, DownloadTask, OperationCommand, OperationResult } from './api'
 import type { ExplorerClipboard, ExplorerSelection, NavigationHistory } from './explorer-state'
 import type { ActivityTask, SortDirection, SortKey, ViewMode } from './types'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
@@ -11,6 +11,7 @@ import {
   ChevronRight,
   ClipboardPaste,
   Copy,
+  Download,
   FolderOpen,
   FolderPlus,
   Grid2X2,
@@ -37,9 +38,10 @@ import { Button } from '../../../shared/web/components/ui/button'
 import { Sheet, SheetContent } from '../../../shared/web/components/ui/sheet'
 import { Tooltip } from '../../../shared/web/components/ui/tooltip'
 import { cn } from '../../../shared/web/lib/utils'
-import { apiJson, applyOperation, uploadFile } from './api'
+import { apiJson, applyOperation, cancelDownload, clearDownloads as clearServerDownloads, createDownload, retryDownload, uploadFile } from './api'
 import { ActivityCenter } from './components/activity-center'
 import { DeleteDialog } from './components/delete-dialog'
+import { DownloadDialog } from './components/download-dialog'
 import { FileBrowser } from './components/file-browser'
 import { NavigationPane } from './components/navigation-pane'
 import { PreviewPane, PreviewSheet } from './components/preview-sheet'
@@ -150,6 +152,10 @@ export function App(): React.JSX.Element {
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [operationBusy, setOperationBusy] = useState(false)
   const [activities, setActivities] = useState<ActivityTask[]>([])
+  const [downloadTasks, setDownloadTasks] = useState<DownloadTask[]>([])
+  const [downloadDialogOpen, setDownloadDialogOpen] = useState(false)
+  const [downloadBusy, setDownloadBusy] = useState(false)
+  const [downloadError, setDownloadError] = useState<string>()
   const [uploadActive, setUploadActive] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [mobileNavigation, setMobileNavigation] = useState(false)
@@ -229,6 +235,48 @@ export function App(): React.JSX.Element {
       })
     return () => controller.abort()
   }, [directoryPath, reloadVersion])
+
+  useEffect(() => {
+    if (!listing?.managementEnabled) {
+      setDownloadTasks([])
+      return
+    }
+    let active = true
+    let events: EventSource | undefined
+    const applyDownloadTasks = (body: DownloadList): void => {
+      setDownloadTasks((current) => {
+        const previous = new Map(current.map(task => [task.id, task]))
+        if (body.tasks.some(task => task.status === 'done' && previous.get(task.id)?.status !== 'done' && task.directoryPath === directoryPath))
+          setReloadVersion(version => version + 1)
+        return body.tasks
+      })
+    }
+    void apiJson<DownloadList>('/api/downloads')
+      .then((body) => {
+        if (!active)
+          return
+        applyDownloadTasks(body)
+        events = new EventSource('/api/downloads/events')
+        events.onmessage = (event) => {
+          if (!active)
+            return
+          try {
+            applyDownloadTasks(JSON.parse(event.data) as DownloadList)
+          }
+          catch {
+            setDownloadError('Download progress update was invalid')
+          }
+        }
+      })
+      .catch((cause) => {
+        if (active)
+          setDownloadError(cause instanceof Error ? cause.message : String(cause))
+      })
+    return () => {
+      active = false
+      events?.close()
+    }
+  }, [directoryPath, listing?.managementEnabled])
 
   useEffect(() => {
     if (!toast)
@@ -327,6 +375,60 @@ export function App(): React.JSX.Element {
 
   const updateActivity = (id: string, update: Partial<ActivityTask>): void => {
     setActivities(current => current.map(task => task.id === id ? { ...task, ...update } : task))
+  }
+
+  const upsertDownloadTask = (task: DownloadTask): void => {
+    setDownloadTasks(current => current.some(item => item.id === task.id)
+      ? current.map(item => item.id === task.id ? task : item)
+      : [task, ...current])
+  }
+
+  const submitDownload = async (url: string, filename: string): Promise<void> => {
+    setDownloadBusy(true)
+    setDownloadError(undefined)
+    try {
+      const response = await createDownload(url, directoryPath, filename || undefined)
+      upsertDownloadTask(response.task)
+      setDownloadDialogOpen(false)
+    }
+    catch (cause) {
+      setDownloadError(cause instanceof Error ? cause.message : String(cause))
+    }
+    finally {
+      setDownloadBusy(false)
+    }
+  }
+
+  const stopDownload = async (id: string): Promise<void> => {
+    try {
+      const response = await cancelDownload(id)
+      upsertDownloadTask(response.task)
+    }
+    catch (cause) {
+      setToast(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  const retryRemoteDownload = async (id: string): Promise<void> => {
+    try {
+      const response = await retryDownload(id)
+      upsertDownloadTask(response.task)
+    }
+    catch (cause) {
+      setToast(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  const clearRemoteDownloads = async (): Promise<void> => {
+    if (downloadTasks.some(task => task.status === 'queued' || task.status === 'running'))
+      return
+    try {
+      await clearServerDownloads()
+      setDownloadTasks([])
+    }
+    catch (cause) {
+      setToast(cause instanceof Error ? cause.message : String(cause))
+    }
   }
 
   const runOperation = useCallback(async (label: string, command: OperationCommand): Promise<OperationResult | undefined> => {
@@ -742,6 +844,16 @@ export function App(): React.JSX.Element {
         />
         {managementEnabled && <IconCommand icon={<FolderPlus />} label="New folder" disabled={operationBusy} onClick={startCreateFolder} />}
         {managementEnabled && <IconCommand icon={<Upload />} label="Upload" disabled={uploadActive} onClick={() => fileInputRef.current?.click()} />}
+        {managementEnabled && (
+          <IconCommand
+            icon={<Download />}
+            label="Download from URL"
+            onClick={() => {
+              setDownloadError(undefined)
+              setDownloadDialogOpen(true)
+            }}
+          />
+        )}
         {managementEnabled && <span className="command-separator desktop-command" />}
         {managementEnabled && (
           <div className="desktop-command flex items-center gap-0.5">
@@ -843,8 +955,28 @@ export function App(): React.JSX.Element {
         onNameChange={() => setEditingError(undefined)}
         onConfirm={name => void renameEntry(name)}
       />
+      <DownloadDialog
+        open={downloadDialogOpen}
+        directoryPath={directoryPath}
+        busy={downloadBusy}
+        serverError={downloadError}
+        onOpenChange={(open) => {
+          setDownloadDialogOpen(open)
+          if (!open)
+            setDownloadError(undefined)
+        }}
+        onInputChange={() => setDownloadError(undefined)}
+        onSubmit={(url, filename) => void submitDownload(url, filename)}
+      />
       <DeleteDialog paths={selection.paths} open={deleteOpen} busy={operationBusy} onOpenChange={setDeleteOpen} onConfirm={() => void confirmDelete()} />
-      <ActivityCenter tasks={activities} onClear={() => setActivities([])} />
+      <ActivityCenter
+        tasks={activities}
+        downloads={downloadTasks}
+        onClear={() => setActivities([])}
+        onCancelDownload={id => void stopDownload(id)}
+        onRetryDownload={id => void retryRemoteDownload(id)}
+        onClearDownloads={() => void clearRemoteDownloads()}
+      />
       {toast && (
         <div role="status" className="toast">
           <span>{toast}</span>

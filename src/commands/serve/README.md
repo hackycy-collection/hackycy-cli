@@ -10,7 +10,7 @@ ycy serve [options] [directory]
 Options:
   -p, --port <number>       Port to serve on (default: 1204)
   -a, --address <string>    Address to bind to (default: 0.0.0.0)
-  -m, --manage              Enable uploads and filesystem management
+  -m, --manage              Enable uploads, remote downloads, and filesystem management
 ```
 
 The directory defaults to the current working directory. The default binding is available to the local network; use `--address 127.0.0.1` for local-only access. Management mode has no authentication and allows upload, copy, move, rename, and permanent deletion. Use it only with a trusted directory and network.
@@ -23,12 +23,14 @@ CLI registration (index.ts)
      -> ServeWorkspace (workspace.ts)
      -> ServeHttpServer (server.ts)
         -> JSON and file HTTP adapter
+        -> RemoteDownloadManager with a bounded process-local queue
         -> ThumbnailService and two persistent conversion workers
         -> embedded React application (web/)
 ```
 
 - `workspace.ts` owns root confinement, symlink policy, metadata, text decoding, and atomic upload naming. Callers pass only POSIX relative paths.
 - `server.ts` maps workspace results to HTTP, validates methods and mutation origins, implements cache and Range semantics, and serves the embedded HTML bundle.
+- `download-service.ts` validates remote HTTP(S) targets, blocks literal private and reserved IP addresses, follows validated redirects, and owns the bounded process-local download queue.
 - `thumbnail-service.ts` owns input limits, request coalescing, the bounded worker queue, and the session-only LRU. `thumbnail-worker.ts` performs WASM decoding and WebP conversion off the HTTP thread.
 - `web/` owns directory History navigation, sorting, virtualization, preview state, theme, one syntax-highlighting worker, and the three-worker upload queue. It never constructs absolute filesystem paths.
 - Shared Radix/Tailwind primitives live under `src/shared/web` and are consumed by both `serve` and `diff`.
@@ -42,6 +44,10 @@ CLI registration (index.ts)
 | `GET /api/text?path=` | UTF-8 or BOM-marked UTF-16 text up to 2 MiB. |
 | `POST /api/upload?path=` | One multipart file per request when `--manage` is enabled. |
 | `POST /api/operations` | Validated create-directory, rename, copy, move, and permanent-delete commands in management mode. |
+| `GET\|POST\|DELETE /api/downloads` | List, create, or clear terminal remote-download tasks in management mode. |
+| `GET /api/downloads/events` | Server-sent task snapshots for remote-download progress. |
+| `POST /api/downloads/:id/cancel` | Cancel one queued or active remote download. |
+| `POST /api/downloads/:id/retry` | Retry one failed or cancelled remote download as a new task. |
 | `GET\|HEAD /files/*` | Original file bytes; `?download=1` forces attachment. |
 | `GET\|HEAD /thumbnails/*` | 160×160 WebP thumbnail for JPEG, PNG, WebP, AVIF, or GIF input. |
 
@@ -58,6 +64,10 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 - Thumbnail conversion uses two persistent workers, at most 128 queued tasks, a five-second task timeout, and replacement of a timed-out worker. Concurrent requests for the same file revision share one conversion.
 - Thumbnail output stays in a process-local LRU keyed by path, size, and modification time. The cache holds at most 1000 entries or 32 MiB, writes nothing to the served directory, and is discarded when the server stops.
 - Each upload is capped at 1 GiB, written to a temporary file in the destination directory, then published atomically with a hard link.
+- Remote downloads have no upload-size cap. Response bodies are streamed through bounded chunks into hidden destination-local temporary files, then published atomically with the same collision-safe naming rules as uploads.
+- At most two remote downloads run concurrently, at most 100 wait in the queue, and terminal task records are pruned to a bounded history. Cancelling a task or stopping the server aborts the request and removes its temporary file.
+- Remote download URLs permit only HTTP(S) and cannot contain credentials. Literal loopback, private, link-local, multicast, documentation, and other reserved IP addresses are rejected without resolving domain names. Every redirect is revalidated and the chain is capped at five hops.
+- Remote-download state is process-local. Browser reloads recover active tasks through the list and event interfaces; process restarts do not resume tasks or retain their history.
 - Existing names are never overwritten. Collisions receive `name (1).ext` through `name (9999).ext`.
 - The served root cannot be renamed, moved, copied, or deleted. Directories cannot be copied or moved into themselves.
 - Rename and move reject collisions. Copy and upload choose collision-safe numbered names. Recursive copy does not dereference symbolic links.
@@ -75,6 +85,7 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 - Images retain an inline preview and use `react-photo-view` for a current-image-only full-viewport viewer with pan, zoom, rotate, and reset controls. Audio, video, and PDF keep browser-native presentation.
 - Theme, view mode, sort key, and direction may be stored locally. Paths and file contents are not persisted.
 - Multi-file upload runs at most three requests concurrently and refreshes the current listing when the queue settles.
+- Remote-download tasks share the activity center with uploads and file operations. They show transferred bytes, known percentage, server-measured speed, cancellation, and retry controls; unknown response lengths use an indeterminate progress bar.
 
 ## Verification
 

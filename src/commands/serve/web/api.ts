@@ -56,6 +56,35 @@ export interface OperationResult {
   items: OperationItem[]
 }
 
+export type DownloadStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
+
+export interface DownloadTask {
+  id: string
+  url: string
+  directoryPath: string
+  filename?: string
+  status: DownloadStatus
+  bytesDownloaded: number
+  totalBytes?: number
+  progress?: number
+  speedBytesPerSecond?: number
+  destinationPath?: string
+  createdAt: string
+  startedAt?: string
+  finishedAt?: string
+  error?: string
+}
+
+export interface DownloadList {
+  version: 1
+  tasks: DownloadTask[]
+}
+
+export interface DownloadResponse {
+  version: 1
+  task: DownloadTask
+}
+
 interface ErrorBody {
   error?: { message?: string }
 }
@@ -74,6 +103,30 @@ export function applyOperation(operation: OperationCommand): Promise<OperationRe
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(operation),
   })
+}
+
+export function createDownload(url: string, directoryPath: string, filename?: string): Promise<DownloadResponse> {
+  return apiJson<DownloadResponse>('/api/downloads', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ url, directoryPath, ...(filename ? { filename } : {}) }),
+  })
+}
+
+export function cancelDownload(id: string): Promise<DownloadResponse> {
+  return apiJson<DownloadResponse>(`/api/downloads/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
+}
+
+export function retryDownload(id: string): Promise<DownloadResponse> {
+  return apiJson<DownloadResponse>(`/api/downloads/${encodeURIComponent(id)}/retry`, { method: 'POST' })
+}
+
+export async function clearDownloads(): Promise<void> {
+  const response = await fetch('/api/downloads?terminal=1', { method: 'DELETE' })
+  if (!response.ok) {
+    const body = await response.json() as ErrorBody
+    throw new Error(body.error?.message ?? `Request failed (${response.status})`)
+  }
 }
 
 export function uploadFile(

@@ -1,10 +1,12 @@
 import type { RunningServeServer } from './server'
 import type { ThumbnailWorkerRequest } from './thumbnail-worker'
+import type { ServeDownloadManager } from './types'
 import { Buffer } from 'node:buffer'
 import { mkdtemp, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
+import { createRemoteDownloadManager } from './download-service'
 import { startServeHttpServer } from './server'
 import { THUMBNAIL_MAX_INPUT_BYTES, ThumbnailService } from './thumbnail-service'
 import { createServeWorkspace, MAX_UPLOAD_BYTES } from './workspace'
@@ -36,6 +38,7 @@ afterEach(async () => {
 async function startFixtureServer(
   managementEnabled = false,
   createThumbnailService?: (workspace: Awaited<ReturnType<typeof createServeWorkspace>>) => ThumbnailService,
+  createDownloadManager?: (workspace: Awaited<ReturnType<typeof createServeWorkspace>>) => ServeDownloadManager,
 ): Promise<{ server: RunningServeServer, root: string }> {
   const root = await mkdtemp(path.join(tmpdir(), 'ycy-serve-http-'))
   temporaryDirectories.push(root)
@@ -47,6 +50,7 @@ async function startFixtureServer(
     port: 0,
     managementEnabled,
     thumbnailService: createThumbnailService?.(workspace),
+    downloadManager: createDownloadManager?.(workspace),
   })
   servers.push(server)
   return { server, root }
@@ -410,6 +414,86 @@ describe('ServeHttpServer', () => {
         { status: 'error', sourcePath: 'missing.txt', error: { code: 'NOT_FOUND', message: 'Path does not exist' } },
       ],
     })
+  })
+
+  test('creates, streams, observes, cancels, and retries remote download tasks', async () => {
+    let attempts = 0
+    const fetchImpl = async (): Promise<Response> => {
+      attempts++
+      return attempts === 1
+        ? new Response('temporary failure', { status: 503 })
+        : new Response(Uint8Array.from([7, 8, 9]), {
+            headers: {
+              'Content-Disposition': 'attachment; filename="remote.bin"',
+              'Content-Length': '3',
+            },
+          })
+    }
+    const fixture = await startFixtureServer(true, undefined, workspace => createRemoteDownloadManager(workspace, {
+      fetchImpl,
+      idleTimeoutMs: 100,
+    }))
+    const origin = fixture.server.url.origin
+    const request = (body: unknown, method = 'POST'): Promise<Response> => fetch(new URL('/api/downloads', fixture.server.url), {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        'Origin': origin,
+      },
+      body: method === 'DELETE' ? undefined : JSON.stringify(body),
+    })
+
+    const disabled = await fetch(new URL('/api/downloads', (await startFixtureServer(false)).server.url))
+    expect(disabled.status).toBe(403)
+
+    const created = await request({ url: 'https://example.test/file', directoryPath: '' })
+    expect(created.status).toBe(202)
+    const failedBody = await created.json() as { task: { id: string } }
+    let failed: { status: string } | undefined
+    for (let index = 0; index < 100; index++) {
+      const response = await fetch(new URL('/api/downloads', fixture.server.url))
+      const body = await response.json() as { tasks: Array<{ id: string, status: string }> }
+      failed = body.tasks.find(task => task.id === failedBody.task.id)
+      if (failed?.status === 'error')
+        break
+      await Bun.sleep(2)
+    }
+    expect(failed?.status).toBe('error')
+
+    const missingCancel = await fetch(new URL('/api/downloads/missing/cancel', fixture.server.url), {
+      method: 'POST',
+      headers: { Origin: origin },
+    })
+    expect(missingCancel.status).toBe(404)
+
+    const events = await fetch(new URL('/api/downloads/events', fixture.server.url))
+    const eventReader = events.body!.getReader()
+    const event = await eventReader.read()
+    await eventReader.cancel()
+    expect(new TextDecoder().decode(event.value)).toContain(failedBody.task.id)
+
+    const retried = await fetch(new URL(`/api/downloads/${failedBody.task.id}/retry`, fixture.server.url), {
+      method: 'POST',
+      headers: { Origin: origin },
+    })
+    expect(retried.status).toBe(202)
+    const retriedBody = await retried.json() as { task: { id: string } }
+    for (let index = 0; index < 100; index++) {
+      const response = await fetch(new URL('/api/downloads', fixture.server.url))
+      const body = await response.json() as { tasks: Array<{ id: string, status: string }> }
+      if (body.tasks.find(task => task.id === retriedBody.task.id)?.status === 'done')
+        break
+      await Bun.sleep(2)
+    }
+    expect((await fetch(new URL('/files/remote.bin', fixture.server.url))).status).toBe(200)
+    expect(await (await fetch(new URL('/files/remote.bin', fixture.server.url))).text()).toBe('\x07\x08\x09')
+
+    const cleared = await fetch(new URL('/api/downloads?terminal=1', fixture.server.url), {
+      method: 'DELETE',
+      headers: { Origin: origin },
+    })
+    expect(cleared.status).toBe(204)
+    expect((await fetch(new URL('/api/downloads', fixture.server.url)).then(response => response.json()) as { tasks: unknown[] }).tasks).toHaveLength(0)
   })
 
   test('serves the embedded React shell for root and browser routes only', async () => {

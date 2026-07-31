@@ -1,6 +1,8 @@
-import type { ServeErrorCode, ServeWorkspace } from './types'
+import type { DownloadErrorCode } from './download-service'
+import type { ServeDownloadManager, ServeErrorCode, ServeWorkspace } from './types'
 import { isIP } from 'node:net'
 import { z } from 'zod'
+import { createRemoteDownloadManager, DownloadError } from './download-service'
 import { ThumbnailError, ThumbnailService } from './thumbnail-service'
 import { ServeWorkspaceError } from './types'
 import serveWebApp from './web/index.html'
@@ -31,6 +33,12 @@ const operationSchema = z.discriminatedUnion('action', [
   z.object({ action: z.literal('move'), paths: operationPathsSchema, destinationPath: operationPathSchema }).strict(),
   z.object({ action: z.literal('delete'), paths: operationPathsSchema }).strict(),
 ])
+
+const downloadRequestSchema = z.object({
+  url: z.string().max(8192),
+  directoryPath: z.string().max(4096),
+  filename: z.string().max(4096).optional(),
+}).strict()
 
 function configureWebBundleHeaders(bundle: Bun.HTMLBundle): void {
   for (const file of bundle.files ?? []) {
@@ -74,6 +82,22 @@ function workspaceError(cause: unknown): Response {
   if (cause instanceof ServeWorkspaceError)
     return error(cause.code, cause.message, ERROR_STATUS[cause.code])
   return error('INTERNAL_ERROR', cause instanceof Error ? cause.message : String(cause), 500)
+}
+
+const DOWNLOAD_ERROR_STATUS: Record<DownloadErrorCode, number> = {
+  INVALID_DOWNLOAD: 400,
+  URL_FORBIDDEN: 403,
+  DOWNLOAD_NOT_FOUND: 404,
+  DOWNLOAD_ACTIVE: 409,
+  DOWNLOAD_QUEUE_FULL: 429,
+  DOWNLOAD_UNAVAILABLE: 502,
+  DOWNLOAD_SERVICE_STOPPED: 503,
+}
+
+function downloadError(cause: unknown): Response {
+  if (cause instanceof DownloadError)
+    return error(cause.code, cause.message, DOWNLOAD_ERROR_STATUS[cause.code])
+  return error('DOWNLOAD_UNAVAILABLE', cause instanceof Error ? cause.message : String(cause), 502)
 }
 
 function requireMethod(request: Request, method: string): Response | undefined {
@@ -306,9 +330,11 @@ export function startServeHttpServer(options: {
   port: number
   managementEnabled: boolean
   thumbnailService?: ThumbnailService
+  downloadManager?: ServeDownloadManager
 }): RunningServeServer {
   configureWebBundleHeaders(serveWebApp)
   const thumbnails = options.thumbnailService ?? new ThumbnailService(options.workspace)
+  const downloads = options.downloadManager ?? createRemoteDownloadManager(options.workspace)
   // Bun accepts an HTMLBundle for a method route, though its ambient type only lists it for whole-route values.
   const appRoute = {
     GET: serveWebApp as unknown as Response,
@@ -332,7 +358,7 @@ export function startServeHttpServer(options: {
       '/browse': appRoute,
       '/browse/*': appRoute,
     },
-    async fetch(request) {
+    async fetch(request, bunServer) {
       const url = new URL(request.url)
       if (url.pathname === '/api/directory') {
         const invalidMethod = requireMethod(request, 'GET')
@@ -421,6 +447,110 @@ export function startServeHttpServer(options: {
           ...await options.workspace.applyOperation(operation.data),
         })
       }
+      if (url.pathname === '/api/downloads/events') {
+        const invalidMethod = requireMethod(request, 'GET')
+        if (invalidMethod)
+          return invalidMethod
+        if (!options.managementEnabled)
+          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable remote downloads', 403)
+        bunServer.timeout(request, 0)
+        const encoder = new TextEncoder()
+        let unsubscribe: (() => void) | undefined
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            unsubscribe = downloads.subscribe((tasks) => {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ version: 1, tasks })}\n\n`))
+            })
+          },
+          cancel() {
+            unsubscribe?.()
+          },
+        })
+        return new Response(stream, {
+          headers: {
+            ...API_HEADERS,
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'X-Accel-Buffering': 'no',
+          },
+        })
+      }
+      if (url.pathname === '/api/downloads') {
+        if (request.method === 'GET') {
+          if (!options.managementEnabled)
+            return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable remote downloads', 403)
+          return json({ version: 1, tasks: downloads.list() })
+        }
+        if (request.method === 'DELETE') {
+          if (!options.managementEnabled)
+            return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable remote downloads', 403)
+          const invalidOrigin = validateMutationOrigin(request, options.address)
+          if (invalidOrigin)
+            return invalidOrigin
+          if (url.searchParams.get('terminal') !== '1')
+            return error('INVALID_DOWNLOAD', 'Use terminal=1 to clear completed downloads', 400)
+          downloads.clearTerminal()
+          return new Response(null, { status: 204, headers: API_HEADERS })
+        }
+        const invalidMethod = requireMethod(request, 'POST')
+        if (invalidMethod)
+          return invalidMethod
+        if (!options.managementEnabled)
+          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable remote downloads', 403)
+        const invalidOrigin = validateMutationOrigin(request, options.address)
+        if (invalidOrigin)
+          return invalidOrigin
+        if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
+          return error('UNSUPPORTED_MEDIA_TYPE', 'Download requests must use JSON', 415)
+        let body: unknown
+        try {
+          body = await request.json()
+        }
+        catch {
+          return error('INVALID_DOWNLOAD', 'Download request must be valid JSON', 400)
+        }
+        const parsed = downloadRequestSchema.safeParse(body)
+        if (!parsed.success)
+          return error('INVALID_DOWNLOAD', 'Download request is invalid', 400)
+        try {
+          await options.workspace.listDirectory(parsed.data.directoryPath)
+          const task = await downloads.enqueue(parsed.data)
+          return json({ version: 1, task }, 202)
+        }
+        catch (cause) {
+          return cause instanceof DownloadError ? downloadError(cause) : workspaceError(cause)
+        }
+      }
+      const downloadAction = /^\/api\/downloads\/([^/]+)\/(cancel|retry)$/.exec(url.pathname)
+      if (downloadAction) {
+        const invalidMethod = requireMethod(request, 'POST')
+        if (invalidMethod)
+          return invalidMethod
+        if (!options.managementEnabled)
+          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable remote downloads', 403)
+        const invalidOrigin = validateMutationOrigin(request, options.address)
+        if (invalidOrigin)
+          return invalidOrigin
+        let taskId: string
+        try {
+          taskId = decodeURIComponent(downloadAction[1]!)
+        }
+        catch {
+          return error('INVALID_DOWNLOAD', 'Download task ID is invalid', 400)
+        }
+        try {
+          const task = downloadAction[2] === 'cancel'
+            ? downloads.cancel(taskId)
+            : await downloads.retry(taskId)
+          if (!task)
+            return downloadError(new DownloadError('DOWNLOAD_NOT_FOUND', 'Download task was not found'))
+          return json({ version: 1, task }, downloadAction[2] === 'retry' ? 202 : 200)
+        }
+        catch (cause) {
+          return downloadError(cause)
+        }
+      }
       if (url.pathname === '/files' || url.pathname.startsWith('/files/'))
         return serveOriginalFile(request, options.workspace)
       if (url.pathname.startsWith('/thumbnails/'))
@@ -433,6 +563,7 @@ export function startServeHttpServer(options: {
     url: new URL(server.url),
     finished,
     async stop() {
+      await downloads.close()
       thumbnails.close()
       await server.stop(true)
       finish?.()

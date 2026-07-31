@@ -1006,14 +1006,14 @@ button.details-heading:hover {
 
 .activity-row {
   display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) 40px;
+  grid-template-columns: 20px minmax(0, 1fr) 40px 28px;
   align-items: center;
   gap: 8px;
   padding: 8px 12px;
 }
 
 .activity-progress {
-  grid-column: 2 / 4;
+  grid-column: 2 / 5;
   height: 3px;
   overflow: hidden;
   border-radius: 2px;
@@ -1023,6 +1023,21 @@ button.details-heading:hover {
 .activity-progress > span {
   display: block;
   height: 100%;
+}
+
+.activity-progress.indeterminate > span {
+  width: 35%;
+  animation: activity-progress-slide 1.2s ease-in-out infinite;
+}
+
+.activity-actions {
+  display: inline-flex;
+  justify-content: flex-end;
+}
+
+@keyframes activity-progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(285%); }
 }
 
 .toast {

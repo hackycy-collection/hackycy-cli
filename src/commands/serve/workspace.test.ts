@@ -1,5 +1,5 @@
 import type { ServeWorkspace } from './types'
-import { lstat, mkdir, mkdtemp, readlink, rm, symlink, writeFile } from 'node:fs/promises'
+import { lstat, mkdir, mkdtemp, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -186,6 +186,40 @@ describe('ServeWorkspace', () => {
       'report.txt',
     ])
     await expect(workspace.uploadFile('docs', new File(['bad'], '../secret.txt'))).rejects.toMatchObject({ code: 'INVALID_UPLOAD' })
+  })
+
+  test('writes a streamed download atomically with bounded progress updates', async () => {
+    const { root, workspace } = await createFixture()
+    const progress: number[] = []
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(Uint8Array.from([1, 2]))
+        controller.enqueue(Uint8Array.from([3, 4, 5]))
+        controller.close()
+      },
+    })
+
+    const first = await workspace.writeFileStream('docs', 'remote.bin', stream, {
+      onProgress: bytes => progress.push(bytes),
+    })
+    const second = await workspace.writeFileStream('docs', 'remote.bin', new Response('again').body!)
+
+    expect(first).toEqual({ filename: 'remote.bin', path: 'docs/remote.bin', size: 5 })
+    expect(second.filename).toBe('remote (1).bin')
+    expect(progress).toEqual([2, 5])
+    expect(Array.from(new Uint8Array(await (await workspace.openFile(first.path)).body.arrayBuffer()))).toEqual([1, 2, 3, 4, 5])
+    expect((await workspace.listDirectory('docs')).entries.map(entry => entry.name)).toEqual(['remote (1).bin', 'remote.bin'])
+    expect((await readdir(path.join(root, 'docs'))).some(name => name.startsWith('.download-'))).toBe(false)
+  })
+
+  test('cancels streamed writes without publishing a partial file', async () => {
+    const { root, workspace } = await createFixture()
+    const controller = new AbortController()
+    controller.abort(new Error('cancelled'))
+
+    await expect(workspace.writeFileStream('docs', 'cancelled.bin', new Response('partial').body!, { signal: controller.signal })).rejects.toThrow('cancelled')
+    expect((await workspace.listDirectory('docs')).entries).toHaveLength(0)
+    expect((await readdir(path.join(root, 'docs'))).some(name => name.startsWith('.download-'))).toBe(false)
   })
 
   test('creates a directory without overwriting an existing entry', async () => {

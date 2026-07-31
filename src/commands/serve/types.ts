@@ -50,6 +50,46 @@ export interface ServeUploadResult {
   size: number
 }
 
+export interface ServeStreamWriteOptions {
+  signal?: AbortSignal
+  onProgress?: (bytesWritten: number) => void
+}
+
+export type ServeDownloadStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
+
+export interface ServeDownloadRequest {
+  url: string
+  directoryPath: string
+  filename?: string
+}
+
+export interface ServeDownloadTask {
+  id: string
+  url: string
+  directoryPath: string
+  filename?: string
+  status: ServeDownloadStatus
+  bytesDownloaded: number
+  totalBytes?: number
+  progress?: number
+  speedBytesPerSecond?: number
+  destinationPath?: string
+  createdAt: string
+  startedAt?: string
+  finishedAt?: string
+  error?: string
+}
+
+export interface ServeDownloadManager {
+  list: () => ServeDownloadTask[]
+  enqueue: (request: ServeDownloadRequest) => Promise<ServeDownloadTask>
+  cancel: (id: string) => ServeDownloadTask | undefined
+  retry: (id: string) => Promise<ServeDownloadTask>
+  clearTerminal: () => void
+  subscribe: (listener: (tasks: ServeDownloadTask[]) => void) => () => void
+  close: () => Promise<void>
+}
+
 export type ServeOperation
   = | { action: 'create-directory', parentPath: string, name: string }
     | { action: 'rename', path: string, newName: string }
@@ -80,6 +120,7 @@ export interface ServeWorkspace {
   openFile: (relativePath: string) => Promise<ServeFile>
   readTextPreview: (relativePath: string) => Promise<ServeTextPreview>
   uploadFile: (directoryPath: string, file: File) => Promise<ServeUploadResult>
+  writeFileStream: (directoryPath: string, filename: string, stream: ReadableStream<Uint8Array>, options?: ServeStreamWriteOptions) => Promise<ServeUploadResult>
   applyOperation: (operation: ServeOperation) => Promise<ServeOperationResult>
 }
 
