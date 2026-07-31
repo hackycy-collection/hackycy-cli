@@ -114,7 +114,31 @@ describe('ServeWorkspace', () => {
     expect(listing.entries.find(entry => entry.name === 'data.json')).toEqual(expect.objectContaining({
       mimeType: 'application/json;charset=utf-8',
       previewKind: 'text',
+      syntaxLanguage: 'json',
     }))
+  })
+
+  test('classifies source code and dotenv variants by filename before MIME type', async () => {
+    const { root, workspace } = await createFixture()
+    const files = new Map([
+      ['app.ts', 'typescript'],
+      ['component.tsx', 'tsx'],
+      ['main.py', 'python'],
+      ['Dockerfile', 'dockerfile'],
+      ['.env', 'dotenv'],
+      ['.env.local', 'dotenv'],
+      ['service.env', 'dotenv'],
+    ])
+    await Promise.all([...files].map(([name]) => writeFile(path.join(root, name), 'VALUE=true')))
+
+    const listing = await workspace.listDirectory('')
+
+    for (const [name, language] of files) {
+      expect(listing.entries.find(entry => entry.name === name)).toEqual(expect.objectContaining({
+        previewKind: 'text',
+        syntaxLanguage: language,
+      }))
+    }
   })
 
   test('returns bounded decoded text without loading oversized or binary files as text', async () => {

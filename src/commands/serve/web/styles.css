@@ -641,6 +641,13 @@ button.details-heading:hover {
   box-shadow: inset 0 0 0 2px var(--accent);
 }
 
+.code-preview-scroll diffs-container {
+  width: 100%;
+  min-width: max-content;
+  --diffs-font-family: "Cascadia Mono", "JetBrains Mono", ui-monospace, monospace;
+  --diffs-font-size: 12px;
+}
+
 .text-preview-scroll::-webkit-scrollbar {
   width: 8px;
   height: 8px;
@@ -673,6 +680,57 @@ button.details-heading:hover {
     linear-gradient(-45deg, transparent 75%, color-mix(in srgb, var(--border) 38%, transparent) 75%);
   background-position: 0 0, 0 8px, 8px -8px, -8px 0;
   background-size: 16px 16px;
+}
+
+.image-preview-trigger {
+  display: flex;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  padding: 0;
+  cursor: zoom-in;
+}
+
+.image-viewer-toolbar {
+  display: flex;
+  height: 44px;
+  align-items: center;
+}
+
+.image-viewer-tool {
+  display: inline-flex;
+  width: 44px;
+  height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  background: transparent;
+  color: white;
+  opacity: 0.78;
+}
+
+.image-viewer-tool:hover,
+.image-viewer-tool:focus-visible {
+  background: rgb(255 255 255 / 12%);
+  opacity: 1;
+  outline: none;
+}
+
+.image-viewer-tool:focus-visible {
+  box-shadow: inset 0 0 0 2px white;
+}
+
+.image-viewer-tool svg {
+  width: 18px;
+  height: 18px;
+}
+
+.PhotoView-Slider__BannerRight > .PhotoView-Slider__toolbarIcon {
+  display: none;
 }
 
 .menu-content {

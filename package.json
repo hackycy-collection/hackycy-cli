@@ -63,6 +63,7 @@
     "react": "19.2.8",
     "react-devtools-core": "^7.0.1",
     "react-dom": "^19.2.8",
+    "react-photo-view": "^1.2.7",
     "react-resizable-panels": "^4.12.2",
     "reveal-file": "^0.1.2",
     "tailwind-merge": "^3.6.0",

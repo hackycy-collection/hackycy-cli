@@ -73,6 +73,26 @@ describe('ServeHttpServer', () => {
     expect(response.headers.get('access-control-allow-origin')).toBeNull()
   })
 
+  test('exposes syntax language metadata for code and dotenv previews', async () => {
+    const { server, root } = await startFixtureServer()
+    await Promise.all([
+      writeFile(path.join(root, 'app.ts'), 'export const ready = true'),
+      writeFile(path.join(root, '.env.production'), 'READY=true'),
+    ])
+
+    const response = await fetch(new URL('/api/directory?path=', server.url))
+    const listing = await response.json() as { entries: Array<{ name: string, previewKind: string, syntaxLanguage?: string }> }
+
+    expect(listing.entries.find(entry => entry.name === 'app.ts')).toEqual(expect.objectContaining({
+      previewKind: 'text',
+      syntaxLanguage: 'typescript',
+    }))
+    expect(listing.entries.find(entry => entry.name === '.env.production')).toEqual(expect.objectContaining({
+      previewKind: 'text',
+      syntaxLanguage: 'dotenv',
+    }))
+  })
+
   test('lists dedicated thumbnail URLs for supported raster formats only', async () => {
     const { server, root } = await startFixtureServer()
     await Promise.all([

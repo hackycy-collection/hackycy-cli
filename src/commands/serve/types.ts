@@ -17,6 +17,7 @@ export interface ServeDirectoryEntry {
   modifiedAt?: string
   mimeType?: string
   previewKind: ServePreviewKind
+  syntaxLanguage?: string
   browseUrl?: string
   fileUrl?: string
   thumbnailUrl?: string

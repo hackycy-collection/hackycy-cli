@@ -30,7 +30,7 @@ CLI registration (index.ts)
 - `workspace.ts` owns root confinement, symlink policy, metadata, text decoding, and atomic upload naming. Callers pass only POSIX relative paths.
 - `server.ts` maps workspace results to HTTP, validates methods and mutation origins, implements cache and Range semantics, and serves the embedded HTML bundle.
 - `thumbnail-service.ts` owns input limits, request coalescing, the bounded worker queue, and the session-only LRU. `thumbnail-worker.ts` performs WASM decoding and WebP conversion off the HTTP thread.
-- `web/` owns History navigation, sorting, virtualization, preview state, theme, and the three-worker upload queue. It never constructs absolute filesystem paths.
+- `web/` owns directory History navigation, sorting, virtualization, preview state, theme, one syntax-highlighting worker, and the three-worker upload queue. It never constructs absolute filesystem paths.
 - Shared Radix/Tailwind primitives live under `src/shared/web` and are consumed by both `serve` and `diff`.
 
 ## HTTP Interface
@@ -66,12 +66,13 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 
 ## Web Application Invariants
 
-- Directory URLs use `/browse/<encoded-path>` and browser History; preview selection uses the `preview` query parameter.
+- Directory URLs use `/browse/<encoded-path>` and browser History. Preview selection uses the `preview` query parameter but always replaces the current URL, so opening, switching, and closing previews never create History entries.
 - List and grid views virtualize fixed-size rows with `@tanstack/react-virtual`, rendering four extra list rows or one extra grid row around the viewport. Grid columns are measured before entries mount and only change at layout breakpoints. Directories remain ahead of files for every sort. Search filters only the loaded directory.
 - Main-list image elements load only `thumbnailUrl`, with lazy asynchronous low-priority decoding. Original `fileUrl` bytes are reserved for preview, opening, and download.
-- Selection follows desktop file-manager conventions: click selects, Ctrl/Cmd toggles, Shift selects a range, and double-click or Enter opens an entry.
+- Selection follows desktop file-manager conventions: clicking a file selects and previews it, Ctrl/Cmd toggles, Shift selects a range, and modifiers never open a preview. Directories open on double-click or Enter.
 - Cut, copy, and paste use an in-memory browser clipboard. It survives directory navigation but not a page reload and never reads or writes the system clipboard.
-- Images, audio, video, and PDF use browser-native presentation. Text is rendered as escaped content; HTML and XML are never executed in the preview.
+- Source code, configuration files, and dotenv variants use the `@pierre/diffs` Shiki-based read-only file renderer. Plain text remains escaped content; HTML and XML are never executed in the preview.
+- Images retain an inline preview and use `react-photo-view` for a current-image-only full-viewport viewer with pan, zoom, rotate, and reset controls. Audio, video, and PDF keep browser-native presentation.
 - Theme, view mode, sort key, and direction may be stored locally. Paths and file contents are not persisted.
 - Multi-file upload runs at most three requests concurrently and refreshes the current listing when the queue settles.
 

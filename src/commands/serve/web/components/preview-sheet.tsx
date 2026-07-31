@@ -1,23 +1,34 @@
+import type { OverlayRenderProps } from 'react-photo-view/dist/types'
 import type { DirectoryEntry, TextPreview } from '../api'
-import { Download, ExternalLink, FileQuestion, LoaderCircle, X } from 'lucide-react'
+import { File as CodeFile } from '@pierre/diffs/react'
+import { Download, ExternalLink, FileQuestion, LoaderCircle, Maximize2, RefreshCcw, RotateCcw, RotateCw, X, ZoomIn, ZoomOut } from 'lucide-react'
 import { useEffect, useState } from 'react'
+import { PhotoSlider } from 'react-photo-view'
 import { Button } from '../../../../shared/web/components/ui/button'
 import { Sheet, SheetContent } from '../../../../shared/web/components/ui/sheet'
 import { apiJson } from '../api'
 import { formatFileSize } from './file-browser'
 
-export function PreviewPane({ entry, onClose }: { entry: DirectoryEntry, onClose: () => void }): React.JSX.Element {
+interface PreviewProps {
+  entry: DirectoryEntry
+  theme: 'light' | 'dark'
+  imageViewerOpen: boolean
+  onImageViewerOpenChange: (open: boolean) => void
+  onClose: () => void
+}
+
+export function PreviewPane({ entry, theme, imageViewerOpen, onImageViewerOpenChange, onClose }: PreviewProps): React.JSX.Element {
   return (
     <aside className="preview-pane" aria-label={`Preview ${entry.name}`}>
-      <PreviewHeader entry={entry} onClose={onClose} />
-      <PreviewBody entry={entry} />
+      <PreviewHeader entry={entry} onOpenImage={() => onImageViewerOpenChange(true)} onClose={onClose} />
+      <PreviewBody entry={entry} theme={theme} imageViewerOpen={imageViewerOpen} onImageViewerOpenChange={onImageViewerOpenChange} />
     </aside>
   )
 }
 
-export function PreviewSheet({ entry, onClose }: { entry?: DirectoryEntry, onClose: () => void }): React.JSX.Element {
+export function PreviewSheet({ entry, theme, imageViewerOpen, onImageViewerOpenChange, onClose }: Omit<PreviewProps, 'entry'> & { entry?: DirectoryEntry }): React.JSX.Element {
   return (
-    <Sheet open={entry !== undefined} onOpenChange={open => !open && onClose()}>
+    <Sheet open={entry !== undefined} modal={!imageViewerOpen} onOpenChange={open => !open && !imageViewerOpen && onClose()}>
       {entry && (
         <SheetContent
           side="right"
@@ -25,22 +36,26 @@ export function PreviewSheet({ entry, onClose }: { entry?: DirectoryEntry, onClo
           description="File preview and download actions"
           closeLabel="Close preview"
           className="mobile-sheet preview-sheet flex w-[min(96vw,760px)] flex-col"
+          onEscapeKeyDown={event => imageViewerOpen && event.preventDefault()}
         >
-          <PreviewHeader entry={entry} onClose={onClose} hideClose />
-          <PreviewBody entry={entry} />
+          <PreviewHeader entry={entry} onOpenImage={() => onImageViewerOpenChange(true)} onClose={onClose} hideClose />
+          <PreviewBody entry={entry} theme={theme} imageViewerOpen={imageViewerOpen} onImageViewerOpenChange={onImageViewerOpenChange} />
         </SheetContent>
       )}
     </Sheet>
   )
 }
 
-function PreviewHeader({ entry, onClose, hideClose = false }: { entry: DirectoryEntry, onClose: () => void, hideClose?: boolean }): React.JSX.Element {
+function PreviewHeader({ entry, onOpenImage, onClose, hideClose = false }: { entry: DirectoryEntry, onOpenImage: () => void, onClose: () => void, hideClose?: boolean }): React.JSX.Element {
   return (
     <header className="preview-header">
       <div className="min-w-0 flex-1">
         <h2 className="truncate text-sm font-semibold" title={entry.name}>{entry.name}</h2>
         <p className="truncate text-xs text-muted-foreground">{`${entry.mimeType ?? 'Unknown type'} · ${formatFileSize(entry.size)}`}</p>
       </div>
+      {entry.previewKind === 'image' && entry.fileUrl && (
+        <Button variant="ghost" size="icon" title="Open full screen" aria-label="Open full screen image preview" onClick={onOpenImage}><Maximize2 className="size-4" /></Button>
+      )}
       {entry.fileUrl && (
         <a href={entry.fileUrl} target="_blank" rel="noreferrer" aria-label="Open in new tab">
           <Button variant="ghost" size="icon"><ExternalLink className="size-4" /></Button>
@@ -56,7 +71,7 @@ function PreviewHeader({ entry, onClose, hideClose = false }: { entry: Directory
   )
 }
 
-function PreviewBody({ entry }: { entry: DirectoryEntry }): React.JSX.Element {
+function PreviewBody({ entry, theme, imageViewerOpen, onImageViewerOpenChange }: Omit<PreviewProps, 'onClose'>): React.JSX.Element {
   const [text, setText] = useState<TextPreview>()
   const [error, setError] = useState<string>()
 
@@ -77,9 +92,20 @@ function PreviewBody({ entry }: { entry: DirectoryEntry }): React.JSX.Element {
 
   if (entry.previewKind === 'image' && entry.fileUrl) {
     return (
-      <div className="image-preview-grid flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
-        <img src={entry.fileUrl} alt={entry.name} draggable={false} className="max-h-full max-w-full object-contain" />
-      </div>
+      <>
+        <div className="image-preview-grid flex min-h-0 flex-1 items-center justify-center overflow-auto p-4">
+          <button type="button" className="image-preview-trigger" title="Open full screen" aria-label={`Open full screen preview of ${entry.name}`} onClick={() => onImageViewerOpenChange(true)}>
+            <img src={entry.fileUrl} alt={entry.name} draggable={false} className="max-h-full max-w-full object-contain" />
+          </button>
+        </div>
+        <PhotoSlider
+          images={[{ key: entry.path, src: entry.fileUrl }]}
+          visible={imageViewerOpen}
+          loop={false}
+          onClose={() => onImageViewerOpenChange(false)}
+          toolbarRender={props => <ImageViewerToolbar {...props} />}
+        />
+      </>
     )
   }
   if (entry.previewKind === 'video' && entry.fileUrl)
@@ -97,6 +123,21 @@ function PreviewBody({ entry }: { entry: DirectoryEntry }): React.JSX.Element {
       return <PreviewMessage title="Text preview is too large" detail={`${formatFileSize(text.size)} exceeds the ${formatFileSize(text.maxBytes)} preview limit.`} />
     if (text.status === 'binary')
       return <PreviewMessage title="This file is not supported text" detail="Open it in a new tab or download the original bytes." />
+    if (entry.syntaxLanguage) {
+      return (
+        <div role="region" aria-label={`Code preview of ${entry.name}`} tabIndex={0} className="text-preview-scroll code-preview-scroll min-h-0 flex-1 bg-code">
+          <CodeFile
+            file={{
+              name: entry.name,
+              contents: text.text,
+              lang: entry.syntaxLanguage,
+              cacheKey: `${entry.path}:${entry.modifiedAt ?? ''}:${entry.size ?? text.size}`,
+            }}
+            options={{ disableFileHeader: true, overflow: 'scroll', themeType: theme }}
+          />
+        </div>
+      )
+    }
     return (
       <div role="region" aria-label={`Text preview of ${entry.name}`} tabIndex={0} className="text-preview-scroll min-h-0 flex-1 bg-code">
         <pre className="min-w-max p-4 font-mono text-xs leading-5 text-foreground"><code>{text.text}</code></pre>
@@ -104,6 +145,31 @@ function PreviewBody({ entry }: { entry: DirectoryEntry }): React.JSX.Element {
     )
   }
   return <PreviewMessage title="No inline preview" detail="Open the file in a new tab or download it to inspect the original content." />
+}
+
+function ImageViewerToolbar({ scale, rotate, onScale, onRotate, onClose }: OverlayRenderProps): React.JSX.Element {
+  const tools = [
+    { label: 'Zoom out', icon: <ZoomOut />, action: () => onScale(scale - 0.5) },
+    { label: 'Zoom in', icon: <ZoomIn />, action: () => onScale(scale + 0.5) },
+    { label: 'Rotate left', icon: <RotateCcw />, action: () => onRotate(rotate - 90) },
+    { label: 'Rotate right', icon: <RotateCw />, action: () => onRotate(rotate + 90) },
+    {
+      label: 'Reset image',
+      icon: <RefreshCcw />,
+      action: () => {
+        onScale(1)
+        onRotate(0)
+      },
+    },
+    { label: 'Close image preview', icon: <X />, action: () => onClose() },
+  ]
+  return (
+    <div role="toolbar" aria-label="Image preview controls" className="image-viewer-toolbar">
+      {tools.map(tool => (
+        <button key={tool.label} type="button" className="image-viewer-tool" title={tool.label} aria-label={tool.label} onClick={tool.action}>{tool.icon}</button>
+      ))}
+    </div>
+  )
 }
 
 function PreviewLoading(): React.JSX.Element {

@@ -209,7 +209,12 @@ function ListEntry({ entry, props }: { entry: DirectoryEntry, props: FileBrowser
         tabIndex={selected ? 0 : -1}
         className={cn('details-grid details-row', selected && 'selected')}
         title={entry.kind === 'unavailable' ? 'This entry cannot be opened' : entry.name}
-        onClick={event => props.onSelect(entry, { toggle: event.metaKey || event.ctrlKey, range: event.shiftKey })}
+        onClick={(event) => {
+          const modifiers = { toggle: event.metaKey || event.ctrlKey, range: event.shiftKey }
+          props.onSelect(entry, modifiers)
+          if (!modifiers.toggle && !modifiers.range && entry.kind === 'file')
+            props.onOpen(entry)
+        }}
         onDoubleClick={() => entry.kind !== 'unavailable' && props.onOpen(entry)}
         onKeyDown={event => event.key === 'Enter' && entry.kind !== 'unavailable' && props.onOpen(entry)}
       >
@@ -279,7 +284,12 @@ function GridEntry({ entry, props }: { entry: DirectoryEntry, props: FileBrowser
         aria-selected={selected}
         tabIndex={selected ? 0 : -1}
         className={cn('grid-entry', selected && 'selected')}
-        onClick={event => props.onSelect(entry, { toggle: event.metaKey || event.ctrlKey, range: event.shiftKey })}
+        onClick={(event) => {
+          const modifiers = { toggle: event.metaKey || event.ctrlKey, range: event.shiftKey }
+          props.onSelect(entry, modifiers)
+          if (!modifiers.toggle && !modifiers.range && entry.kind === 'file')
+            props.onOpen(entry)
+        }}
         onDoubleClick={() => entry.kind !== 'unavailable' && props.onOpen(entry)}
         onKeyDown={event => event.key === 'Enter' && entry.kind !== 'unavailable' && props.onOpen(entry)}
       >

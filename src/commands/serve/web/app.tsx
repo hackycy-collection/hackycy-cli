@@ -153,6 +153,7 @@ export function App(): React.JSX.Element {
   const [uploadActive, setUploadActive] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [mobileNavigation, setMobileNavigation] = useState(false)
+  const [imageViewerOpen, setImageViewerOpen] = useState(false)
   const [toast, setToast] = useState<string>()
   const fileInputRef = useRef<HTMLInputElement>(null)
   const activeResizeHandleRef = useRef<'navigation' | 'preview' | undefined>(undefined)
@@ -182,7 +183,7 @@ export function App(): React.JSX.Element {
   }, [theme])
 
   useEffect(() => {
-    history.replaceState({ serveCursor: 0, servePreview: previewPath !== undefined }, '', window.location.href)
+    history.replaceState({ serveCursor: 0 }, '', window.location.href)
     const popstate = (event: PopStateEvent): void => {
       const next = routeState()
       const cursor = typeof event.state?.serveCursor === 'number' ? event.state.serveCursor : undefined
@@ -192,6 +193,7 @@ export function App(): React.JSX.Element {
         setNavigation(createNavigationHistory(next.directoryPath))
       setDirectoryPath(next.directoryPath)
       setPreviewPath(next.previewPath)
+      setImageViewerOpen(false)
       setRouteError(next.error)
       setQuery('')
       setSelection({ paths: [] })
@@ -245,6 +247,7 @@ export function App(): React.JSX.Element {
     setNavigation(next)
     setDirectoryPath(path)
     setPreviewPath(undefined)
+    setImageViewerOpen(false)
     setRouteError(undefined)
     setQuery('')
     setSelection({ paths: [] })
@@ -255,10 +258,6 @@ export function App(): React.JSX.Element {
   }, [directoryPath])
 
   const moveHistory = (offset: -1 | 1): void => {
-    if (offset === -1 && previewPath) {
-      history.back()
-      return
-    }
     const next = moveNavigation(navigationRef.current, offset)
     if (next.cursor === navigationRef.current.cursor)
       return
@@ -270,8 +269,9 @@ export function App(): React.JSX.Element {
       return
     const url = new URL(window.location.href)
     url.searchParams.set('preview', entry.path)
-    history.pushState({ serveCursor: navigationRef.current.cursor, servePreview: true }, '', url)
+    history.replaceState({ serveCursor: navigationRef.current.cursor }, '', url)
     setPreviewPath(entry.path)
+    setImageViewerOpen(false)
     setSelection({ paths: [entry.path], anchorPath: entry.path })
   }, [])
 
@@ -286,13 +286,13 @@ export function App(): React.JSX.Element {
     }
 
     const next = pushNavigation(navigationRef.current, parentPath)
-    history.pushState({ serveCursor: next.cursor }, '', browserUrl(parentPath))
-    const previewUrl = new URL(window.location.href)
+    const previewUrl = new URL(browserUrl(parentPath), window.location.origin)
     previewUrl.searchParams.set('preview', entry.path)
-    history.pushState({ serveCursor: next.cursor, servePreview: true }, '', previewUrl)
+    history.pushState({ serveCursor: next.cursor }, '', previewUrl)
     setNavigation(next)
     setDirectoryPath(parentPath)
     setPreviewPath(entry.path)
+    setImageViewerOpen(false)
     setRouteError(undefined)
     setQuery('')
     setSelection({ paths: [entry.path], anchorPath: entry.path })
@@ -302,14 +302,11 @@ export function App(): React.JSX.Element {
   }, [directoryPath, openPreview])
 
   const closePreview = useCallback((): void => {
-    if (history.state?.servePreview) {
-      history.back()
-      return
-    }
     const url = new URL(window.location.href)
     url.searchParams.delete('preview')
     history.replaceState({ serveCursor: navigationRef.current.cursor }, '', url)
     setPreviewPath(undefined)
+    setImageViewerOpen(false)
   }, [])
 
   const changeSort = (key: SortKey): void => {
@@ -625,6 +622,9 @@ export function App(): React.JSX.Element {
           setRenamingPath(undefined)
           setEditingError(undefined)
         }
+        else if (imageViewerOpen) {
+          setImageViewerOpen(false)
+        }
         else if (previewPath) {
           closePreview()
         }
@@ -635,7 +635,7 @@ export function App(): React.JSX.Element {
     }
     window.addEventListener('keydown', keydown)
     return () => window.removeEventListener('keydown', keydown)
-  }, [clipboard, closePreview, creatingFolder, entries, managementEnabled, openEntry, previewPath, renamingPath, selectedEntries, selection.paths])
+  }, [clipboard, closePreview, creatingFolder, entries, imageViewerOpen, managementEnabled, openEntry, previewPath, renamingPath, selectedEntries, selection.paths])
 
   const refresh = (): void => setReloadVersion(version => version + 1)
   const cancelEdit = (): void => {
@@ -709,7 +709,7 @@ export function App(): React.JSX.Element {
 
       <div className="address-bar">
         <div className="navigation-buttons">
-          <Tooltip label="Back"><Button className="command-button" size="icon" variant="ghost" aria-label="Back" disabled={!previewPath && navigation.cursor === 0} onClick={() => moveHistory(-1)}><ArrowLeft className="size-4" /></Button></Tooltip>
+          <Tooltip label="Back"><Button className="command-button" size="icon" variant="ghost" aria-label="Back" disabled={navigation.cursor === 0} onClick={() => moveHistory(-1)}><ArrowLeft className="size-4" /></Button></Tooltip>
           <Tooltip label="Forward"><Button className="command-button" size="icon" variant="ghost" aria-label="Forward" disabled={navigation.cursor >= navigation.paths.length - 1} onClick={() => moveHistory(1)}><ArrowRight className="size-4" /></Button></Tooltip>
           <Tooltip label="Up"><Button className="command-button" size="icon" variant="ghost" aria-label="Up" disabled={!listing?.parentPath && directoryPath === ''} onClick={() => navigate(listing?.parentPath ?? '')}><ArrowUp className="size-4" /></Button></Tooltip>
         </div>
@@ -815,7 +815,9 @@ export function App(): React.JSX.Element {
                     >
                       <span />
                     </Separator>
-                    <Panel id="preview" defaultSize="360px" minSize="300px" maxSize="48%"><PreviewPane entry={previewEntry} onClose={closePreview} /></Panel>
+                    <Panel id="preview" defaultSize="360px" minSize="300px" maxSize="48%">
+                      <PreviewPane entry={previewEntry} theme={theme} imageViewerOpen={imageViewerOpen} onImageViewerOpenChange={setImageViewerOpen} onClose={closePreview} />
+                    </Panel>
                   </>
                 )}
               </Group>
@@ -832,7 +834,7 @@ export function App(): React.JSX.Element {
       <Sheet open={mobileNavigation} onOpenChange={setMobileNavigation}>
         <SheetContent side="left" title="File navigation" description="Browse files and folders" className="mobile-sheet flex w-[min(88vw,340px)] flex-col pt-12">{navigationPane}</SheetContent>
       </Sheet>
-      {mobile && <PreviewSheet entry={previewEntry} onClose={closePreview} />}
+      {mobile && <PreviewSheet entry={previewEntry} theme={theme} imageViewerOpen={imageViewerOpen} onImageViewerOpenChange={setImageViewerOpen} onClose={closePreview} />}
       <RenameDialog
         entry={renamingEntry}
         busy={editingBusy}

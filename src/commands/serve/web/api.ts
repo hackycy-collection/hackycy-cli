@@ -10,6 +10,7 @@ export interface DirectoryEntry {
   modifiedAt?: string
   mimeType?: string
   previewKind: PreviewKind
+  syntaxLanguage?: string
   browseUrl?: string
   fileUrl?: string
   thumbnailUrl?: string

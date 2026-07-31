@@ -12,6 +12,7 @@ import type {
 } from './types'
 import fs from 'node:fs/promises'
 import path from 'node:path'
+import { getFiletypeFromFileName } from '@pierre/diffs'
 import { ServeWorkspaceError } from './types'
 
 const IMAGE_MIME_TYPES = new Map([
@@ -138,10 +139,23 @@ function collisionFilename(filename: string, index: number): string {
   return `${base} (${index})${extension}`
 }
 
-function previewKind(mimeType: string): ServePreviewKind {
+function syntaxLanguage(filename: string): string | undefined {
+  if (/^\.env(?:\..+)?$/i.test(filename))
+    return 'dotenv'
+
+  const exact = getFiletypeFromFileName(filename)
+  if (exact !== 'text')
+    return exact
+  const lowercase = getFiletypeFromFileName(filename.toLowerCase())
+  return lowercase === 'text' ? undefined : lowercase
+}
+
+function previewKind(mimeType: string, language: string | undefined): ServePreviewKind {
   const baseMimeType = mimeType.split(';')[0]!.trim().toLowerCase()
   if (baseMimeType.startsWith('image/'))
     return 'image'
+  if (language)
+    return 'text'
   if (baseMimeType.startsWith('video/'))
     return 'video'
   if (baseMimeType.startsWith('audio/'))
@@ -242,6 +256,7 @@ async function browserEntry(root: string, directoryPath: string, name: string): 
 
   const extensionMimeType = IMAGE_MIME_TYPES.get(path.extname(name).toLowerCase())
   const mimeType = extensionMimeType ?? Bun.file(resolved).type ?? 'application/octet-stream'
+  const language = syntaxLanguage(name)
   const urlPath = `/files/${encodedPath(relativePath)}`
   const thumbnailUrl = THUMBNAIL_EXTENSIONS.has(path.extname(name).toLowerCase())
     ? `/thumbnails/${encodedPath(relativePath)}`
@@ -254,7 +269,8 @@ async function browserEntry(root: string, directoryPath: string, name: string): 
     size: stat.size,
     modifiedAt: stat.mtime.toISOString(),
     mimeType,
-    previewKind: previewKind(mimeType),
+    previewKind: previewKind(mimeType, language),
+    syntaxLanguage: language,
     fileUrl: urlPath,
     thumbnailUrl,
     downloadUrl: `${urlPath}?download=1`,
