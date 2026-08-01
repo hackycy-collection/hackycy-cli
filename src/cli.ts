@@ -8,6 +8,7 @@ import { register as registerGit } from './commands/git'
 import { register as registerRm } from './commands/rm'
 import { register as registerRun } from './commands/run'
 import { register as registerServe } from './commands/serve'
+import { register as registerTunnel } from './commands/tunnel'
 import { register as registerUpgrade } from './commands/upgrade'
 import { consumeUpdateState, formatUpdateState, INTERNAL_UPDATE_COMMAND, INTERNAL_UPDATE_VERIFY_ENV, runInternalUpdater } from './commands/upgrade/updater'
 import { register as registerZip } from './commands/zip'
@@ -59,6 +60,7 @@ else {
     registerGit(program)
     registerRm(program)
     registerServe(program)
+    registerTunnel(program)
     registerZip(program)
     registerRun(program)
     registerUpgrade(program)

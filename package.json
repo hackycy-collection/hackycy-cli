@@ -29,10 +29,14 @@
   "module": "src/index.ts",
   "scripts": {
     "build": "bun scripts/build.ts",
+    "check:frp-manifest": "bun scripts/generate-frp-manifest.ts --check",
     "dev": "bun --watch src/index.ts",
+    "generate:frp-manifest": "bun scripts/generate-frp-manifest.ts",
     "lint": "eslint --cache .",
     "release": "bumpp",
     "start": "bun src/cli.ts",
+    "test:tunnel:acceptance": "bun test ./src/commands/tunnel/acceptance.ts",
+    "test:tunnel:idle": "bun test ./src/commands/tunnel/idle-resource.test.ts",
     "typecheck": "tsc",
     "prepare": "simple-git-hooks"
   },

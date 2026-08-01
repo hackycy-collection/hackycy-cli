@@ -1,0 +1,162 @@
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { normalizeControlPlaneUrl, parseHostPort, parsePortRange, resolveClientConfig, resolveServerConfig } from './config'
+import { ensureFrpBinary } from './frp/binary'
+import { renderFrpcConfig, renderFrpsConfig } from './frp/config'
+import { FRP_ARTIFACTS, resolveFrpArtifact } from './frp/manifest'
+import { acquireStateDirectoryLock } from './lock'
+import { clientStateDirectory, defaultServerDataDirectory, managedFrpBinaryPath } from './paths'
+
+const temporaryDirectories: string[] = []
+
+afterEach(async () => {
+  await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
+})
+
+describe('tunnel configuration', () => {
+  test('uses CLI, environment, then defaults and parses deployment values', () => {
+    const config = resolveServerConfig({ controlPort: 7600 }, {
+      HOME: '/home/test',
+      YCY_TUNNEL_CONTROL_PORT: '7700',
+      YCY_TUNNEL_FRP_PORT: '7100',
+      YCY_TUNNEL_PORT_RANGE: '30000-30010',
+      YCY_TUNNEL_ADVERTISE_FRP_ADDR: '[2001:db8::1]:7001',
+    })
+    expect(config.controlPort).toBe(7600)
+    expect(config.frpPort).toBe(7100)
+    expect(config.httpPort).toBe(8080)
+    expect(config.portRange).toEqual({ start: 30000, end: 30010 })
+    expect(config.advertiseFrpAddress).toEqual({ host: '2001:db8::1', port: 7001 })
+    expect(config.adminUser).toBe('admin')
+  })
+
+  test('validates port ranges, host-port values, and control origins', () => {
+    expect(parsePortRange('20000-20100')).toEqual({ start: 20000, end: 20100 })
+    expect(() => parsePortRange('20100-20000')).toThrow('must not exceed')
+    expect(parseHostPort('tunnel.example.com:7000')).toEqual({ host: 'tunnel.example.com', port: 7000 })
+    expect(normalizeControlPlaneUrl('tunnel.example.com').href).toBe('https://tunnel.example.com/')
+    expect(normalizeControlPlaneUrl('http://localhost:7500').href).toBe('http://localhost:7500/')
+    expect(() => normalizeControlPlaneUrl('ftp://example.com')).toThrow('HTTP or HTTPS')
+    expect(() => resolveServerConfig({ controlPort: 7000, frpPort: 7000 }, {})).toThrow('must be distinct')
+    expect(() => resolveServerConfig({ controlPort: 20000 }, {})).toThrow('must not include')
+  })
+
+  test('resolves Client Token precedence including a secret file', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-config-'))
+    temporaryDirectories.push(root)
+    const secret = path.join(root, 'token')
+    await writeFile(secret, ' file-token\n')
+    const fromFile = await resolveClientConfig({ server: 'localhost' }, { HOME: root, YCY_TUNNEL_TOKEN_FILE: secret })
+    const fromEnvironment = await resolveClientConfig({ server: 'localhost' }, { HOME: root, YCY_TUNNEL_TOKEN: 'env-token', YCY_TUNNEL_TOKEN_FILE: secret })
+    const fromCli = await resolveClientConfig({ server: 'localhost', token: 'cli-token' }, { HOME: root, YCY_TUNNEL_TOKEN: 'env-token' })
+    expect(fromFile.token).toBe('file-token')
+    expect(fromEnvironment.token).toBe('env-token')
+    expect(fromCli.token).toBe('cli-token')
+  })
+
+  test('uses fixed platform-specific server, client, and managed FRP paths', () => {
+    expect(defaultServerDataDirectory({ HOME: '/Users/test' }, 'darwin')).toBe('/Users/test/Library/Application Support/ycy/tunnel/server')
+    expect(clientStateDirectory({ HOME: '/home/test', XDG_STATE_HOME: '/state' }, 'linux')).toBe('/state/ycy/tunnel/client')
+    expect(managedFrpBinaryPath('frpc', { LOCALAPPDATA: 'C:\\State' }, 'win32')).toBe('C:\\State/ycy/frp/0.70.1/frpc.exe')
+    expect(managedFrpBinaryPath('frps', { YCY_TUNNEL_DOCKER: '1' }, 'linux')).toBe('/opt/ycy/frp/0.70.1/frps')
+  })
+})
+
+describe('FRP foundation', () => {
+  test('pins complete official artifact metadata for the native matrix', () => {
+    expect(FRP_ARTIFACTS).toHaveLength(6)
+    expect(FRP_ARTIFACTS.map(artifact => `${artifact.platform}/${artifact.architecture}`).sort()).toEqual([
+      'darwin/arm64',
+      'darwin/x64',
+      'linux/arm64',
+      'linux/x64',
+      'win32/arm64',
+      'win32/x64',
+    ])
+    expect(resolveFrpArtifact('linux', 'arm64')).toMatchObject({ version: '0.70.1', archive: 'frp_0.70.1_linux_arm64.tar.gz' })
+    for (const artifact of FRP_ARTIFACTS) {
+      expect(artifact.url).toBe(`https://github.com/fatedier/frp/releases/download/v${artifact.version}/${artifact.archive}`)
+      expect(artifact.sha256).toHaveLength(64)
+      expect(artifact.frpcSha256).toHaveLength(64)
+      expect(artifact.frpsSha256).toHaveLength(64)
+    }
+  })
+
+  test('renders exact server and enabled client proxy TOML', () => {
+    const server = resolveServerConfig({ address: '127.0.0.1', frpPort: 7001, httpPort: 8081, portRange: '21000-21005', dataDir: '/tmp/tunnel' }, {})
+    expect(renderFrpsConfig(server, 'internal')).toContain('allowPorts = [{ start = 21000, end = 21005 }]')
+    const client = renderFrpcConfig({
+      advertisedFrpHost: 'frp.example.com',
+      advertisedFrpPort: 7001,
+      internalFrpToken: 'internal',
+      snapshot: {
+        clientKey: 'client-key',
+        revision: 2,
+        tunnels: [
+          { id: 'http-id', protocol: 'http', hostname: 'app.example.com', serverPort: null, localHost: '127.0.0.1', localPort: 3000, enabled: true, createdAt: '', updatedAt: '' },
+          { id: 'tcp-id', protocol: 'tcp', hostname: null, serverPort: 21000, localHost: 'db', localPort: 5432, enabled: true, createdAt: '', updatedAt: '' },
+          { id: 'off-id', protocol: 'udp', hostname: null, serverPort: 21001, localHost: 'dns', localPort: 53, enabled: false, createdAt: '', updatedAt: '' },
+        ],
+      },
+    })
+    expect(client).toContain('customDomains = ["app.example.com"]')
+    expect(client).toContain('remotePort = 21000')
+    expect(client).not.toContain('off-id')
+    expect(client).not.toContain('21001')
+  })
+
+  test('rejects an archive with the wrong SHA and prints manual placement details', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-frp-'))
+    temporaryDirectories.push(root)
+    const installation = ensureFrpBinary('frpc', {
+      env: { HOME: root },
+      fetch: (async () => new Response('not an official archive')) as unknown as typeof globalThis.fetch,
+      verifyVersion: async () => {},
+    })
+    await expect(installation).rejects.toThrow('failed SHA-256 verification')
+    await expect(installation).rejects.toThrow('Official archive:')
+  })
+
+  test('passes supervisor cancellation to the FRP download', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-frp-abort-'))
+    temporaryDirectories.push(root)
+    const cancellation = new AbortController()
+    cancellation.abort()
+    let receivedSignal: AbortSignal | null | undefined
+    const installation = ensureFrpBinary('frps', {
+      env: { HOME: root },
+      signal: cancellation.signal,
+      fetch: (async (_input: string | URL | Request, init?: RequestInit) => {
+        receivedSignal = init?.signal
+        throw new Error('download aborted')
+      }) as unknown as typeof globalThis.fetch,
+      verifyVersion: async () => {},
+    })
+    await expect(installation).rejects.toThrow('download aborted')
+    expect(receivedSignal).toBe(cancellation.signal)
+  })
+})
+
+describe('single-instance lock', () => {
+  test('rejects a second owner and releases the state directory', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-lock-'))
+    temporaryDirectories.push(root)
+    const first = await acquireStateDirectoryLock(root)
+    await expect(acquireStateDirectoryLock(root)).rejects.toThrow(`process ${process.pid}`)
+    await first.release()
+    const second = await acquireStateDirectoryLock(root)
+    await second.release()
+  })
+
+  test('removes a stale owner before acquiring the lock', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-stale-lock-'))
+    temporaryDirectories.push(root)
+    await mkdir(path.join(root, '.lock'))
+    await writeFile(path.join(root, '.lock', 'owner.json'), JSON.stringify({ id: 'stale', pid: 2147483647, startedAt: '', stateDirectory: root }))
+    const lock = await acquireStateDirectoryLock(root)
+    expect(lock.owner.pid).toBe(process.pid)
+    await lock.release()
+  })
+})

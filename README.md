@@ -40,9 +40,16 @@ Commands:
                                Compare two directories in a browser
   zip [options] [directory]    Zip a directory into a zip file
   run [path]                   Run package.json scripts
+  tunnel                       Manage trusted tunnel clients and tunnel definitions
   upgrade                      Upgrade cli to the latest version
   help [command]               display help for command
 ```
+
+## Third-Party
+
+The tunnel runtime redistributes unmodified binaries from the official [fatedier/frp](https://github.com/fatedier/frp) release pinned in ycy's compile-time manifest.
+
+FRP is Copyright 2015 fatedier and contributors and is licensed under the Apache License, Version 2.0. The tunnel container includes the license at `/usr/share/licenses/frp/LICENSE`. Native installations download FRP from the official release URL recorded in the compile-time manifest.
 
 ## License
 

@@ -1,0 +1,573 @@
+# Tunnel Command
+
+This directory contains `ycy tunnel`: a lightweight control plane around pinned official FRP binaries. ycy owns client enrollment, desired tunnel configuration, synchronization, and FRP process supervision; FRP owns only traffic forwarding.
+
+This README is the single source of truth for tunnel domain language, architecture decisions, implementation contracts, and acceptance criteria.
+
+## Goals
+
+```text
+ycy tunnel server
+ycy tunnel connect --server tunnel.example.com --token <client-token>
+```
+
+- Start one public tunnel control plane and one supervised `frps` child.
+- Enroll multiple trusted native clients with one recoverable token per client.
+- Configure each client's tunnels centrally and push complete versioned snapshots.
+- Support HTTP by exact hostname and TCP/UDP by public server port.
+- Keep both server and client supervisors single-instance and foreground.
+- Work as a native command on the CLI's existing platforms and as a server-oriented Docker image.
+- Reuse a pinned, verified official FRP release instead of implementing a forwarding protocol.
+
+## Non-Goals
+
+- HTTPS tunnel type, wildcard hostnames, URL-path routing, or automatic certificates.
+- DNS provider, Nginx Proxy Manager, firewall, or Docker port-management integrations.
+- Untrusted tenants, roles, per-client FRP authorization, or FRP server plugins.
+- Client containers or a separate client Docker image.
+- Endpoint health checks, traffic graphs, retained logs, analytics, or a replacement FRP dashboard.
+- Self-daemonization, self-restart, or operating-system service installation.
+- Starting a client from cached state before it authenticates with the control plane.
+
+## Ubiquitous Language
+
+**Trusted Tunnel Client**:
+A machine inside a private network that is administered by the tunnel operator and applies Tunnel Definitions assigned by the Tunnel Control Plane.
+_Avoid_: Untrusted client, tenant
+
+**Client Token**:
+The control-plane-generated, sole user-facing identity credential for one Trusted Tunnel Client. It is recoverable and permits at most one active control session.
+_Avoid_: Client ID, user, shared token
+
+**Client Remark**:
+An optional, multi-line, operator-maintained note used to distinguish a Trusted Tunnel Client. It is not an identity credential and need not be unique.
+_Avoid_: Client ID, Client Token, username
+
+**Tunnel Control Plane**:
+The central authority where Trusted Tunnel Clients are enrolled and their desired Tunnel Definitions are managed.
+_Avoid_: FRP dashboard, client configuration file
+
+**Tunnel Definition**:
+A desired HTTP or port mapping assigned to one Trusted Tunnel Client by the Tunnel Control Plane.
+_Avoid_: FRP proxy configuration
+
+**HTTP Tunnel**:
+A mapping from one normalized, globally unique, exact public hostname to a Local Endpoint. The hostname remains reserved while the Tunnel Definition exists, including when disabled.
+_Avoid_: Domain tunnel, HTTPS tunnel
+
+**Port Tunnel**:
+A TCP or UDP mapping from a public server port to a Local Endpoint. The protocol-specific port remains reserved while the Tunnel Definition exists, including when disabled.
+_Avoid_: Domain tunnel, HTTP tunnel
+
+**Server Port Pool**:
+The configured range from which public ports for Port Tunnels may be allocated automatically or selected explicitly. A numeric port may be assigned once per transport protocol.
+_Avoid_: Local port, unrestricted port
+
+**Local Endpoint**:
+The host and port reachable from a Trusted Tunnel Client that receives forwarded traffic.
+_Avoid_: Server port, public endpoint
+
+**Desired Revision**:
+The latest complete, versioned set of Tunnel Definitions assigned to a Trusted Tunnel Client by the Tunnel Control Plane.
+_Avoid_: Incremental update, pending command
+
+**Applied Revision**:
+The most recent Desired Revision that a Trusted Tunnel Client successfully validated and activated.
+_Avoid_: Online status, desired revision
+
+**Public Ingress**:
+The externally managed DNS, TLS, and reverse-proxy path that delivers requests for an HTTP Tunnel hostname to the tunnel server.
+_Avoid_: Tunnel Definition, Tunnel Control Plane
+
+## Architecture Decisions
+
+| Decision | Rationale |
+| --- | --- |
+| Run server and client supervisors in the foreground. | Docker or the host service manager owns supervisor persistence and restart, keeping process ownership, signals, and logs predictable across platforms. |
+| Persist control-plane state in one embedded SQLite database. | Transactions, migrations, uniqueness, and cascade deletion do not require an external database; connection and process status remain bounded in memory. |
+| Keep current Client Tokens recoverable. | Authorized operators can retrieve credentials after creation; control-plane access, its data directory, and backups are therefore trusted, and rotation is the revocation mechanism. |
+| Use one shared control-plane administrator. | Multi-user authorization is outside scope; deployments configure the shared credentials and own the risk of retaining defaults. |
+| Apply complete snapshots and retain the last Applied Revision. | A failed Desired Revision must not disrupt unrelated working tunnels, and cached state never authorizes a cold start. |
+| Enforce Client Token revocation cooperatively in ycy. | Native FRP is identity-agnostic; trusted clients stop on explicit revoke or rejected authentication without adding FRP plugins or a fork. |
+| Use one WebSocket agent control channel. | The channel carries authentication, snapshots, acknowledgements, process state, liveness, and cooperative revocation while FRP remains the data plane. |
+| Pin one official FRP version per ycy release. | A generated, verified manifest keeps every native target and the Docker image on one tested distribution without hand-maintained artifact tables. |
+| Separate Client Tokens from the Internal FRP Token. | Per-client identity belongs to ycy; one server-generated FRP token authenticates the trusted native data plane and is never shown in the UI. |
+| Disable FRP Dashboard, Admin API, metrics, polling, and retained logs. | The operational UI reports only bounded control and process state, avoiding a second management plane and unbounded traffic history. |
+| Publish one server-oriented Linux x64/arm64 image. | The image uses the same ycy binary and pinned FRP distribution as native releases; clients remain native and no client-container workflow is maintained. |
+
+## Topology
+
+```text
+Administrator browser
+  -> ycy control UI/API/WebSocket :7500
+       -> SQLite
+       -> one supervised frps process
+
+Native ycy tunnel client
+  -> control WebSocket :7500 through NPM/TLS when configured
+  -> one supervised frpc process
+       -> frps data connection :7000
+
+HTTP request
+  -> externally managed DNS/TLS/NPM
+  -> frps HTTP vhost :8080
+  -> frpc
+  -> configured localHost:localPort
+
+TCP/UDP request
+  -> externally managed DNS/firewall/port publication
+  -> frps port pool :20000-20100
+  -> frpc
+  -> configured localHost:localPort
+```
+
+FRP does not see or validate Client Tokens. A server-generated Internal FRP Token is shared by all trusted agents after ycy authentication and is used only for native frpc-to-frps authentication.
+
+## Command Contract
+
+Both commands remain in the foreground until signaled. The server and client each acquire an exclusive lock for their state directory before opening listeners or starting FRP. A second instance fails with a diagnostic identifying the active process and state directory.
+
+### Server
+
+```text
+ycy tunnel server [options]
+
+Options:
+      --address <address>                  default 0.0.0.0
+      --control-port <port>                default 7500
+      --frp-port <port>                    default 7000
+      --http-port <port>                   default 8080
+      --port-range <start-end>             default 20000-20100
+      --advertise-frp-addr <host:port>     default derived from agent request host
+      --data-dir <path>                    default platform-specific server directory
+```
+
+Non-secret option precedence is CLI option, environment variable, then default:
+
+| Option | Environment variable |
+| --- | --- |
+| `--address` | `YCY_TUNNEL_ADDRESS` |
+| `--control-port` | `YCY_TUNNEL_CONTROL_PORT` |
+| `--frp-port` | `YCY_TUNNEL_FRP_PORT` |
+| `--http-port` | `YCY_TUNNEL_HTTP_PORT` |
+| `--port-range` | `YCY_TUNNEL_PORT_RANGE` |
+| `--advertise-frp-addr` | `YCY_TUNNEL_ADVERTISE_FRP_ADDR` |
+| `--data-dir` | `YCY_TUNNEL_DATA_DIR` |
+
+The control-plane administrator is one shared account configured only through environment variables.
+
+| Setting | Environment variable | Default |
+| --- | --- | --- |
+| Username | `YCY_TUNNEL_ADMIN_USER` | `admin` |
+| Password | `YCY_TUNNEL_ADMIN_PASSWORD` | `admin` |
+
+The UI displays deployment settings but cannot mutate them. Changing a listener, port pool, administrator credential, data directory, or advertised endpoint requires restarting the ycy supervisor through Docker or the host service manager.
+
+### Client
+
+```text
+ycy tunnel connect --server <control-plane> --token <client-token>
+```
+
+| Value | CLI option | Environment variable | Secret file |
+| --- | --- | --- | --- |
+| Server | `--server` | `YCY_TUNNEL_SERVER` | - |
+| Token | `--token` | `YCY_TUNNEL_TOKEN` | `YCY_TUNNEL_TOKEN_FILE` |
+
+Precedence is CLI option, direct environment value, then secret file. The control server and Client Token are supplied on every supervisor start and are not written to local ycy configuration. A server without a URL scheme becomes `https://<server>`; an explicit `http://` URL enables an unencrypted local deployment.
+
+## Listener Contract
+
+| Listener | Default | Purpose |
+| --- | ---: | --- |
+| ycy control HTTP | `0.0.0.0:7500/tcp` | Admin UI, admin API, agent WebSocket, liveness. |
+| FRP bind | `0.0.0.0:7000/tcp` | frpc data-plane connections. |
+| FRP HTTP vhost | `0.0.0.0:8080/tcp` | Host-header routing after external ingress. |
+| FRP port pool | `0.0.0.0:20000-20100/tcp+udp` | TCP and UDP tunnels. |
+
+NPM must proxy the control-plane route with WebSocket upgrade support. HTTP tunnel routes must preserve the original `Host` header when proxying to port 8080. ycy does not provision either route.
+
+The advertised FRP endpoint defaults to the hostname used by an authenticated agent plus the configured FRP port. `YCY_TUNNEL_ADVERTISE_FRP_ADDR` overrides it when NAT, port mapping, or separate public hostnames make the listening and advertised addresses different.
+
+## Domain Invariants
+
+### Client Token
+
+- The control plane generates a URL-safe random token; administrators cannot choose its contents.
+- The token is the only client identity credential and is recoverable from the trusted control plane.
+- One token permits at most one active agent WebSocket. A second connection is rejected.
+- Rotation atomically replaces the token, asks the connected agent to stop, and retains all tunnel definitions.
+- Deletion asks a connected agent to stop, deletes all owned tunnels, and releases their reservations.
+- Revocation is cooperative. An unreachable agent can continue an existing FRP session until it reconnects and ycy rejects the old token.
+
+An internal database key may maintain references across token rotation, but it is not part of the UI or public control protocol.
+
+### Client Remark
+
+- A Trusted Tunnel Client may have an optional, multi-line Client Remark of up to 100 characters.
+- The remark is trimmed, preserves internal line breaks, need not be unique, and may be edited or cleared without changing the Client Token, Agent session, or Desired Revision.
+- Records migrated from an older schema initially display as `Unlabeled client` until an administrator adds a remark.
+
+### HTTP Tunnel
+
+```text
+exactHostname -> localHost:localPort
+```
+
+- One tunnel contains exactly one normalized exact hostname.
+- Schemes, paths, ports, IP addresses, `*`, and other wildcard patterns are rejected.
+- Internationalized hostnames are stored in normalized ASCII form.
+- Hostname uniqueness is global and case-insensitive.
+- Disabled tunnels retain their hostname reservation; deletion releases it.
+- Several HTTP tunnels may target the same Local Endpoint.
+
+### Port Tunnel
+
+```text
+protocol + serverPort -> localHost:localPort
+```
+
+- Protocol is exactly `tcp` or `udp`.
+- `serverPort` must be inside the configured Server Port Pool.
+- The pair `(protocol, serverPort)` is globally unique.
+- The same numeric port may be assigned once for TCP and once for UDP.
+- Disabled tunnels retain their port reservation; deletion releases it.
+- An omitted server port is allocated transactionally from the lowest free port for that protocol.
+
+### Local Endpoint
+
+- `localHost` defaults to `127.0.0.1` and may be an IP address, hostname, or container service name reachable by the native client.
+- `localPort` must be an integer from 1 through 65535.
+- ycy does not probe Local Endpoints. An unreachable or incorrectly configured endpoint is an operator-maintained condition, not a control-plane health state.
+
+### Revisions
+
+- Every tunnel mutation for a client increments its monotonic Desired Revision in the same SQLite transaction.
+- The server always sends the complete current snapshot, never a chain of incremental edits.
+- The agent acknowledges the Applied Revision only after the configuration is validated and activated.
+- Offline clients may be configured. Their enabled tunnels remain Pending until the client reconnects and applies the latest revision.
+- A failed revision remains desired while the last successfully applied revision continues running.
+
+New tunnels default to Enabled but the creation form allows them to be created disabled. Saving, editing, enabling, disabling, or deleting immediately produces and pushes a new Desired Revision.
+
+## Persistent State
+
+The server uses one embedded SQLite database under its data directory. A minimal schema owns:
+
+```text
+meta
+  schema_version
+  internal_frp_token
+
+clients
+  internal_id
+  remark
+  token (unique, recoverable)
+  desired_revision
+  last_applied_revision
+  revocation_pending
+  created_at
+  rotated_at
+
+tunnels
+  id
+  client_internal_id (foreign key, cascade delete)
+  protocol (http | tcp | udp)
+  hostname (HTTP only)
+  server_port (TCP/UDP only)
+  local_host
+  local_port
+  enabled
+  created_at
+  updated_at
+```
+
+SQLite partial unique indexes enforce normalized HTTP hostname uniqueness and `(protocol, server_port)` uniqueness. Type-specific checks prevent an HTTP row from carrying a server port or a TCP/UDP row from carrying a hostname. Tunnel mutations and revision increments are atomic. Rotation marks revocation pending until an agent authenticates with the replacement token.
+
+Connection presence, child-process state, reconnect backoff, and the latest structured runtime error stay in bounded process memory. The server does not store metrics, traffic samples, complete logs, or revision history.
+
+The client state directory may contain a last-applied snapshot and generated FRP configuration for rollback, but neither file authorizes a cold start. Every new ycy client process must authenticate and receive the current Desired Revision before starting frpc.
+
+## Agent Control Protocol
+
+The client upgrades `GET /api/agent` to WebSocket with `Authorization: Bearer <client-token>`. JSON messages use an explicit protocol version and tagged `type`; unknown required protocol versions are rejected before FRP starts.
+
+### Handshake
+
+The client reports:
+
+```text
+tunnelProtocolVersion
+ycyVersion
+platform
+architecture
+lastAppliedRevision
+```
+
+The server responds with:
+
+```text
+tunnelProtocolVersion
+requiredFrpVersion
+FRP artifact URL and SHA-256 for this platform
+advertised FRP host and port
+Internal FRP Token
+desired revision and complete tunnel snapshot
+```
+
+A client proceeds only when its tunnel protocol implementation and pinned FRP manifest support the advertised combination. Otherwise it leaves frpc stopped, prints an upgrade instruction, and appears as `Incompatible client`.
+
+### Runtime Messages
+
+| Direction | Message | Purpose |
+| --- | --- | --- |
+| Server -> client | `desired_state` | Replace the pending complete snapshot. |
+| Client -> server | `apply_result` | Report applied revision or one structured error. |
+| Client -> server | `process_state` | Report `stopped`, `running`, `recovering`, or `configuration_failed`. |
+| Server -> client | `restart_frpc` | Restart the sole child from the Applied Revision. |
+| Server -> client | `revoke` | Stop frpc and terminate the agent for rotation or deletion. |
+
+WebSocket liveness is the only periodic control-plane check. An ordinary control-link failure leaves an already-running frpc process active and starts capped reconnect backoff. An explicit `revoke` or an authentication rejection stops frpc. A disconnected old-token client can remain `Revocation pending` because FRP deliberately does not enforce ycy identity.
+
+## FRP Binary Management
+
+Each ycy release contains a compile-time manifest for one tested FRP version. The initial implementation target is official FRP `v0.70.1`, subject to updating the pinned version before implementation if the ycy release selects another tested version.
+
+The manifest maps each supported OS/architecture to the official archive name, binary name, URL, and SHA-256. Supported native targets follow the existing ycy matrix: macOS, Linux, and Windows on x64 and arm64.
+
+Only `frp/version.ts` is release-specific hand-maintained input. After changing it, run `bun run generate:frp-manifest`. The generator resolves the fixed target matrix from the tagged official GitHub Release, verifies the GitHub asset digests against `frp_sha256_checksums.txt`, downloads and verifies each archive, derives the extracted binary digests, and writes `manifest.generated.ts` deterministically. `bun run check:frp-manifest` repeats that process without writing and fails when the committed manifest is stale; release CI runs this check before native or Docker builds. The generated file must not be edited manually.
+
+On native startup:
+
+1. Resolve the one fixed managed path for the pinned version and platform.
+2. If the binary exists, verify its SHA-256 and reported version.
+3. If absent, download the official release archive, verify it before extraction, publish atomically, and verify the executable.
+4. If download fails, print the exact version, official URL, expected SHA-256, and fixed target path for manual placement.
+
+The system `PATH` is never consulted and no custom FRP path override exists. The Docker build installs the same pinned official distribution at the image's fixed managed path and includes the required Apache-2.0 attribution.
+
+## Generated FRP Configuration
+
+ycy owns all generated TOML. Operators never need to maintain `frps.toml` or `frpc.toml`.
+
+The server configuration is equivalent to:
+
+```toml
+bindAddr = "0.0.0.0"
+bindPort = 7000
+vhostHTTPPort = 8080
+
+auth.method = "token"
+auth.token = "<internal-frp-token>"
+
+allowPorts = [ { start = 20000, end = 20100 } ]
+
+log.to = "console"
+log.level = "warn"
+```
+
+FRP Dashboard, Prometheus, HTTP plugins, and custom 404 management are disabled.
+
+The client configuration includes the advertised endpoint, Internal FRP Token, a stable hidden FRP user namespace, console warning logs, and one proxy per enabled Tunnel Definition:
+
+```toml
+serverAddr = "tunnel.example.com"
+serverPort = 7000
+user = "ycy_<internal-client-key>"
+loginFailExit = false
+
+auth.method = "token"
+auth.token = "<internal-frp-token>"
+
+log.to = "console"
+log.level = "warn"
+
+[[proxies]]
+name = "t_<stable-tunnel-id>"
+type = "http"
+localIP = "127.0.0.1"
+localPort = 3000
+customDomains = [ "app.example.com" ]
+```
+
+TCP and UDP proxies replace `customDomains` with `remotePort`. If a snapshot has no enabled tunnels, the agent acknowledges it without keeping a frpc child in memory.
+
+## Process Supervision
+
+Server and client supervisors each own zero or one FRP child. Child creation, exit handling, manual commands, and configuration reconciliation pass through one serialized state machine so concurrent events cannot start duplicates.
+
+Unexpected child exits retry after `1s, 2s, 4s, 8s, 15s, 30s`, capped at 30 seconds. A stable run resets the failure count. A deterministic verification or configuration error enters `configuration_failed` and waits for a new Desired Revision or explicit operator action instead of looping.
+
+### Client Apply Transaction
+
+1. Render the complete desired TOML to a temporary file.
+2. Run the pinned `frpc verify -c <temporary-file>` as a bounded child process.
+3. If verification fails, keep the existing child and Applied Revision unchanged.
+4. Stop the current frpc gracefully and wait for bounded termination.
+5. Atomically publish the candidate configuration and start one new frpc.
+6. If startup fails, restore the previous file and child, then report the new revision as failed.
+7. On success, persist and acknowledge the new Applied Revision.
+
+This deliberately causes a brief interruption to every tunnel on that client when a valid configuration changes. No frpc Admin API or reload adapter is kept resident.
+
+### Manual Control
+
+- Server UI `Start`, `Stop`, and `Restart` affect only frps. Intentional Stop suppresses crash recovery until Start, Restart, or supervisor restart.
+- Client UI exposes only `Restart frpc`; tunnel start/stop is the per-tunnel Enabled switch.
+- ycy supervisors never restart themselves. Docker, systemd, launchd, or the calling shell owns that lifecycle.
+
+## Control Plane HTTP And UI
+
+The ycy HTTP service owns the embedded React application, JSON API, administrator session, and agent WebSocket. The FRP Dashboard is not proxied or embedded.
+
+The implementation exposes these versioned routes:
+
+| Method | Route | Purpose |
+| --- | --- | --- |
+| `POST` | `/api/session` | Authenticate the shared administrator. |
+| `DELETE` | `/api/session` | End the administrator session. |
+| `GET` | `/api/state` | Overview counts, frps state, and read-only deployment settings. |
+| `GET\|POST` | `/api/clients` | List clients or create one with an optional Client Remark and generate its Client Token. |
+| `GET\|PATCH\|DELETE` | `/api/clients/:id` | Read, change the Client Remark, or cascade-delete one internal client record. |
+| `POST` | `/api/clients/:id/rotate` | Replace and reveal the Client Token. |
+| `POST` | `/api/clients/:id/restart` | Ask an online client to restart frpc. |
+| `GET\|POST` | `/api/clients/:id/tunnels` | List or create Tunnel Definitions. |
+| `PATCH\|DELETE` | `/api/tunnels/:id` | Edit, enable/disable, or delete a tunnel. |
+| `POST` | `/api/server/frp/:action` | Start, stop, or restart frps. |
+| WebSocket | `/api/agent` | Authenticated native agent control channel. |
+| `GET` | `/healthz` | ycy liveness without FRP polling. |
+
+The UI is deliberately limited to:
+
+- Login.
+- Overview with ycy/frps process state, client connection counts, and aggregate tunnel states.
+- Client list with Client Remarks, create/edit, token reveal/copy/rotate, delete, connection state, and revision state.
+- Client detail with HTTP/TCP/UDP tunnel CRUD, Enabled controls, last structured error, and frpc restart.
+- Server view with frps controls and read-only deployment settings.
+
+Do not add traffic charts, endpoint status, log viewers, onboarding marketing content, nested dashboard cards, or background polling for FRP state. Push client state changes over the existing server-to-browser event mechanism selected during implementation, and keep retained state bounded.
+
+## Status Semantics
+
+Client connection state is `connected`, `disconnected`, `incompatible`, or `revocation_pending`. FRP child state is `stopped`, `running`, `recovering`, or `configuration_failed`.
+
+Tunnel presentation derives from configuration and revision state only:
+
+| State | Meaning |
+| --- | --- |
+| `Disabled` | The definition reserves its resource but is omitted from FRP config. |
+| `Pending` | Enabled, but the owning client has not applied the Desired Revision. |
+| `Applied` | Included in the currently Applied Revision while frpc is running. |
+| `Error` | The desired snapshot failed verification or activation. |
+
+There is no `Healthy`, `Unhealthy`, throughput, or connection-count state.
+
+## Docker Deployment
+
+One multi-architecture Linux x64/arm64 image is published. It contains the standalone ycy binary and pinned FRP distribution, declares `/data` as the server data directory, and defaults to `ycy tunnel server`. No separate client image or client-container documentation is maintained.
+
+A representative deployment publishes:
+
+```yaml
+services:
+  tunnel:
+    image: ghcr.io/hackycy/hackycy-cli:<version>
+    restart: unless-stopped
+    environment:
+      YCY_TUNNEL_DATA_DIR: /data
+      YCY_TUNNEL_ADMIN_USER: admin
+      YCY_TUNNEL_ADMIN_PASSWORD: '${YCY_TUNNEL_ADMIN_PASSWORD:-admin}'
+    volumes:
+      - tunnel-data:/data
+    ports:
+      - '7000:7000/tcp'
+      - '8080:8080/tcp'
+      - '7500:7500/tcp'
+      - '20000-20100:20000-20100/tcp'
+      - '20000-20100:20000-20100/udp'
+```
+
+NPM should normally expose the control UI through a dedicated HTTPS hostname and proxy each externally managed HTTP hostname to port 8080 while retaining its Host header. The FRP bind port and TCP/UDP pool must be published directly through Docker and the host firewall.
+
+## Source Ownership
+
+```text
+src/commands/tunnel/
+  index.ts                 Commander registration only
+  atomic-file.ts           Shared atomic state/configuration publication
+  backoff.ts               Shared capped retry schedule
+  config.ts                CLI/environment/secret-file parsing and validation
+  paths.ts                 Fixed native and Docker state/binary paths
+  lock.ts                  Cross-platform single-instance ownership
+  types.ts                 Domain and control-protocol contracts
+  frp/
+    version.ts             Sole hand-maintained pinned FRP version
+    manifest.generated.ts  Generated platform archives and checksums
+    manifest.ts            Stable artifact resolution interface
+    archive.ts             Archive extraction and digest primitives
+    binary.ts              Resolve, download, verify, and atomically install
+    config.ts              Typed frps/frpc TOML rendering
+    supervisor.ts          Serialized zero-or-one child state machine
+  server/
+    run.ts                 Server composition and signal handling
+    database.ts            SQLite schema, migrations, and transactions
+    control-plane.ts       Client/tunnel operations and revision truth
+    agent-gateway.ts       WebSocket sessions and snapshot delivery
+    admin-sessions.ts      Bounded shared-administrator sessions
+    views.ts               Client and tunnel status projections
+    control-api.ts         Health and control API routes
+    http.ts                Listener, embedded assets, SSE, and WebSocket lifecycle
+    web/
+      app.tsx              React application shell and page routing
+      client-pages.tsx     Client list/detail and remark workflows
+      ui.tsx               Shared operational UI controls
+  client/
+    run.ts                 Client composition and signal handling
+    agent.ts               WebSocket handshake, reconnect, and commands
+    reconciler.ts          Verify, activate, rollback, and acknowledge
+    state.ts               Last-applied rollback state
+  acceptance.ts            Real-FRP HTTP/TCP/UDP forwarding acceptance
+  idle-resource.test.ts    Bounded idle-state and no-polling acceptance
+```
+
+The control plane is the only owner of desired state and uniqueness. HTTP handlers and the UI call it rather than writing SQLite directly. The reconciler is the only owner of client configuration activation. The supervisor is the only code allowed to spawn or stop FRP.
+
+## Implementation Layers
+
+1. Foundation: domain types, environment parsing, fixed paths, lock ownership, SQLite migrations, FRP manifest/downloader, TOML rendering, and child supervision.
+2. Server core: control-plane transactions, frps composition, administrator sessions/API, and the agent WebSocket handshake.
+3. Native client: authentication-first startup, binary resolution, full-snapshot reconciliation, rollback, reconnect, cooperative revocation, and status acknowledgements.
+4. UI: the accepted operational views, responsive layouts, visible mutation failures, and bounded state.
+5. Distribution: native release binaries, the server Docker image, FRP license attribution, NPM/Docker examples, and release checksums.
+6. Verification: unit and integration tests, real-FRP end-to-end acceptance, native build smoke checks, and idle-resource checks.
+
+Foundation, server, native client, UI, and distribution remain independently testable. Control-plane and agent state machines are covered through direct tests and HTTP fixtures in addition to end-to-end acceptance.
+
+## Verification And Acceptance
+
+Required automated coverage:
+
+- Configuration precedence, secret files, hostname normalization, port ranges, and platform paths.
+- SQLite migrations, cascade deletion, token rotation, resource reservation, automatic port allocation, and atomic revision increments.
+- Single-instance acquisition, stale-lock handling, one-child ownership, manual stop, backoff, and deterministic-error suppression.
+- Binary artifact selection, SHA-256 rejection, atomic installation, manual-download diagnostics, and reported-version validation.
+- Exact generated TOML for HTTP/TCP/UDP, disabled tunnels, stable names, and server port ranges.
+- Agent authentication, duplicate rejection, compatibility rejection, complete snapshots, acknowledgements, reconnect, revoke, and revision races.
+- Reconciler verification failure, activation rollback, empty enabled set, child crash recovery, and control outage behavior.
+- Admin session protection and every mutating API transaction.
+- Real pinned-FRP end-to-end forwarding for multiple clients over HTTP Host routing, TCP, and UDP.
+- Source-mode behavior and standalone builds on the supported native target matrix.
+
+Acceptance scenarios:
+
+1. A second server or client instance cannot start against the same state directory.
+2. Two trusted clients connect with distinct tokens and receive only their own snapshots.
+3. HTTP domains and protocol-specific public ports cannot be double-reserved, including by disabled tunnels.
+4. A valid UI mutation automatically becomes Applied; an invalid snapshot leaves the previous revision running.
+5. An ordinary management-link outage leaves existing forwarding active, but a cold-starting client does not use cache.
+6. Token rotation preserves tunnels and invalidates the old agent cooperatively; deletion cascades tunnels and frees resources.
+7. Unexpected FRP exits recover without duplicate children or a fast crash loop.
+8. A missing client FRP binary downloads and verifies, while download failure prints a complete manual-install instruction.
+9. Idle runtime performs no endpoint probes, FRP status polling, metric sampling, or log retention, and memory does not grow with traffic history.
+
+Before release, run the tunnel suites plus the repository-wide typecheck, lint, and standalone build. Changes to shared web primitives must also run existing `serve` and `diff` tests.

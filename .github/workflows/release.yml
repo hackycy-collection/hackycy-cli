@@ -10,7 +10,76 @@ on:
   workflow_dispatch:
 
 jobs:
+  verify-frp-manifest:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Verify repository quality gates
+        run: |
+          bun test
+          bun run typecheck
+          bun run lint
+
+      - name: Verify pinned FRP manifest
+        run: bun run check:frp-manifest
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify source tunnel runtime with real FRP
+        run: |
+          bun src/cli.ts tunnel --help
+          bun run test:tunnel:idle
+          bun run test:tunnel:acceptance
+
+  verify-native-tunnel:
+    needs: verify-frp-manifest
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            artifact: .tmp/ycy-tunnel-smoke
+          - os: ubuntu-latest
+            artifact: .tmp/ycy-tunnel-smoke
+          - os: windows-latest
+            artifact: .tmp/ycy-tunnel-smoke.exe
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build native standalone binary
+        run: bun scripts/build.ts --outfile ${{ matrix.artifact }}
+
+      - name: Verify standalone tunnel command
+        shell: bash
+        run: |
+          "./${{ matrix.artifact }}" tunnel --help
+          "./${{ matrix.artifact }}" tunnel server --help
+          "./${{ matrix.artifact }}" tunnel connect --help
+
   build:
+    needs: verify-frp-manifest
     strategy:
       matrix:
         include:
@@ -32,6 +101,9 @@ jobs:
           - os: windows-latest
             target: windows-x64
             artifact: ycy-windows-x64.exe
+          - os: windows-latest
+            target: windows-arm64
+            artifact: ycy-windows-arm64.exe
 
     runs-on: ${{ matrix.os }}
 
@@ -62,7 +134,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: build
+    needs: [build, verify-native-tunnel]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -89,7 +161,7 @@ jobs:
           cat dist/SHA256SUMS
 
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           draft: false
           generate_release_notes: true
@@ -99,6 +171,43 @@ jobs:
             dist/ycy-linux-x64/ycy-linux-x64
             dist/ycy-linux-arm64/ycy-linux-arm64
             dist/ycy-windows-x64.exe/ycy-windows-x64.exe
+            dist/ycy-windows-arm64.exe/ycy-windows-arm64.exe
             dist/SHA256SUMS
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  tunnel-image:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [verify-frp-manifest, verify-native-tunnel]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and publish tunnel image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.tunnel
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ghcr.io/hackycy/hackycy-cli:${{ github.ref_name }}
+            ghcr.io/hackycy/hackycy-cli:latest

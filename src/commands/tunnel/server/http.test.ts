@@ -1,0 +1,275 @@
+import type { FrpChild } from '../frp/supervisor'
+import type { ServerTunnelConfig } from '../types'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { resolveFrpArtifact } from '../frp/manifest'
+import { FrpSupervisor } from '../frp/supervisor'
+import { TUNNEL_PROTOCOL_VERSION } from '../types'
+import { AgentGateway } from './agent-gateway'
+import { TunnelControlPlane } from './control-plane'
+import { TunnelDatabase } from './database'
+import { startTunnelHttpServer } from './http'
+
+class FakeChild implements FrpChild {
+  readonly pid = 42
+  readonly exited: Promise<number>
+  private exit!: (code: number) => void
+
+  constructor() {
+    this.exited = new Promise(resolve => this.exit = resolve)
+  }
+
+  kill(): void {
+    this.exit(0)
+  }
+}
+
+interface Fixture {
+  database: TunnelDatabase
+  controlPlane: TunnelControlPlane
+  gateway: AgentGateway
+  frps: FrpSupervisor
+  server: ReturnType<typeof startTunnelHttpServer>
+}
+
+const fixtures: Fixture[] = []
+
+afterEach(async () => {
+  for (const fixture of fixtures.splice(0)) {
+    fixture.gateway.stop()
+    await fixture.server.stop()
+    await fixture.frps.stop()
+    fixture.database.close()
+  }
+})
+
+function fixture(): Fixture {
+  const database = new TunnelDatabase(':memory:')
+  const controlPlane = new TunnelControlPlane(database, { start: 20000, end: 20002 })
+  const gateway = new AgentGateway(controlPlane, 7000)
+  const frps = new FrpSupervisor({ binaryPath: '/frps', role: 'frps', spawn: () => new FakeChild() })
+  const config: ServerTunnelConfig = {
+    address: '127.0.0.1',
+    controlPort: 0,
+    frpPort: 7000,
+    httpPort: 8080,
+    portRange: { start: 20000, end: 20002 },
+    dataDir: '/data',
+    adminUser: 'admin',
+    adminPassword: 'secret',
+  }
+  const server = startTunnelHttpServer({ config, controlPlane, gateway, frps, frpsConfigPath: '/frps.toml' })
+  const result = { database, controlPlane, gateway, frps, server }
+  fixtures.push(result)
+  return result
+}
+
+async function login(server: Fixture['server']): Promise<string> {
+  const response = await fetch(new URL('/api/session', server.url), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ username: 'admin', password: 'secret' }),
+  })
+  expect(response.status).toBe(200)
+  return response.headers.get('set-cookie')!.split(';')[0]!
+}
+
+function request(server: Fixture['server'], pathname: string, cookie: string, init: RequestInit = {}): Promise<Response> {
+  return fetch(new URL(pathname, server.url), {
+    ...init,
+    headers: { Cookie: cookie, Origin: server.url.origin, ...init.headers },
+  })
+}
+
+function openAgent(server: Fixture['server'], token: string): Promise<{ socket: WebSocket, firstMessage: Promise<any> }> {
+  const url = new URL('/api/agent', server.url)
+  url.protocol = 'ws:'
+  const BunWebSocket = WebSocket as unknown as { new (url: string | URL, options: Bun.WebSocketOptions): WebSocket }
+  const socket = new BunWebSocket(url, { headers: { Authorization: `Bearer ${token}` } })
+  const firstMessage = new Promise<any>((resolve, reject) => {
+    socket.addEventListener('error', reject, { once: true })
+    socket.addEventListener('open', () => socket.send(JSON.stringify({
+      type: 'hello',
+      tunnelProtocolVersion: TUNNEL_PROTOCOL_VERSION,
+      ycyVersion: 'test',
+      platform: process.platform,
+      architecture: process.arch,
+      lastAppliedRevision: 0,
+    })), { once: true })
+    socket.addEventListener('message', event => resolve(JSON.parse(String(event.data))), { once: true })
+  })
+  return Promise.resolve({ socket, firstMessage })
+}
+
+describe('Tunnel HTTP control plane', () => {
+  test('bounds administrator sessions with least-recently-used eviction', async () => {
+    const value = fixture()
+    const cookies: string[] = []
+    for (let index = 0; index < 32; index++)
+      cookies.push(await login(value.server))
+    expect((await request(value.server, '/api/state', cookies[0]!)).status).toBe(200)
+    cookies.push(await login(value.server))
+
+    expect((await request(value.server, '/api/state', cookies[1]!)).status).toBe(401)
+    expect((await request(value.server, '/api/state', cookies[0]!)).status).toBe(200)
+    expect((await request(value.server, '/api/state', cookies.at(-1)!)).status).toBe(200)
+  })
+
+  test('protects admin routes and performs client and tunnel mutations', async () => {
+    const value = fixture()
+    expect((await fetch(new URL('/healthz', value.server.url))).status).toBe(200)
+    expect((await fetch(new URL('/api/state', value.server.url))).status).toBe(401)
+    const rejected = await fetch(new URL('/api/session', value.server.url), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'admin', password: 'wrong' }),
+    })
+    expect(rejected.status).toBe(401)
+    const cookie = await login(value.server)
+    const createdResponse = await request(value.server, '/api/clients', cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    const client = (await createdResponse.json()).client
+    expect(createdResponse.status).toBe(201)
+    expect(client.remark).toBe('')
+    expect(client.token).toStartWith('ycy_')
+
+    const updatedResponse = await request(value.server, `/api/clients/${client.id}`, cookie, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remark: 'Home lab\nGateway' }),
+    })
+    expect(updatedResponse.status).toBe(200)
+    expect((await updatedResponse.json()).client).toMatchObject({ remark: 'Home lab\nGateway', token: client.token })
+
+    const tunnelResponse = await request(value.server, `/api/clients/${client.id}/tunnels`, cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ protocol: 'http', hostname: 'App.Example.com', localPort: 3000 }),
+    })
+    const tunnel = (await tunnelResponse.json()).tunnel
+    expect(tunnelResponse.status).toBe(201)
+    expect(tunnel.hostname).toBe('app.example.com')
+    const detail = await request(value.server, `/api/clients/${client.id}`, cookie).then(response => response.json())
+    expect(detail.client.desiredRevision).toBe(1)
+    expect(detail.tunnels[0].state).toBe('Pending')
+    const state = await request(value.server, '/api/state', cookie).then(response => response.json())
+    expect(state.counts).toMatchObject({ clients: 1, tunnels: 1, pending: 1 })
+
+    const patchedTunnel = await request(value.server, `/api/tunnels/${tunnel.id}`, cookie, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    })
+    expect(patchedTunnel.status).toBe(200)
+    expect((await patchedTunnel.json()).tunnel.enabled).toBe(false)
+    expect((await request(value.server, `/api/tunnels/${tunnel.id}`, cookie, { method: 'DELETE' })).status).toBe(204)
+    expect((await request(value.server, `/api/clients/${client.id}`, cookie).then(response => response.json())).tunnels).toEqual([])
+    expect((await request(value.server, `/api/clients/${client.id}`, cookie, { method: 'DELETE' })).status).toBe(204)
+    expect((await request(value.server, '/api/clients', cookie).then(response => response.json())).clients).toEqual([])
+    expect((await request(value.server, '/api/session', cookie, { method: 'DELETE' })).status).toBe(204)
+    expect((await request(value.server, '/api/state', cookie)).status).toBe(401)
+  })
+
+  test('authenticates one agent, pushes snapshots, records acknowledgements, and revokes rotation', async () => {
+    const value = fixture()
+    const client = value.controlPlane.createClient('Agent fixture')
+    const { socket, firstMessage } = await openAgent(value.server, client.token)
+    const welcome = await firstMessage
+    const artifact = resolveFrpArtifact()
+    expect(welcome).toMatchObject({
+      type: 'welcome',
+      requiredFrpVersion: artifact.version,
+      snapshot: { revision: 0, tunnels: [] },
+    })
+    expect(typeof welcome.internalFrpToken).toBe('string')
+    const duplicate = value.gateway.authorize(new Request(new URL('/api/agent', value.server.url), { headers: { Authorization: `Bearer ${client.token}` } }))
+    expect(duplicate).toBeInstanceOf(Response)
+    expect((duplicate as Response).status).toBe(409)
+
+    const desiredMessage = new Promise<any>(resolve => socket.addEventListener('message', event => resolve(JSON.parse(String(event.data))), { once: true }))
+    value.controlPlane.createTunnel(client.id, { protocol: 'tcp', localPort: 22 })
+    const desired = await desiredMessage
+    expect(desired).toMatchObject({ type: 'desired_state', snapshot: { revision: 1 } })
+    socket.send(JSON.stringify({ type: 'apply_result', tunnelProtocolVersion: TUNNEL_PROTOCOL_VERSION, revision: 1, success: true }))
+    for (let attempt = 0; attempt < 50 && value.controlPlane.getClient(client.id).lastAppliedRevision !== 1; attempt++)
+      await Bun.sleep(2)
+    expect(value.controlPlane.getClient(client.id).lastAppliedRevision).toBe(1)
+
+    const cookie = await login(value.server)
+    const restartMessage = new Promise<any>(resolve => socket.addEventListener('message', event => resolve(JSON.parse(String(event.data))), { once: true }))
+    const restarted = await request(value.server, `/api/clients/${client.id}/restart`, cookie, { method: 'POST' })
+    expect(restarted.status).toBe(202)
+    expect(await restartMessage).toMatchObject({ type: 'restart_frpc' })
+
+    const revokeMessage = new Promise<any>(resolve => socket.addEventListener('message', event => resolve(JSON.parse(String(event.data))), { once: true }))
+    const rotated = value.controlPlane.rotateClientToken(client.id)
+    expect(await revokeMessage).toMatchObject({ type: 'revoke', reason: 'rotated' })
+    if (socket.readyState !== WebSocket.CLOSED)
+      await new Promise<void>(resolve => socket.addEventListener('close', () => resolve(), { once: true }))
+
+    const rejectedProbe = await fetch(new URL('/api/agent', value.server.url), { headers: { Authorization: `Bearer ${client.token}` } })
+    expect(rejectedProbe.status).toBe(401)
+    const acceptedProbe = await fetch(new URL('/api/agent', value.server.url), { headers: { Authorization: `Bearer ${rotated.token}` } })
+    expect(acceptedProbe.status).toBe(426)
+  })
+
+  test('keeps a failed Desired Revision in Error while the previous child is running', async () => {
+    const value = fixture()
+    const cookie = await login(value.server)
+    const client = value.controlPlane.createClient('Failure fixture')
+    const { socket, firstMessage } = await openAgent(value.server, client.token)
+    await firstMessage
+
+    const desiredMessage = new Promise<void>(resolve => socket.addEventListener('message', () => resolve(), { once: true }))
+    value.controlPlane.createTunnel(client.id, { protocol: 'http', hostname: 'failure.example.com', localPort: 3000 })
+    await desiredMessage
+    socket.send(JSON.stringify({
+      type: 'apply_result',
+      tunnelProtocolVersion: TUNNEL_PROTOCOL_VERSION,
+      revision: 1,
+      success: false,
+      error: { code: 'ACTIVATION_FAILED', message: 'candidate exited', revision: 1 },
+    }))
+    socket.send(JSON.stringify({ type: 'process_state', tunnelProtocolVersion: TUNNEL_PROTOCOL_VERSION, state: 'running' }))
+    for (let attempt = 0; attempt < 50 && value.gateway.state(client.id).lastError?.revision !== 1; attempt++)
+      await Bun.sleep(2)
+
+    expect(value.gateway.state(client.id)).toMatchObject({ processState: 'running', lastError: { revision: 1 } })
+    const detail = await request(value.server, `/api/clients/${client.id}`, cookie).then(response => response.json())
+    expect(detail.tunnels[0].state).toBe('Error')
+    socket.close()
+  })
+
+  test('controls the supervised frps process through every server action', async () => {
+    const value = fixture()
+    const cookie = await login(value.server)
+
+    for (const action of ['start', 'restart', 'stop'] as const) {
+      const response = await request(value.server, `/api/server/frp/${action}`, cookie, { method: 'POST' })
+      expect(response.status).toBe(200)
+      expect((await response.json()).frps.state).toBe(action === 'stop' ? 'stopped' : 'running')
+    }
+  })
+
+  test('accepts the external HTTPS origin from a same-host TLS proxy', async () => {
+    const value = fixture()
+    const cookie = await login(value.server)
+    const externalOrigin = new URL(value.server.url)
+    externalOrigin.protocol = 'https:'
+    const accepted = await fetch(new URL('/api/clients', value.server.url), {
+      method: 'POST',
+      headers: { 'Cookie': cookie, 'Origin': externalOrigin.origin, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remark: 'Behind NPM' }),
+    })
+    expect(accepted.status).toBe(201)
+
+    const rejected = await fetch(new URL('/api/clients', value.server.url), {
+      method: 'POST',
+      headers: { 'Cookie': cookie, 'Origin': 'https://attacker.example', 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    })
+    expect(rejected.status).toBe(403)
+  })
+})
