@@ -36,8 +36,6 @@
     "preflight:release": "bun run check:frp-manifest",
     "release": "bun run preflight:release && bumpp",
     "start": "bun src/cli.ts",
-    "test:tunnel:acceptance": "bun test ./src/commands/tunnel/acceptance.ts",
-    "test:tunnel:idle": "bun test ./src/commands/tunnel/idle-resource.test.ts",
     "typecheck": "tsc",
     "prepare": "simple-git-hooks",
     "prepare:7zip": "bun scripts/prepare-seven-zip.ts"
