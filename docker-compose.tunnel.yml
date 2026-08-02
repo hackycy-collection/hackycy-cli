@@ -1,20 +1,92 @@
+# Tunnel control plane and its managed frps data-plane process.
+#
+# Before starting, set YCY_TUNNEL_ADMIN_PASSWORD in the shell or an untracked
+# .env file, then run: docker compose -f docker-compose.tunnel.yml up -d
+# The control plane and the persistent volume contain recoverable client tokens,
+# so restrict access to this host and back up the volume as sensitive data.
 services:
   tunnel:
+    # Set YCY_VERSION to a released image tag to pin upgrades; omitting it uses
+    # the latest image tag. The image is server-only: tunnel clients run natively.
     image: ghcr.io/hackycy/hackycy-cli:${YCY_VERSION:-latest}
+    # ycy and its single frps child stay in the foreground. Docker owns restart
+    # behavior; "unless-stopped" also brings the server back after host reboot.
     restart: unless-stopped
+    # Starts the tunnel control UI/API, agent WebSocket, SQLite state, and one
+    # supervised FRP server (frps). The image entrypoint is already "ycy".
     command: [tunnel, server]
     environment:
+      # Directory for the SQLite control-plane database, generated FRP settings,
+      # and server lock. It must match the mounted volume path below.
       YCY_TUNNEL_DATA_DIR: /data
+
+      # Stable Deployment Administrator username. It is managed by this
+      # environment setting, not editable or deletable in the control UI.
+      # Usernames accept 1-64 ASCII letters, numbers, dots, underscores, or hyphens.
       YCY_TUNNEL_ADMIN_USER: admin
+
+      # Required Deployment Administrator password (8-256 characters). Compose
+      # refuses to start when YCY_TUNNEL_ADMIN_PASSWORD is unset; keep its value
+      # in an untracked .env file or the invoking shell, never in this file.
       YCY_TUNNEL_ADMIN_PASSWORD: '${YCY_TUNNEL_ADMIN_PASSWORD:?required}'
+
+      # Optional server settings. Uncomment only when changing a default.
+      # Any listener or port-pool change also requires matching changes in
+      # "ports" below, plus firewall, reverse-proxy, DNS, and client settings.
+
+      # Address bound by the control plane and every frps listener inside this
+      # container. Default: 0.0.0.0. Use an address reachable from the required
+      # Docker network; binding to 127.0.0.1 makes published ports unavailable.
+      # YCY_TUNNEL_ADDRESS: 0.0.0.0
+
+      # Control-plane HTTP listener. Serves the account UI/API, /healthz, and
+      # native-client WebSocket endpoint. Default: 7500. A reverse proxy must
+      # preserve WebSocket upgrades when exposing this through HTTPS.
+      # YCY_TUNNEL_CONTROL_PORT: 7500
+
+      # frps data-plane listener used by native frpc clients after control-plane
+      # authentication. Default: 7000. This must be directly reachable by clients.
+      # YCY_TUNNEL_FRP_PORT: 7000
+
+      # frps HTTP virtual-host listener. Default: 8080. It routes HTTP tunnels
+      # by the original Host header; point each public hostname's ingress here
+      # and preserve that header. This does not provide HTTPS, DNS, or TLS.
+      # YCY_TUNNEL_HTTP_PORT: 8080
+
+      # Inclusive server-side public port pool for TCP and UDP tunnel definitions.
+      # Default: 20000-20100. A port is available once per protocol. Do not include
+      # the control, frps, or HTTP listener ports in this range.
+      # YCY_TUNNEL_PORT_RANGE: 20000-20100
+
+      # Public host:port supplied to native clients for their frpc connection.
+      # Normally it is inferred from the client request host and FRP port. Set
+      # this for NAT, a different Docker host port, or a dedicated FRP hostname.
+      # Use host:port (or [IPv6]:port), without a URL scheme.
+      # YCY_TUNNEL_ADVERTISE_FRP_ADDR: tunnel.example.com:7000
     volumes:
+      # Named volume retains the database and internal FRP token across container
+      # replacement. Removing it creates a new control plane and invalidates its
+      # existing client enrollment state.
       - tunnel-data:/data
     ports:
+      # Native frpc data-plane connections. Publish directly and allow it through
+      # the host firewall; changing its container port must match FRP_PORT above.
       - '7000:7000/tcp'
+
+      # Control UI/API and native-client WebSocket. In production it is commonly
+      # exposed via a dedicated HTTPS reverse-proxy hostname with WebSocket support.
       - '7500:7500/tcp'
+
+      # HTTP tunnel ingress. Route every configured public hostname here while
+      # retaining its Host header. A separate reverse proxy handles DNS/TLS.
       - '8080:8080/tcp'
+
+      # Public TCP/UDP tunnel endpoints. Both mappings are necessary because the
+      # same number can be allocated independently for TCP and UDP. Keep this
+      # exact range synchronized with YCY_TUNNEL_PORT_RANGE and the host firewall.
       - '20000-20100:20000-20100/tcp'
       - '20000-20100:20000-20100/udp'
 
 volumes:
+  # Docker-managed persistent storage mounted at /data by the tunnel service.
   tunnel-data:
