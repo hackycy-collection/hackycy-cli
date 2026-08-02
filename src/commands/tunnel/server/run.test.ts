@@ -20,7 +20,7 @@ describe('Tunnel server lifecycle', () => {
       portRange: { start: 20000, end: 20002 },
       dataDir,
       adminUser: 'admin',
-      adminPassword: 'secret',
+      adminPassword: 'admin-secret',
     }
     try {
       const running = runTunnelServer(config, {
@@ -55,7 +55,7 @@ describe('Tunnel server lifecycle', () => {
       portRange: { start: 20100, end: 20102 },
       dataDir,
       adminUser: 'admin',
-      adminPassword: 'secret',
+      adminPassword: 'admin-secret',
     }
     try {
       const running = runTunnelServer(config, {

@@ -3,9 +3,14 @@ import { TunnelError } from '../types'
 import { normalizeExactHostname, TunnelControlPlane } from './control-plane'
 import { TunnelDatabase } from './database'
 
-function fixture(range = { start: 20000, end: 20002 }): { database: TunnelDatabase, controlPlane: TunnelControlPlane } {
+function fixture(range = { start: 20000, end: 20002 }): { database: TunnelDatabase, controlPlane: TunnelControlPlane, ownerId: string } {
   const database = new TunnelDatabase(':memory:')
-  return { database, controlPlane: new TunnelControlPlane(database, range) }
+  const ownerId = 'test-owner'
+  database.sqlite.query(`
+    INSERT INTO accounts(internal_id, kind, username, username_key, role, password_hash, created_at, updated_at)
+    VALUES(?, 'environment', 'admin', 'admin', 'admin', NULL, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+  `).run(ownerId)
+  return { database, controlPlane: new TunnelControlPlane(database, range), ownerId }
 }
 
 describe('TunnelControlPlane', () => {
@@ -17,13 +22,13 @@ describe('TunnelControlPlane', () => {
   })
 
   test('keeps Client Tokens recoverable and preserves tunnels across rotation', () => {
-    const { database, controlPlane } = fixture()
-    const client = controlPlane.createClient('  Office Mac  ')
+    const { database, controlPlane, ownerId } = fixture()
+    const client = controlPlane.createClient(ownerId, '  Office Mac  ')
     expect(client.remark).toBe('Office Mac')
-    expect(controlPlane.createClient().remark).toBe('')
-    expect(controlPlane.createClient('   ').remark).toBe('')
-    expect(controlPlane.createClient('  line one\nline two  ').remark).toBe('line one\nline two')
-    expect(() => controlPlane.createClient('x'.repeat(101))).toThrow('Client Remark')
+    expect(controlPlane.createClient(ownerId).remark).toBe('')
+    expect(controlPlane.createClient(ownerId, '   ').remark).toBe('')
+    expect(controlPlane.createClient(ownerId, '  line one\nline two  ').remark).toBe('line one\nline two')
+    expect(() => controlPlane.createClient(ownerId, 'x'.repeat(101))).toThrow('Client Remark')
     expect(controlPlane.updateClientRemark(client.id, 'Office\ngateway').remark).toBe('Office\ngateway')
     expect(controlPlane.updateClientRemark(client.id, '').remark).toBe('')
     expect(controlPlane.getClient(client.id).token).toBe(client.token)
@@ -39,9 +44,9 @@ describe('TunnelControlPlane', () => {
   })
 
   test('reserves hostnames globally even when disabled and releases them on deletion', () => {
-    const { database, controlPlane } = fixture()
-    const first = controlPlane.createClient('First client')
-    const second = controlPlane.createClient('Second client')
+    const { database, controlPlane, ownerId } = fixture()
+    const first = controlPlane.createClient(ownerId, 'First client')
+    const second = controlPlane.createClient(ownerId, 'Second client')
     const tunnel = controlPlane.createTunnel(first.id, { protocol: 'http', hostname: 'APP.example.com', localPort: 3000, enabled: false })
     expect(() => controlPlane.createTunnel(second.id, { protocol: 'http', hostname: 'app.example.com', localPort: 3001 })).toThrow('already reserved')
     controlPlane.deleteTunnel(tunnel.id)
@@ -50,9 +55,9 @@ describe('TunnelControlPlane', () => {
   })
 
   test('allocates the lowest free port independently per transport protocol', () => {
-    const { database, controlPlane } = fixture()
-    const first = controlPlane.createClient('First client')
-    const second = controlPlane.createClient('Second client')
+    const { database, controlPlane, ownerId } = fixture()
+    const first = controlPlane.createClient(ownerId, 'First client')
+    const second = controlPlane.createClient(ownerId, 'Second client')
     const tcp = controlPlane.createTunnel(first.id, { protocol: 'tcp', localPort: 5432 })
     const udp = controlPlane.createTunnel(second.id, { protocol: 'udp', localPort: 53 })
     const nextTcp = controlPlane.createTunnel(second.id, { protocol: 'tcp', localPort: 5433 })
@@ -64,8 +69,8 @@ describe('TunnelControlPlane', () => {
   })
 
   test('increments Desired Revision atomically for every mutation and bounds Applied Revision', () => {
-    const { database, controlPlane } = fixture()
-    const client = controlPlane.createClient('DNS client')
+    const { database, controlPlane, ownerId } = fixture()
+    const client = controlPlane.createClient(ownerId, 'DNS client')
     const tunnel = controlPlane.createTunnel(client.id, { protocol: 'udp', localPort: 53 })
     expect(controlPlane.getClient(client.id).desiredRevision).toBe(1)
     controlPlane.updateTunnel(tunnel.id, { enabled: false })
@@ -79,12 +84,12 @@ describe('TunnelControlPlane', () => {
   })
 
   test('cascade deletion frees reservations and removes the client', () => {
-    const { database, controlPlane } = fixture()
-    const first = controlPlane.createClient('First client')
+    const { database, controlPlane, ownerId } = fixture()
+    const first = controlPlane.createClient(ownerId, 'First client')
     controlPlane.createTunnel(first.id, { protocol: 'tcp', serverPort: 20002, localPort: 22 })
     controlPlane.deleteClient(first.id)
     expect(() => controlPlane.getClient(first.id)).toThrow('not found')
-    const second = controlPlane.createClient('Second client')
+    const second = controlPlane.createClient(ownerId, 'Second client')
     expect(controlPlane.createTunnel(second.id, { protocol: 'tcp', serverPort: 20002, localPort: 22 }).serverPort).toBe(20002)
     database.close()
   })

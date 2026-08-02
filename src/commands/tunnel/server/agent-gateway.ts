@@ -53,7 +53,7 @@ function isHello(message: AgentToServerMessage): message is AgentHelloMessage {
 export class AgentGateway {
   private readonly runtime = new Map<string, RuntimeEntry>()
   private readonly pendingConnections = new Set<string>()
-  private readonly listeners = new Set<() => void>()
+  private readonly listeners = new Set<(clientId?: string) => void>()
   private readonly unsubscribe: () => void
   private readonly livenessTimer: ReturnType<typeof setInterval>
 
@@ -66,14 +66,14 @@ export class AgentGateway {
     this.livenessTimer = setInterval(() => this.checkLiveness(), 30_000)
   }
 
-  observe(listener: () => void): () => void {
+  observe(listener: (clientId?: string) => void): () => void {
     this.listeners.add(listener)
     return () => this.listeners.delete(listener)
   }
 
-  private changed(): void {
+  private changed(clientId?: string): void {
     for (const listener of this.listeners)
-      listener()
+      listener(clientId)
   }
 
   state(clientId: string): ClientRuntimeState {
@@ -121,7 +121,7 @@ export class AgentGateway {
     }
     this.controlPlane.acknowledgeReplacementToken(socket.data.clientId)
     this.runtime.set(socket.data.clientId, { connectionState: 'connected', processState: existing?.processState ?? 'stopped', socket })
-    this.changed()
+    this.changed(socket.data.clientId)
   }
 
   cancelAuthorization(clientId: string): void {
@@ -235,7 +235,7 @@ export class AgentGateway {
       socket: undefined,
       connectionState: this.revocationPending(socket.data.clientId) ? 'revocation_pending' : clientState.connectionState === 'incompatible' ? 'incompatible' : 'disconnected',
     })
-    this.changed()
+    this.changed(socket.data.clientId)
   }
 
   pong(socket: ServerWebSocket<AgentSocketData>): void {
@@ -258,7 +258,7 @@ export class AgentGateway {
   private updateRuntime(clientId: string, patch: Partial<RuntimeEntry>): void {
     const current = this.runtime.get(clientId) ?? { connectionState: 'disconnected', processState: 'stopped' }
     this.runtime.set(clientId, { ...current, ...patch })
-    this.changed()
+    this.changed(clientId)
   }
 
   private send(clientId: string, message: ServerToAgentMessage): boolean {
@@ -295,7 +295,6 @@ export class AgentGateway {
         this.updateRuntime(event.clientId, { connectionState: 'revocation_pending' })
       }
     }
-    this.changed()
   }
 
   restartClient(clientId: string): boolean {

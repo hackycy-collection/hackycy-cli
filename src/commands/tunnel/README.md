@@ -13,6 +13,7 @@ ycy tunnel connect --server tunnel.example.com --token <client-token>
 
 - Start one public tunnel control plane and one supervised `frps` child.
 - Enroll multiple trusted native clients with one recoverable token per client.
+- Let multiple Control Plane Accounts manage owned resources through fixed Administrator and User roles.
 - Configure each client's tunnels centrally and push complete versioned snapshots.
 - Support HTTP by exact hostname and TCP/UDP by public server port.
 - Keep both server and client supervisors single-instance and foreground.
@@ -23,7 +24,7 @@ ycy tunnel connect --server tunnel.example.com --token <client-token>
 
 - HTTPS tunnel type, wildcard hostnames, URL-path routing, or automatic certificates.
 - DNS provider, Nginx Proxy Manager, firewall, or Docker port-management integrations.
-- Untrusted tenants, roles, per-client FRP authorization, or FRP server plugins.
+- Untrusted tenants, custom roles, configurable permissions, resource transfer, per-client FRP authorization, or FRP server plugins.
 - Client containers or a separate client Docker image.
 - Endpoint health checks, traffic graphs, retained logs, analytics, or a replacement FRP dashboard.
 - Self-daemonization, self-restart, or operating-system service installation.
@@ -46,6 +47,22 @@ _Avoid_: Client ID, Client Token, username
 **Tunnel Control Plane**:
 The central authority where Trusted Tunnel Clients are enrolled and their desired Tunnel Definitions are managed.
 _Avoid_: FRP dashboard, client configuration file
+
+**Control Plane Account**:
+A human operator identity that authenticates to the control UI and owns or administers Trusted Tunnel Clients.
+_Avoid_: Trusted Tunnel Client, Client Token, tenant
+
+**Account Role**:
+One of two fixed authorization levels. An Administrator can manage every resource, all local Control Plane Accounts, and frps; a User can fully manage only owned resources.
+_Avoid_: Permission set, policy, custom role
+
+**Deployment Administrator**:
+The stable Administrator identity whose username and password are managed by server environment variables. It cannot be changed or deleted through the control UI.
+_Avoid_: Shared account, emergency bypass
+
+**Resource Owner**:
+The Control Plane Account that creates a Trusted Tunnel Client. Every Tunnel Definition inherits that client's Resource Owner, including definitions later changed by an Administrator.
+_Avoid_: Tunnel creator, mutable assignee
 
 **Tunnel Definition**:
 A desired HTTP or port mapping assigned to one Trusted Tunnel Client by the Tunnel Control Plane.
@@ -84,9 +101,10 @@ _Avoid_: Tunnel Definition, Tunnel Control Plane
 | Decision | Rationale |
 | --- | --- |
 | Run server and client supervisors in the foreground. | Docker or the host service manager owns supervisor persistence and restart, keeping process ownership, signals, and logs predictable across platforms. |
-| Persist control-plane state in one embedded SQLite database. | Transactions, migrations, uniqueness, and cascade deletion do not require an external database; connection and process status remain bounded in memory. |
+| Persist control-plane state in one embedded SQLite database. | Transactions, ownership queries, uniqueness, and cascade deletion do not require an external database; connection, session, and process status remain bounded in memory. |
 | Keep current Client Tokens recoverable. | Authorized operators can retrieve credentials after creation; control-plane access, its data directory, and backups are therefore trusted, and rotation is the revocation mechanism. |
-| Use one shared control-plane administrator. | Multi-user authorization is outside scope; deployments configure the shared credentials and own the risk of retaining defaults. |
+| Use fixed Administrator and User roles with client-level ownership. | The two roles cover global operation and self-service without configurable policies; Tunnel Definitions inherit their client's owner so snapshots remain complete. |
+| Keep one environment-managed Deployment Administrator. | A stable, non-deletable Administrator preserves operational recovery while local account credentials remain database-managed. |
 | Apply complete snapshots and retain the last Applied Revision. | A failed Desired Revision must not disrupt unrelated working tunnels, and cached state never authorizes a cold start. |
 | Enforce Client Token revocation cooperatively in ycy. | Native FRP is identity-agnostic; trusted clients stop on explicit revoke or rejected authentication without adding FRP plugins or a fork. |
 | Use one WebSocket agent control channel. | The channel carries authentication, snapshots, acknowledgements, process state, liveness, and cooperative revocation while FRP remains the data plane. |
@@ -98,7 +116,7 @@ _Avoid_: Tunnel Definition, Tunnel Control Plane
 ## Topology
 
 ```text
-Administrator browser
+Control Plane Account browser
   -> ycy control UI/API/WebSocket :7500
        -> SQLite
        -> one supervised frps process
@@ -154,14 +172,14 @@ Non-secret option precedence is CLI option, environment variable, then default:
 | `--advertise-frp-addr` | `YCY_TUNNEL_ADVERTISE_FRP_ADDR` |
 | `--data-dir` | `YCY_TUNNEL_DATA_DIR` |
 
-The control-plane administrator is one shared account configured only through environment variables.
+The Deployment Administrator is a stable account configured through environment variables. Its password has no default and the server refuses to start until a valid password is supplied. Local accounts are then managed through the Administrator UI.
 
 | Setting | Environment variable | Default |
 | --- | --- | --- |
 | Username | `YCY_TUNNEL_ADMIN_USER` | `admin` |
-| Password | `YCY_TUNNEL_ADMIN_PASSWORD` | `admin` |
+| Password | `YCY_TUNNEL_ADMIN_PASSWORD` | required |
 
-The UI displays deployment settings but cannot mutate them. Changing a listener, port pool, administrator credential, data directory, or advertised endpoint requires restarting the ycy supervisor through Docker or the host service manager.
+Account usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens and compare case-insensitively. Passwords contain 8-256 characters. The UI displays deployment settings but cannot mutate them. Changing a listener, port pool, Deployment Administrator credential, data directory, or advertised endpoint requires restarting the ycy supervisor through Docker or the host service manager.
 
 ### Client
 
@@ -180,7 +198,7 @@ Precedence is CLI option, direct environment value, then secret file. The contro
 
 | Listener | Default | Purpose |
 | --- | ---: | --- |
-| ycy control HTTP | `0.0.0.0:7500/tcp` | Admin UI, admin API, agent WebSocket, liveness. |
+| ycy control HTTP | `0.0.0.0:7500/tcp` | Account UI/API, agent WebSocket, liveness. |
 | FRP bind | `0.0.0.0:7000/tcp` | frpc data-plane connections. |
 | FRP HTTP vhost | `0.0.0.0:8080/tcp` | Host-header routing after external ingress. |
 | FRP port pool | `0.0.0.0:20000-20100/tcp+udp` | TCP and UDP tunnels. |
@@ -191,9 +209,20 @@ The advertised FRP endpoint defaults to the hostname used by an authenticated ag
 
 ## Domain Invariants
 
+### Control Plane Account And Ownership
+
+- A local account has one immutable, case-insensitively unique username, one Argon2id password hash, and exactly the `admin` or `user` Account Role.
+- The Deployment Administrator has a stable internal key. Its current username updates from the environment without changing existing Resource Ownership; its password is never stored in SQLite.
+- A username collision between the Deployment Administrator and a local account prevents server startup instead of hiding or overwriting either identity.
+- Creating a Trusted Tunnel Client assigns the authenticated account as its immutable Resource Owner. Creating or editing a Tunnel Definition never changes that owner.
+- A User can list, inspect, edit, delete, rotate, and restart only owned clients and their complete Tunnel Definition sets. A cross-owner resource ID is indistinguishable from a missing ID.
+- An Administrator has the same operations across all clients, plus account and frps management. Administrator changes to another account's resources preserve their owner.
+- An account that still owns a Trusted Tunnel Client cannot be deleted. The Deployment Administrator cannot be deleted, demoted, or have its password changed through the UI.
+- Password changes, password resets, role changes, and account deletion revoke every in-memory session for that account immediately. Sessions expire after 12 hours, are bounded to eight per account and 128 total, and do not survive a server restart.
+
 ### Client Token
 
-- The control plane generates a URL-safe random token; administrators cannot choose its contents.
+- The control plane generates a URL-safe random token; authorized accounts cannot choose its contents.
 - The token is the only client identity credential and is recoverable from the trusted control plane.
 - One token permits at most one active agent WebSocket. A second connection is rejected.
 - Rotation atomically replaces the token, asks the connected agent to stop, and retains all tunnel definitions.
@@ -206,7 +235,7 @@ An internal database key may maintain references across token rotation, but it i
 
 - A Trusted Tunnel Client may have an optional, multi-line Client Remark of up to 100 characters.
 - The remark is trimmed, preserves internal line breaks, need not be unique, and may be edited or cleared without changing the Client Token, Agent session, or Desired Revision.
-- Records migrated from an older schema initially display as `Unlabeled client` until an administrator adds a remark.
+- An empty remark displays as `Unlabeled client` until an authorized account adds one.
 
 ### HTTP Tunnel
 
@@ -259,8 +288,19 @@ meta
   schema_version
   internal_frp_token
 
+accounts
+  internal_id
+  kind (environment | local)
+  username
+  username_key (unique)
+  role (admin | user)
+  password_hash (local only)
+  created_at
+  updated_at
+
 clients
   internal_id
+  owner_account_id (foreign key, restrict delete)
   remark
   token (unique, recoverable)
   desired_revision
@@ -282,7 +322,9 @@ tunnels
   updated_at
 ```
 
-SQLite partial unique indexes enforce normalized HTTP hostname uniqueness and `(protocol, server_port)` uniqueness. Type-specific checks prevent an HTTP row from carrying a server port or a TCP/UDP row from carrying a hostname. Tunnel mutations and revision increments are atomic. Rotation marks revocation pending until an agent authenticates with the replacement token.
+SQLite indexes enforce account username and client owner lookups, normalized HTTP hostname uniqueness, and `(protocol, server_port)` uniqueness. Type-specific checks prevent an HTTP row from carrying a server port or a TCP/UDP row from carrying a hostname. Tunnel mutations and revision increments are atomic. Rotation marks revocation pending until an agent authenticates with the replacement token.
+
+The account schema is a fresh-development contract. There is no compatibility migration from earlier tunnel databases; an incompatible schema fails startup and the development data directory must be recreated.
 
 Connection presence, child-process state, reconnect backoff, and the latest structured runtime error stay in bounded process memory. The server does not store metrics, traffic samples, complete logs, or revision history.
 
@@ -418,15 +460,19 @@ This deliberately causes a brief interruption to every tunnel on that client whe
 
 ## Control Plane HTTP And UI
 
-The ycy HTTP service owns the embedded React application, JSON API, administrator session, and agent WebSocket. The FRP Dashboard is not proxied or embedded.
+The ycy HTTP service owns the embedded React application, JSON interface, bounded account sessions, and agent WebSocket. The FRP Dashboard is not proxied or embedded.
 
 The implementation exposes these versioned routes:
 
 | Method | Route | Purpose |
 | --- | --- | --- |
-| `POST` | `/api/session` | Authenticate the shared administrator. |
-| `DELETE` | `/api/session` | End the administrator session. |
-| `GET` | `/api/state` | Overview counts, frps state, and read-only deployment settings. |
+| `POST` | `/api/session` | Authenticate a Control Plane Account. |
+| `DELETE` | `/api/session` | End the current account session. |
+| `PUT` | `/api/session/password` | Change the current local account password and end all of its sessions. |
+| `GET` | `/api/state` | Return the current account and scoped overview; Administrator responses also contain frps and deployment settings. |
+| `GET\|POST` | `/api/accounts` | Administrator-only account list and creation. |
+| `PATCH\|DELETE` | `/api/accounts/:id` | Administrator-only role change or empty-account deletion. |
+| `PUT` | `/api/accounts/:id/password` | Administrator-only local account password reset. |
 | `GET\|POST` | `/api/clients` | List clients or create one with an optional Client Remark and generate its Client Token. |
 | `GET\|PATCH\|DELETE` | `/api/clients/:id` | Read, change the Client Remark, or cascade-delete one internal client record. |
 | `POST` | `/api/clients/:id/rotate` | Replace and reveal the Client Token. |
@@ -439,11 +485,12 @@ The implementation exposes these versioned routes:
 
 The UI is deliberately limited to:
 
-- Login.
-- Overview with ycy/frps process state, client connection counts, and aggregate tunnel states.
-- Client list with Client Remarks, create/edit, token reveal/copy/rotate, delete, connection state, and revision state.
+- Account login and local-account password change.
+- A scoped Overview for every account; only Administrators see global frps state and deployment settings.
+- Client list with Client Remarks, create/edit, token reveal/copy/rotate, delete, connection state, revision state, and an Administrator-only owner column.
 - Client detail with HTTP/TCP/UDP tunnel CRUD, Enabled controls, last structured error, and frpc restart.
-- Server view with frps controls and read-only deployment settings.
+- Administrator Accounts view with create, role change, password reset, and empty-account deletion.
+- Administrator Server view with frps controls and read-only deployment settings.
 
 Do not add traffic charts, endpoint status, log viewers, onboarding marketing content, nested dashboard cards, or background polling for FRP state. Push client state changes over the existing server-to-browser event mechanism selected during implementation, and keep retained state bounded.
 
@@ -476,7 +523,7 @@ services:
     environment:
       YCY_TUNNEL_DATA_DIR: /data
       YCY_TUNNEL_ADMIN_USER: admin
-      YCY_TUNNEL_ADMIN_PASSWORD: '${YCY_TUNNEL_ADMIN_PASSWORD:-admin}'
+      YCY_TUNNEL_ADMIN_PASSWORD: '${YCY_TUNNEL_ADMIN_PASSWORD:?required}'
     volumes:
       - tunnel-data:/data
     ports:
@@ -510,15 +557,16 @@ src/commands/tunnel/
     supervisor.ts          Serialized zero-or-one child state machine
   server/
     run.ts                 Server composition and signal handling
-    database.ts            SQLite schema, migrations, and transactions
+    database.ts            Fresh SQLite schema and transactions
     control-plane.ts       Client/tunnel operations and revision truth
     agent-gateway.ts       WebSocket sessions and snapshot delivery
-    admin-sessions.ts      Bounded shared-administrator sessions
+    tunnel-management.ts   Account sessions, authorization, ownership, projections, and administration
     views.ts               Client and tunnel status projections
     control-api.ts         Health and control API routes
     http.ts                Listener, embedded assets, SSE, and WebSocket lifecycle
     web/
       app.tsx              React application shell and page routing
+      account-pages.tsx    Account administration workflows
       client-pages.tsx     Client list/detail and remark workflows
       ui.tsx               Shared operational UI controls
   client/
@@ -530,12 +578,12 @@ src/commands/tunnel/
   idle-resource.test.ts    Bounded idle-state and no-polling acceptance
 ```
 
-The control plane is the only owner of desired state and uniqueness. HTTP handlers and the UI call it rather than writing SQLite directly. The reconciler is the only owner of client configuration activation. The supervisor is the only code allowed to spawn or stop FRP.
+TunnelManagement is the only browser-facing owner of account authentication, authorization, ownership filtering, and administration. The control plane remains the owner of desired state and uniqueness behind that interface; the agent gateway uses its separate Client Token path. The reconciler is the only owner of client configuration activation. The supervisor is the only code allowed to spawn or stop FRP.
 
 ## Implementation Layers
 
-1. Foundation: domain types, environment parsing, fixed paths, lock ownership, SQLite migrations, FRP manifest/downloader, TOML rendering, and child supervision.
-2. Server core: control-plane transactions, frps composition, administrator sessions/API, and the agent WebSocket handshake.
+1. Foundation: domain types, environment parsing, fixed paths, lock ownership, fresh SQLite schema, FRP manifest/downloader, TOML rendering, and child supervision.
+2. Server core: control-plane transactions, TunnelManagement accounts/authorization, frps composition, and the agent WebSocket handshake.
 3. Native client: authentication-first startup, binary resolution, full-snapshot reconciliation, rollback, reconnect, cooperative revocation, and status acknowledgements.
 4. UI: the accepted operational views, responsive layouts, visible mutation failures, and bounded state.
 5. Distribution: native release binaries, the server Docker image, FRP license attribution, NPM/Docker examples, and release checksums.
@@ -548,13 +596,13 @@ Foundation, server, native client, UI, and distribution remain independently tes
 Required automated coverage:
 
 - Configuration precedence, secret files, hostname normalization, port ranges, and platform paths.
-- SQLite migrations, cascade deletion, token rotation, resource reservation, automatic port allocation, and atomic revision increments.
+- Fresh SQLite account/ownership constraints, incompatible-schema rejection, cascade deletion, token rotation, resource reservation, automatic port allocation, and atomic revision increments.
 - Single-instance acquisition, stale-lock handling, one-child ownership, manual stop, backoff, and deterministic-error suppression.
 - Binary artifact selection, SHA-256 rejection, atomic installation, manual-download diagnostics, and reported-version validation.
 - Exact generated TOML for HTTP/TCP/UDP, disabled tunnels, stable names, and server port ranges.
 - Agent authentication, duplicate rejection, compatibility rejection, complete snapshots, acknowledgements, reconnect, revoke, and revision races.
 - Reconciler verification failure, activation rollback, empty enabled set, child crash recovery, and control outage behavior.
-- Admin session protection and every mutating API transaction.
+- Account authentication, role/owner matrices, session revocation, scoped SSE, and every mutating HTTP transaction.
 - Real pinned-FRP end-to-end forwarding for multiple clients over HTTP Host routing, TCP, and UDP.
 - Source-mode behavior and standalone builds on the supported native target matrix.
 
@@ -569,5 +617,7 @@ Acceptance scenarios:
 7. Unexpected FRP exits recover without duplicate children or a fast crash loop.
 8. A missing client FRP binary downloads and verifies, while download failure prints a complete manual-install instruction.
 9. Idle runtime performs no endpoint probes, FRP status polling, metric sampling, or log retention, and memory does not grow with traffic history.
+10. Two User accounts see and mutate only their owned clients and tunnels, while an Administrator sees and operates all resources.
+11. Role or password changes revoke all affected sessions, non-empty accounts cannot be deleted, and the Deployment Administrator remains environment-managed.
 
 Before release, run the tunnel suites plus the repository-wide typecheck, lint, and standalone build. Changes to shared web primitives must also run existing `serve` and `diff` tests.

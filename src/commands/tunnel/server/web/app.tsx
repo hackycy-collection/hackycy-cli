@@ -1,26 +1,33 @@
 import type { FormEvent, ReactNode } from 'react'
-import { Activity, Gauge, LogOut, Network, Play, RefreshCw, Server, Square, Users } from 'lucide-react'
+import type { CurrentAccount } from './api'
+import { Activity, Gauge, KeyRound, LogOut, Network, Play, RefreshCw, Server, Shield, Square, Users, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { AccountsPage } from './account-pages'
 import { ApiError, apiJson, jsonRequest } from './api'
 import { ClientDetailPage, ClientsPage } from './client-pages'
 import { IconButton, navigate, PageHeader, Status } from './ui'
 
-interface StateView {
+interface ServerProjection {
   frps: { state: string, pid?: number, error?: { message: string } }
-  counts: { clients: number, connected: number, tunnels: number, pending: number, errors: number }
   settings: {
     address: string
     controlPort: number
     frpPort: number
     httpPort: number
     portRange: { start: number, end: number }
-    advertiseFrpAddress: { host: string, port: number } | null
+    advertiseFrpAddress?: { host: string, port: number }
     dataDir: string
     adminUser: string
   }
 }
 
-type Page = { name: 'overview' | 'clients' | 'server' } | { name: 'client', id: string }
+interface StateView {
+  account: CurrentAccount
+  counts: { clients: number, connected: number, tunnels: number, pending: number, errors: number }
+  server?: ServerProjection
+}
+
+type Page = { name: 'overview' | 'clients' | 'accounts' | 'server' } | { name: 'client', id: string }
 
 function currentPage(): Page {
   const client = /^\/clients\/([^/]+)$/.exec(location.pathname)?.[1]
@@ -28,6 +35,8 @@ function currentPage(): Page {
     return { name: 'client', id: decodeURIComponent(client) }
   if (location.pathname === '/clients')
     return { name: 'clients' }
+  if (location.pathname === '/accounts')
+    return { name: 'accounts' }
   if (location.pathname === '/server')
     return { name: 'server' }
   return { name: 'overview' }
@@ -53,7 +62,6 @@ function Login({ onLogin }: { onLogin: () => void }): React.JSX.Element {
           <Network size={18} />
           <span>HACKYCY TUNNEL</span>
         </div>
-        <h1>Control Plane</h1>
         <label>
           Username
           <input name="username" autoComplete="username" required autoFocus />
@@ -69,9 +77,68 @@ function Login({ onLogin }: { onLogin: () => void }): React.JSX.Element {
   )
 }
 
-function Layout({ page, children, onLogout }: { page: Page, children: ReactNode, onLogout: () => void }): React.JSX.Element {
+function PasswordEditor({ onClose, onChanged }: { onClose: () => void, onChanged: () => void }): React.JSX.Element {
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const newPassword = String(form.get('newPassword'))
+    if (newPassword !== form.get('confirmation')) {
+      setError('New passwords do not match')
+      return
+    }
+    setSaving(true)
+    try {
+      await apiJson('/api/session/password', jsonRequest('PUT', { currentPassword: form.get('currentPassword'), newPassword }))
+      onChanged()
+    }
+    catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+    finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <div className="modal-backdrop" role="presentation">
+      <form className="modal" role="dialog" aria-modal="true" aria-labelledby="password-title" onSubmit={event => void submit(event)}>
+        <div className="modal-title">
+          <h2 id="password-title">Change password</h2>
+          <IconButton label="Close" onClick={onClose}><X size={16} /></IconButton>
+        </div>
+        <label>
+          Current password
+          <input name="currentPassword" type="password" autoComplete="current-password" required autoFocus />
+        </label>
+        <label>
+          New password
+          <input name="newPassword" type="password" minLength={8} maxLength={256} autoComplete="new-password" required />
+        </label>
+        <label>
+          Confirm password
+          <input name="confirmation" type="password" minLength={8} maxLength={256} autoComplete="new-password" required />
+        </label>
+        {error && <p className="form-error">{error}</p>}
+        <div className="modal-actions">
+          <button type="button" onClick={onClose}>Cancel</button>
+          <button className="primary" type="submit" disabled={saving}>{saving ? 'Saving...' : 'Change'}</button>
+        </div>
+      </form>
+    </div>
+  )
+}
+
+function Layout({ page, account, children, onLogout, onChangePassword }: { page: Page, account: CurrentAccount, children: ReactNode, onLogout: () => void, onChangePassword: () => void }): React.JSX.Element {
   const item = (name: Page['name'], path: string, icon: ReactNode, label: string): React.JSX.Element => (
-    <button type="button" className={page.name === name ? 'nav-item active' : 'nav-item'} onClick={() => navigate(path)}>
+    <button
+      type="button"
+      className={page.name === name ? 'nav-item active' : 'nav-item'}
+      aria-label={label}
+      aria-current={page.name === name ? 'page' : undefined}
+      title={label}
+      onClick={() => navigate(path)}
+    >
       {icon}
       <span>{label}</span>
     </button>
@@ -86,12 +153,17 @@ function Layout({ page, children, onLogout }: { page: Page, children: ReactNode,
         <nav>
           {item('overview', '/', <Gauge size={16} />, 'Overview')}
           {item('clients', '/clients', <Users size={16} />, 'Clients')}
-          {item('server', '/server', <Server size={16} />, 'Server')}
+          {account.role === 'admin' && item('accounts', '/accounts', <Shield size={16} />, 'Accounts')}
+          {account.role === 'admin' && item('server', '/server', <Server size={16} />, 'Server')}
         </nav>
-        <button type="button" className="nav-item logout" onClick={onLogout}>
-          <LogOut size={16} />
-          <span>Sign out</span>
-        </button>
+        <div className="account-block">
+          <div className="account-meta">
+            <strong>{account.username}</strong>
+            <span>{account.role}</span>
+          </div>
+          {!account.managedByEnvironment && <IconButton label="Change password" onClick={onChangePassword}><KeyRound size={15} /></IconButton>}
+          <IconButton label="Sign out" onClick={onLogout}><LogOut size={15} /></IconButton>
+        </div>
       </aside>
       <div className="content-shell">{children}</div>
     </div>
@@ -99,13 +171,7 @@ function Layout({ page, children, onLogout }: { page: Page, children: ReactNode,
 }
 
 function Overview({ state }: { state: StateView }): React.JSX.Element {
-  const metrics = [
-    ['Trusted clients', state.counts.clients],
-    ['Connected', state.counts.connected],
-    ['Tunnel definitions', state.counts.tunnels],
-    ['Pending', state.counts.pending],
-    ['Errors', state.counts.errors],
-  ] as const
+  const metrics = [['Trusted clients', state.counts.clients], ['Connected', state.counts.connected], ['Tunnel definitions', state.counts.tunnels], ['Pending', state.counts.pending], ['Errors', state.counts.errors]] as const
   return (
     <>
       <PageHeader title="Overview" />
@@ -117,40 +183,42 @@ function Overview({ state }: { state: StateView }): React.JSX.Element {
           </div>
         ))}
       </section>
-      <section className="section-band">
-        <div className="section-title">
-          <h2>Runtime</h2>
-          <Status value={state.frps.state} />
-        </div>
-        <dl className="detail-grid">
-          <dt>frps process</dt>
-          <dd>{state.frps.pid ? `PID ${state.frps.pid}` : 'No active process'}</dd>
-          <dt>Control listener</dt>
-          <dd>
-            {state.settings.address}
-            :
-            {state.settings.controlPort}
-          </dd>
-          <dt>FRP bind</dt>
-          <dd>
-            {state.settings.address}
-            :
-            {state.settings.frpPort}
-          </dd>
-          <dt>HTTP vhost</dt>
-          <dd>
-            {state.settings.address}
-            :
-            {state.settings.httpPort}
-          </dd>
-        </dl>
-        {state.frps.error && <p className="runtime-error">{state.frps.error.message}</p>}
-      </section>
+      {state.server && (
+        <section className="section-band">
+          <div className="section-title">
+            <h2>Runtime</h2>
+            <Status value={state.server.frps.state} />
+          </div>
+          <dl className="detail-grid">
+            <dt>frps process</dt>
+            <dd>{state.server.frps.pid ? `PID ${state.server.frps.pid}` : 'No active process'}</dd>
+            <dt>Control listener</dt>
+            <dd>
+              {state.server.settings.address}
+              :
+              {state.server.settings.controlPort}
+            </dd>
+            <dt>FRP bind</dt>
+            <dd>
+              {state.server.settings.address}
+              :
+              {state.server.settings.frpPort}
+            </dd>
+            <dt>HTTP vhost</dt>
+            <dd>
+              {state.server.settings.address}
+              :
+              {state.server.settings.httpPort}
+            </dd>
+          </dl>
+          {state.server.frps.error && <p className="runtime-error">{state.server.frps.error.message}</p>}
+        </section>
+      )}
     </>
   )
 }
 
-function ServerView({ state, reload }: { state: StateView, reload: () => void }): React.JSX.Element {
+function ServerView({ server, reload }: { server: ServerProjection, reload: () => void }): React.JSX.Element {
   const [error, setError] = useState('')
   const action = async (value: 'start' | 'stop' | 'restart'): Promise<void> => {
     try {
@@ -178,11 +246,11 @@ function ServerView({ state, reload }: { state: StateView, reload: () => void })
       <section className="section-band">
         <div className="section-title">
           <h2>frps</h2>
-          <Status value={state.frps.state} />
+          <Status value={server.frps.state} />
         </div>
         <dl className="detail-grid">
           <dt>Process</dt>
-          <dd>{state.frps.pid ? `PID ${state.frps.pid}` : 'Stopped'}</dd>
+          <dd>{server.frps.pid ? `PID ${server.frps.pid}` : 'Stopped'}</dd>
         </dl>
       </section>
       <section className="section-band">
@@ -190,36 +258,36 @@ function ServerView({ state, reload }: { state: StateView, reload: () => void })
         <dl className="detail-grid">
           <dt>Control listener</dt>
           <dd>
-            {state.settings.address}
+            {server.settings.address}
             :
-            {state.settings.controlPort}
+            {server.settings.controlPort}
           </dd>
           <dt>FRP bind</dt>
           <dd>
-            {state.settings.address}
+            {server.settings.address}
             :
-            {state.settings.frpPort}
+            {server.settings.frpPort}
           </dd>
           <dt>HTTP vhost</dt>
           <dd>
-            {state.settings.address}
+            {server.settings.address}
             :
-            {state.settings.httpPort}
+            {server.settings.httpPort}
           </dd>
           <dt>Server Port Pool</dt>
           <dd>
-            {state.settings.portRange.start}
+            {server.settings.portRange.start}
             -
-            {state.settings.portRange.end}
+            {server.settings.portRange.end}
             {' '}
             TCP/UDP
           </dd>
           <dt>Advertised FRP</dt>
-          <dd>{state.settings.advertiseFrpAddress ? `${state.settings.advertiseFrpAddress.host}:${state.settings.advertiseFrpAddress.port}` : 'Derived from agent request'}</dd>
+          <dd>{server.settings.advertiseFrpAddress ? `${server.settings.advertiseFrpAddress.host}:${server.settings.advertiseFrpAddress.port}` : 'Derived from agent request'}</dd>
           <dt>Data directory</dt>
-          <dd className="mono break">{state.settings.dataDir}</dd>
-          <dt>Administrator</dt>
-          <dd>{state.settings.adminUser}</dd>
+          <dd className="mono break">{server.settings.dataDir}</dd>
+          <dt>Deployment Administrator</dt>
+          <dd>{server.settings.adminUser}</dd>
         </dl>
       </section>
     </>
@@ -231,6 +299,12 @@ export function App(): React.JSX.Element {
   const [page, setPage] = useState<Page>(currentPage)
   const [state, setState] = useState<StateView>()
   const [refreshSequence, setRefreshSequence] = useState(0)
+  const [changingPassword, setChangingPassword] = useState(false)
+  const sessionEnded = useCallback(() => {
+    setAuthenticated(false)
+    setState(undefined)
+    setChangingPassword(false)
+  }, [])
   const load = useCallback(async () => {
     try {
       setState(await apiJson<StateView>('/api/state'))
@@ -238,28 +312,41 @@ export function App(): React.JSX.Element {
     }
     catch (cause) {
       if (cause instanceof ApiError && cause.status === 401)
-        setAuthenticated(false)
+        sessionEnded()
     }
-  }, [])
+  }, [sessionEnded])
   useEffect(() => {
     const changed = (): void => setPage(currentPage())
     window.addEventListener('popstate', changed)
-    return () => window.removeEventListener('popstate', changed)
-  }, [])
+    window.addEventListener('tunnel-authentication-required', sessionEnded)
+    return () => {
+      window.removeEventListener('popstate', changed)
+      window.removeEventListener('tunnel-authentication-required', sessionEnded)
+    }
+  }, [sessionEnded])
   useEffect(() => void load(), [load])
+  useEffect(() => {
+    if (state && state.account.role !== 'admin' && ['accounts', 'server'].includes(page.name))
+      navigate('/')
+  }, [page.name, state])
   useEffect(() => {
     if (!authenticated)
       return
     const events = new EventSource('/api/events')
-    events.onmessage = () => {
+    events.onmessage = (message) => {
+      const event = JSON.parse(message.data) as { event: 'changed' | 'session_revoked' }
+      if (event.event === 'session_revoked') {
+        sessionEnded()
+        return
+      }
       setRefreshSequence(value => value + 1)
       void load()
     }
     return () => events.close()
-  }, [authenticated, load])
+  }, [authenticated, load, sessionEnded])
   const logout = async (): Promise<void> => {
     await apiJson('/api/session', { method: 'DELETE' })
-    setAuthenticated(false)
+    sessionEnded()
   }
   if (authenticated === undefined) {
     return (
@@ -280,11 +367,13 @@ export function App(): React.JSX.Element {
     )
   }
   return (
-    <Layout page={page} onLogout={() => void logout()}>
+    <Layout page={page} account={state.account} onLogout={() => void logout()} onChangePassword={() => setChangingPassword(true)}>
       {page.name === 'overview' && <Overview state={state} />}
-      {page.name === 'clients' && <ClientsPage refreshSequence={refreshSequence} />}
-      {page.name === 'client' && <ClientDetailPage id={page.id} refreshSequence={refreshSequence} />}
-      {page.name === 'server' && <ServerView state={state} reload={() => void load()} />}
+      {page.name === 'clients' && <ClientsPage refreshSequence={refreshSequence} showOwner={state.account.role === 'admin'} />}
+      {page.name === 'client' && <ClientDetailPage id={page.id} refreshSequence={refreshSequence} showOwner={state.account.role === 'admin'} />}
+      {page.name === 'accounts' && state.account.role === 'admin' && <AccountsPage currentAccountId={state.account.id} refreshSequence={refreshSequence} onSessionEnded={sessionEnded} />}
+      {page.name === 'server' && state.server && <ServerView server={state.server} reload={() => void load()} />}
+      {changingPassword && <PasswordEditor onClose={() => setChangingPassword(false)} onChanged={sessionEnded} />}
     </Layout>
   )
 }

@@ -11,6 +11,7 @@ import { AgentGateway } from './agent-gateway'
 import { TunnelControlPlane } from './control-plane'
 import { openTunnelDatabase } from './database'
 import { startTunnelHttpServer } from './http'
+import { TunnelManagement } from './tunnel-management'
 
 export interface TunnelServerRunOptions {
   signal?: AbortSignal
@@ -25,6 +26,7 @@ export async function runTunnelServer(config: ServerTunnelConfig, options: Tunne
   let gateway: AgentGateway | undefined
   let frps: FrpSupervisor | undefined
   let server: ReturnType<typeof startTunnelHttpServer> | undefined
+  let management: TunnelManagement | undefined
   const stop = (): void => {
     shutdown.abort()
     gateway?.stop()
@@ -64,7 +66,8 @@ export async function runTunnelServer(config: ServerTunnelConfig, options: Tunne
       return
     frps = new FrpSupervisor({ binaryPath, role: 'frps' })
     gateway = new AgentGateway(controlPlane, config.frpPort, config.advertiseFrpAddress)
-    server = startTunnelHttpServer({ config, controlPlane, gateway, frps, frpsConfigPath })
+    management = await TunnelManagement.create({ database, controlPlane, gateway, frps, frpsConfigPath, serverConfig: config })
+    server = startTunnelHttpServer({ management, gateway, address: config.address, controlPort: config.controlPort })
     await frps.start(frpsConfigPath)
     if (shutdown.signal.aborted)
       return
@@ -85,6 +88,7 @@ export async function runTunnelServer(config: ServerTunnelConfig, options: Tunne
       process.removeListener('SIGINT', stop)
       process.removeListener('SIGTERM', stop)
     }
+    management?.stop()
     gateway?.stop()
     await server?.stop()
     await frps?.stop()

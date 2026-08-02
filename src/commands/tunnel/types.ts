@@ -1,6 +1,8 @@
 export const TUNNEL_PROTOCOL_VERSION = 1 as const
 
 export type TunnelProtocol = 'http' | 'tcp' | 'udp'
+export type AccountRole = 'admin' | 'user'
+export type AccountKind = 'environment' | 'local'
 export type ClientConnectionState = 'connected' | 'disconnected' | 'incompatible' | 'revocation_pending'
 export type FrpProcessState = 'stopped' | 'running' | 'recovering' | 'configuration_failed'
 export type TunnelPresentationState = 'Disabled' | 'Pending' | 'Applied' | 'Error'
@@ -9,11 +11,18 @@ export type TunnelErrorCode
     | 'AUTHENTICATION_FAILED'
     | 'CLIENT_STOPPED'
     | 'CONFIGURATION_FAILED'
+    | 'ACCOUNT_NOT_EMPTY'
+    | 'AUTHENTICATION_REQUIRED'
+    | 'CLIENT_OFFLINE'
+    | 'DATABASE_INCOMPATIBLE'
     | 'DATABASE_TOO_NEW'
+    | 'FORBIDDEN'
     | 'FRP_INSTALL_FAILED'
     | 'INCOMPATIBLE_CLIENT'
     | 'INSTANCE_ACTIVE'
     | 'INVALID_CLIENT_REMARK'
+    | 'INVALID_ACCOUNT'
+    | 'INVALID_CURRENT_PASSWORD'
     | 'INVALID_CONFIG'
     | 'INVALID_FRP_ARCHIVE'
     | 'INVALID_FRP_BINARY'
@@ -24,11 +33,13 @@ export type TunnelErrorCode
     | 'INVALID_REVISION'
     | 'INVALID_TUNNEL'
     | 'LOCK_UNAVAILABLE'
+    | 'MANAGED_ACCOUNT'
     | 'NOT_FOUND'
     | 'PORT_OUTSIDE_POOL'
     | 'PORT_POOL_EXHAUSTED'
     | 'RESOURCE_RESERVED'
     | 'UNSUPPORTED_PLATFORM'
+    | 'USERNAME_TAKEN'
 
 export interface TunnelDefinition {
   id: string
@@ -63,6 +74,7 @@ export interface StructuredRuntimeError {
 
 export interface ClientRecord {
   id: string
+  ownerAccountId: string
   remark: string
   token: string
   desiredRevision: number
@@ -70,6 +82,15 @@ export interface ClientRecord {
   revocationPending: boolean
   createdAt: string
   rotatedAt: string | null
+}
+
+export interface AccountRecord {
+  id: string
+  kind: AccountKind
+  username: string
+  role: AccountRole
+  createdAt: string
+  updatedAt: string
 }
 
 export interface ClientRuntimeState {

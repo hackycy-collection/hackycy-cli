@@ -7,6 +7,7 @@ import { TunnelError } from '../types'
 
 interface ClientRow {
   internal_id: string
+  owner_account_id: string
   remark: string
   token: string
   desired_revision: number
@@ -30,11 +31,11 @@ interface TunnelRow {
 }
 
 export type ControlPlaneEvent
-  = | { type: 'desired_state', clientId: string }
-    | { type: 'client_created', clientId: string }
-    | { type: 'client_rotated', clientId: string }
-    | { type: 'client_deleted', clientId: string }
-    | { type: 'client_updated', clientId: string }
+  = | { type: 'desired_state', clientId: string, ownerAccountId: string }
+    | { type: 'client_created', clientId: string, ownerAccountId: string }
+    | { type: 'client_rotated', clientId: string, ownerAccountId: string }
+    | { type: 'client_deleted', clientId: string, ownerAccountId: string }
+    | { type: 'client_updated', clientId: string, ownerAccountId: string }
 
 export interface TunnelMutationInput {
   protocol: TunnelProtocol
@@ -57,6 +58,7 @@ export interface TunnelPatchInput {
 function clientRecord(row: ClientRow): ClientRecord {
   return {
     id: row.internal_id,
+    ownerAccountId: row.owner_account_id,
     remark: row.remark,
     token: row.token,
     desiredRevision: row.desired_revision,
@@ -169,8 +171,19 @@ export class TunnelControlPlane {
     return this.database.sqlite.query<ClientRow, []>('SELECT * FROM clients ORDER BY created_at, internal_id').all().map(clientRecord)
   }
 
+  listClientsForOwner(ownerAccountId: string): ClientRecord[] {
+    return this.database.sqlite.query<ClientRow, [string]>('SELECT * FROM clients WHERE owner_account_id = ? ORDER BY created_at, internal_id').all(ownerAccountId).map(clientRecord)
+  }
+
   getClient(id: string): ClientRecord {
     const row = this.database.sqlite.query<ClientRow, [string]>('SELECT * FROM clients WHERE internal_id = ?').get(id)
+    if (!row)
+      throw new TunnelError('NOT_FOUND', 'Trusted Tunnel Client was not found')
+    return clientRecord(row)
+  }
+
+  getClientForOwner(id: string, ownerAccountId: string): ClientRecord {
+    const row = this.database.sqlite.query<ClientRow, [string, string]>('SELECT * FROM clients WHERE internal_id = ? AND owner_account_id = ?').get(id, ownerAccountId)
     if (!row)
       throw new TunnelError('NOT_FOUND', 'Trusted Tunnel Client was not found')
     return clientRecord(row)
@@ -181,12 +194,12 @@ export class TunnelControlPlane {
     return row ? clientRecord(row) : undefined
   }
 
-  createClient(remark = ''): ClientRecord {
+  createClient(ownerAccountId: string, remark = ''): ClientRecord {
     const id = randomUUID()
     const createdAt = now()
-    this.database.sqlite.query('INSERT INTO clients(internal_id, remark, token, created_at) VALUES(?, ?, ?, ?)').run(id, clientRemark(remark), token(), createdAt)
+    this.database.sqlite.query('INSERT INTO clients(internal_id, owner_account_id, remark, token, created_at) VALUES(?, ?, ?, ?, ?)').run(id, ownerAccountId, clientRemark(remark), token(), createdAt)
     const created = this.getClient(id)
-    this.emit({ type: 'client_created', clientId: id })
+    this.emit({ type: 'client_created', clientId: id, ownerAccountId })
     return created
   }
 
@@ -194,7 +207,7 @@ export class TunnelControlPlane {
     this.getClient(id)
     this.database.sqlite.query('UPDATE clients SET remark = ? WHERE internal_id = ?').run(clientRemark(remark), id)
     const updated = this.getClient(id)
-    this.emit({ type: 'client_updated', clientId: id })
+    this.emit({ type: 'client_updated', clientId: id, ownerAccountId: updated.ownerAccountId })
     return updated
   }
 
@@ -205,23 +218,24 @@ export class TunnelControlPlane {
       return this.getClient(id)
     })
     const rotated = rotate.immediate()
-    this.emit({ type: 'client_rotated', clientId: id })
+    this.emit({ type: 'client_rotated', clientId: id, ownerAccountId: rotated.ownerAccountId })
     return rotated
   }
 
   acknowledgeReplacementToken(id: string): void {
     const result = this.database.sqlite.query('UPDATE clients SET revocation_pending = 0 WHERE internal_id = ? AND revocation_pending = 1').run(id)
     if (result.changes > 0)
-      this.emit({ type: 'client_updated', clientId: id })
+      this.emit({ type: 'client_updated', clientId: id, ownerAccountId: this.getClient(id).ownerAccountId })
   }
 
   deleteClient(id: string): void {
+    let ownerAccountId = ''
     const remove = this.database.sqlite.transaction(() => {
-      this.getClient(id)
+      ownerAccountId = this.getClient(id).ownerAccountId
       this.database.sqlite.query('DELETE FROM clients WHERE internal_id = ?').run(id)
     })
     remove.immediate()
-    this.emit({ type: 'client_deleted', clientId: id })
+    this.emit({ type: 'client_deleted', clientId: id, ownerAccountId })
   }
 
   listTunnels(clientId: string): TunnelDefinition[] {
@@ -231,6 +245,17 @@ export class TunnelControlPlane {
 
   getTunnel(id: string): TunnelDefinition & { clientId: string } {
     const row = this.database.sqlite.query<TunnelRow, [string]>('SELECT * FROM tunnels WHERE id = ?').get(id)
+    if (!row)
+      throw new TunnelError('NOT_FOUND', 'Tunnel Definition was not found')
+    return { ...tunnelDefinition(row), clientId: row.client_internal_id }
+  }
+
+  getTunnelForOwner(id: string, ownerAccountId: string): TunnelDefinition & { clientId: string } {
+    const row = this.database.sqlite.query<TunnelRow, [string, string]>(`
+      SELECT tunnels.* FROM tunnels
+      JOIN clients ON clients.internal_id = tunnels.client_internal_id
+      WHERE tunnels.id = ? AND clients.owner_account_id = ?
+    `).get(id, ownerAccountId)
     if (!row)
       throw new TunnelError('NOT_FOUND', 'Tunnel Definition was not found')
     return { ...tunnelDefinition(row), clientId: row.client_internal_id }
@@ -287,7 +312,7 @@ export class TunnelControlPlane {
       return created
     })
     const created = create.immediate()
-    this.emit({ type: 'desired_state', clientId })
+    this.emit({ type: 'desired_state', clientId, ownerAccountId: this.getClient(clientId).ownerAccountId })
     return created
   }
 
@@ -318,20 +343,22 @@ export class TunnelControlPlane {
       return changed
     })
     const changed = update.immediate()
-    this.emit({ type: 'desired_state', clientId })
+    this.emit({ type: 'desired_state', clientId, ownerAccountId: this.getClient(clientId).ownerAccountId })
     return changed
   }
 
   deleteTunnel(id: string): void {
     let clientId = ''
+    let ownerAccountId = ''
     const remove = this.database.sqlite.transaction(() => {
       const current = this.getTunnel(id)
       clientId = current.clientId
+      ownerAccountId = this.getClient(clientId).ownerAccountId
       this.database.sqlite.query('DELETE FROM tunnels WHERE id = ?').run(id)
       this.incrementDesiredRevision(clientId)
     })
     remove.immediate()
-    this.emit({ type: 'desired_state', clientId })
+    this.emit({ type: 'desired_state', clientId, ownerAccountId })
   }
 
   recordAppliedRevision(clientId: string, revision: number): void {
@@ -342,7 +369,7 @@ export class TunnelControlPlane {
       throw new TunnelError('INVALID_REVISION', 'Applied Revision cannot exceed Desired Revision')
     if (revision > client.lastAppliedRevision) {
       this.database.sqlite.query('UPDATE clients SET last_applied_revision = ? WHERE internal_id = ?').run(revision, clientId)
-      this.emit({ type: 'client_updated', clientId })
+      this.emit({ type: 'client_updated', clientId, ownerAccountId: this.getClient(clientId).ownerAccountId })
     }
   }
 }

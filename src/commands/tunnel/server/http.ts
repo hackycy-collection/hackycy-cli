@@ -25,7 +25,12 @@ function configureWebBundleHeaders(bundle: Bun.HTMLBundle): void {
   }
 }
 
-export function startTunnelHttpServer(options: TunnelControlApiOptions): RunningTunnelHttpServer {
+export interface TunnelHttpServerOptions extends TunnelControlApiOptions {
+  address: string
+  controlPort: number
+}
+
+export function startTunnelHttpServer(options: TunnelHttpServerOptions): RunningTunnelHttpServer {
   configureWebBundleHeaders(tunnelWebApp)
   const controlApi = new TunnelControlApi(options)
   let finish: (() => void) | undefined
@@ -35,13 +40,14 @@ export function startTunnelHttpServer(options: TunnelControlApiOptions): Running
   const sockets = new Set<Bun.ServerWebSocket<AgentSocketData>>()
 
   const server = Bun.serve<AgentSocketData>({
-    hostname: options.config.address,
-    port: options.config.controlPort,
+    hostname: options.address,
+    port: options.controlPort,
     routes: {
       '/': appRoute,
       '/clients': appRoute,
       '/clients/*': appRoute,
       '/server': appRoute,
+      '/accounts': appRoute,
     },
     websocket: {
       open: (socket) => {

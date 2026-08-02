@@ -1,11 +1,9 @@
-import type { FrpSupervisor } from '../frp/supervisor'
-import type { ServerTunnelConfig, TunnelErrorCode } from '../types'
+import type { TunnelErrorCode } from '../types'
 import type { AgentGateway, AgentSocketData } from './agent-gateway'
-import type { TunnelControlPlane, TunnelMutationInput, TunnelPatchInput } from './control-plane'
+import type { TunnelMutationInput, TunnelPatchInput } from './control-plane'
+import type { TunnelManagement, TunnelWorkspace } from './tunnel-management'
 import { z } from 'zod'
 import { TunnelError } from '../types'
-import { AdminSessions } from './admin-sessions'
-import { clientView, tunnelState } from './views'
 
 const API_HEADERS = {
   'Cache-Control': 'no-store',
@@ -14,7 +12,13 @@ const API_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
 }
 
+const SESSION_COOKIE = 'ycy_tunnel_session'
+const SESSION_COOKIE_ATTRIBUTES = 'HttpOnly; SameSite=Strict; Path=/'
 const sessionSchema = z.object({ username: z.string(), password: z.string() }).strict()
+const passwordChangeSchema = z.object({ currentPassword: z.string(), newPassword: z.string() }).strict()
+const accountCreateSchema = z.object({ username: z.string(), password: z.string(), role: z.enum(['admin', 'user']).optional() }).strict()
+const accountRoleSchema = z.object({ role: z.enum(['admin', 'user']) }).strict()
+const accountPasswordSchema = z.object({ password: z.string() }).strict()
 const clientCreateSchema = z.object({ remark: z.string().optional() }).strict()
 const clientRemarkSchema = z.object({ remark: z.string() }).strict()
 const tunnelSchema = z.object({
@@ -28,16 +32,23 @@ const tunnelSchema = z.object({
 const tunnelPatchSchema = tunnelSchema.partial()
 
 const TUNNEL_ERROR_STATUS = {
+  ACCOUNT_NOT_EMPTY: 409,
   ACTIVATION_FAILED: 500,
   AUTHENTICATION_FAILED: 401,
+  AUTHENTICATION_REQUIRED: 401,
+  CLIENT_OFFLINE: 409,
   CLIENT_STOPPED: 409,
   CONFIGURATION_FAILED: 500,
+  DATABASE_INCOMPATIBLE: 500,
   DATABASE_TOO_NEW: 500,
+  FORBIDDEN: 403,
   FRP_INSTALL_FAILED: 500,
   INCOMPATIBLE_CLIENT: 409,
   INSTANCE_ACTIVE: 409,
+  INVALID_ACCOUNT: 400,
   INVALID_CLIENT_REMARK: 400,
   INVALID_CONFIG: 400,
+  INVALID_CURRENT_PASSWORD: 400,
   INVALID_FRP_ARCHIVE: 500,
   INVALID_FRP_BINARY: 500,
   INVALID_FRP_VERSION: 500,
@@ -47,11 +58,13 @@ const TUNNEL_ERROR_STATUS = {
   INVALID_REVISION: 400,
   INVALID_TUNNEL: 400,
   LOCK_UNAVAILABLE: 500,
+  MANAGED_ACCOUNT: 409,
   NOT_FOUND: 404,
   PORT_OUTSIDE_POOL: 400,
   PORT_POOL_EXHAUSTED: 409,
   RESOURCE_RESERVED: 409,
   UNSUPPORTED_PLATFORM: 500,
+  USERNAME_TAKEN: 409,
 } as const satisfies Record<TunnelErrorCode, number>
 
 function json(data: unknown, status = 200, headers?: HeadersInit): Response {
@@ -63,9 +76,10 @@ function error(code: string, message: string, status: number): Response {
 }
 
 function errorResponse(cause: unknown): Response {
-  if (!(cause instanceof TunnelError))
-    return error('INTERNAL_ERROR', cause instanceof Error ? cause.message : String(cause), 500)
-  return error(cause.code, cause.message, TUNNEL_ERROR_STATUS[cause.code])
+  if (cause instanceof TunnelError)
+    return error(cause.code, cause.message, TUNNEL_ERROR_STATUS[cause.code])
+  console.error('Tunnel control request failed', cause)
+  return error('INTERNAL_ERROR', 'The tunnel control request failed', 500)
 }
 
 async function requestJson<T>(request: Request, schema: z.ZodType<T>): Promise<T | Response> {
@@ -104,30 +118,29 @@ function parseId(pathname: string, pattern: RegExp): string | undefined {
   }
 }
 
+function cookie(request: Request): string | undefined {
+  return request.headers.get('Cookie')?.split(';').map(value => value.trim()).find(value => value.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1)
+}
+
+function sessionCookie(token: string): string {
+  return `${SESSION_COOKIE}=${token}; ${SESSION_COOKIE_ATTRIBUTES}; Max-Age=43200`
+}
+
+function expiredSessionCookie(): string {
+  return `${SESSION_COOKIE}=; ${SESSION_COOKIE_ATTRIBUTES}; Max-Age=0`
+}
+
 export interface TunnelControlApiOptions {
-  config: ServerTunnelConfig
-  controlPlane: TunnelControlPlane
+  management: TunnelManagement
   gateway: AgentGateway
-  frps: FrpSupervisor
-  frpsConfigPath: string
 }
 
 export class TunnelControlApi {
-  private readonly sessions: AdminSessions
-  private readonly eventListeners = new Set<() => void>()
-  private readonly unsubscribers: Array<() => void>
+  constructor(private readonly options: TunnelControlApiOptions) {}
 
-  constructor(private readonly options: TunnelControlApiOptions) {
-    this.sessions = new AdminSessions(options.config.adminUser, options.config.adminPassword)
-    const broadcast = (): void => {
-      for (const listener of this.eventListeners)
-        listener()
-    }
-    this.unsubscribers = [
-      options.controlPlane.subscribe(broadcast),
-      options.gateway.observe(broadcast),
-      options.frps.observe(broadcast),
-    ]
+  private workspace(request: Request): TunnelWorkspace | Response {
+    return this.options.management.resume(cookie(request))
+      ?? error('AUTHENTICATION_REQUIRED', 'Authenticated session is required', 401)
   }
 
   async handle(request: Request, server: Bun.Server<AgentSocketData>): Promise<Response | undefined> {
@@ -148,28 +161,39 @@ export class TunnelControlApi {
     }
 
     if (url.pathname === '/api/session' && request.method === 'POST') {
+      if (!sameOrigin(request))
+        return error('ORIGIN_FORBIDDEN', 'Mutation requests must be same-origin', 403)
       const body = await requestJson(request, sessionSchema)
       if (body instanceof Response)
         return body
-      const token = this.sessions.authenticate(body.username, body.password)
-      if (!token)
-        return error('AUTHENTICATION_FAILED', 'Administrator credentials are invalid', 401)
-      return json({ version: 1, authenticated: true }, 200, {
-        'Set-Cookie': `ycy_tunnel_session=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=43200`,
-      })
+      try {
+        const grant = await this.options.management.signIn(body)
+        return json({ version: 1, authenticated: true, account: grant.account }, 200, { 'Set-Cookie': sessionCookie(grant.token) })
+      }
+      catch (cause) {
+        return errorResponse(cause)
+      }
     }
 
     if (!url.pathname.startsWith('/api/'))
       return error('NOT_FOUND', 'Route not found', 404)
-    if (!this.sessions.valid(request))
-      return error('AUTHENTICATION_REQUIRED', 'Administrator session is required', 401)
+    const workspace = this.workspace(request)
+    if (workspace instanceof Response)
+      return workspace
     if (!['GET', 'HEAD'].includes(request.method) && !sameOrigin(request))
       return error('ORIGIN_FORBIDDEN', 'Mutation requests must be same-origin', 403)
 
     try {
       if (url.pathname === '/api/session' && request.method === 'DELETE') {
-        this.sessions.delete(request)
-        return new Response(null, { status: 204, headers: { ...API_HEADERS, 'Set-Cookie': 'ycy_tunnel_session=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0' } })
+        this.options.management.signOut(cookie(request))
+        return new Response(null, { status: 204, headers: { ...API_HEADERS, 'Set-Cookie': expiredSessionCookie() } })
+      }
+      if (url.pathname === '/api/session/password' && request.method === 'PUT') {
+        const body = await requestJson(request, passwordChangeSchema)
+        if (body instanceof Response)
+          return body
+        await workspace.changePassword(body)
+        return new Response(null, { status: 204, headers: { ...API_HEADERS, 'Set-Cookie': expiredSessionCookie() } })
       }
       if (url.pathname === '/api/events' && request.method === 'GET') {
         server.timeout(request, 0)
@@ -177,10 +201,13 @@ export class TunnelControlApi {
         let dispose: (() => void) | undefined
         const stream = new ReadableStream<Uint8Array>({
           start: (controller) => {
-            const publish = (): void => controller.enqueue(encoder.encode(`data: ${JSON.stringify({ version: 1, changed: true })}\n\n`))
-            this.eventListeners.add(publish)
-            publish()
-            dispose = () => this.eventListeners.delete(publish)
+            const publish = (event: 'changed' | 'session_revoked'): void => {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ version: 1, event })}\n\n`))
+              if (event === 'session_revoked')
+                controller.close()
+            }
+            dispose = workspace.observe(publish)
+            publish('changed')
           },
           cancel() {
             dispose?.()
@@ -188,87 +215,93 @@ export class TunnelControlApi {
         })
         return new Response(stream, { headers: { ...API_HEADERS, 'Content-Type': 'text/event-stream; charset=utf-8', 'X-Accel-Buffering': 'no' } })
       }
-      if (url.pathname === '/api/state' && request.method === 'GET') {
-        const clients = this.options.controlPlane.listClients()
-        const views = clients.map(client => clientView(this.options.controlPlane, this.options.gateway, client))
-        return json({
-          version: 1,
-          frps: this.options.frps.state(),
-          counts: {
-            clients: clients.length,
-            connected: clients.filter(client => this.options.gateway.state(client.id).connectionState === 'connected').length,
-            tunnels: views.reduce((sum, view) => sum + view.tunnelCounts.total, 0),
-            pending: views.reduce((sum, view) => sum + view.tunnelCounts.pending, 0),
-            errors: views.reduce((sum, view) => sum + view.tunnelCounts.error, 0),
-          },
-          settings: {
-            address: this.options.config.address,
-            controlPort: this.options.config.controlPort,
-            frpPort: this.options.config.frpPort,
-            httpPort: this.options.config.httpPort,
-            portRange: this.options.config.portRange,
-            advertiseFrpAddress: this.options.config.advertiseFrpAddress ?? null,
-            dataDir: this.options.config.dataDir,
-            adminUser: this.options.config.adminUser,
-          },
-        })
+      if (url.pathname === '/api/state' && request.method === 'GET')
+        return json({ version: 1, ...await workspace.overview() })
+
+      if (url.pathname === '/api/accounts') {
+        const administration = workspace.administration()
+        if (request.method === 'GET')
+          return json({ version: 1, accounts: administration.listAccounts() })
+        if (request.method === 'POST') {
+          const body = await requestJson(request, accountCreateSchema)
+          if (body instanceof Response)
+            return body
+          return json({ version: 1, account: await administration.createAccount(body) }, 201)
+        }
+        return error('METHOD_NOT_ALLOWED', 'Use GET or POST', 405)
       }
+      const accountId = parseId(url.pathname, /^\/api\/accounts\/([^/]+)$/)
+      if (accountId) {
+        const administration = workspace.administration()
+        if (request.method === 'PATCH') {
+          const body = await requestJson(request, accountRoleSchema)
+          if (body instanceof Response)
+            return body
+          const self = accountId === workspace.account.id
+          const account = administration.changeAccountRole(accountId, body.role)
+          return json({ version: 1, account }, 200, self ? { 'Set-Cookie': expiredSessionCookie() } : undefined)
+        }
+        if (request.method === 'DELETE') {
+          const self = accountId === workspace.account.id
+          administration.deleteAccount(accountId)
+          return new Response(null, { status: 204, headers: { ...API_HEADERS, ...(self ? { 'Set-Cookie': expiredSessionCookie() } : {}) } })
+        }
+        return error('METHOD_NOT_ALLOWED', 'Use PATCH or DELETE', 405)
+      }
+      const accountPasswordId = parseId(url.pathname, /^\/api\/accounts\/([^/]+)\/password$/)
+      if (accountPasswordId && request.method === 'PUT') {
+        const body = await requestJson(request, accountPasswordSchema)
+        if (body instanceof Response)
+          return body
+        const self = accountPasswordId === workspace.account.id
+        await workspace.administration().resetAccountPassword(accountPasswordId, body.password)
+        return new Response(null, { status: 204, headers: { ...API_HEADERS, ...(self ? { 'Set-Cookie': expiredSessionCookie() } : {}) } })
+      }
+
       if (url.pathname === '/api/clients') {
         if (request.method === 'GET')
-          return json({ version: 1, clients: this.options.controlPlane.listClients().map(client => clientView(this.options.controlPlane, this.options.gateway, client)) })
+          return json({ version: 1, clients: workspace.listClients() })
         if (request.method === 'POST') {
           const body = await requestJson(request, clientCreateSchema)
           if (body instanceof Response)
             return body
-          const client = this.options.controlPlane.createClient(body.remark)
-          return json({ version: 1, client: clientView(this.options.controlPlane, this.options.gateway, client) }, 201)
+          return json({ version: 1, client: workspace.createClient(body) }, 201)
         }
         return error('METHOD_NOT_ALLOWED', 'Use GET or POST', 405)
       }
       const clientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)$/)
       if (clientId) {
-        if (request.method === 'GET') {
-          const client = this.options.controlPlane.getClient(clientId)
-          const runtime = this.options.gateway.state(clientId)
-          return json({
-            version: 1,
-            client: clientView(this.options.controlPlane, this.options.gateway, client),
-            tunnels: this.options.controlPlane.listTunnels(clientId).map(tunnel => ({ ...tunnel, state: tunnelState(tunnel, client, runtime) })),
-          })
-        }
+        if (request.method === 'GET')
+          return json({ version: 1, ...workspace.getClient(clientId) })
         if (request.method === 'PATCH') {
           const body = await requestJson(request, clientRemarkSchema)
           if (body instanceof Response)
             return body
-          const client = this.options.controlPlane.updateClientRemark(clientId, body.remark)
-          return json({ version: 1, client: clientView(this.options.controlPlane, this.options.gateway, client) })
+          return json({ version: 1, client: workspace.updateClientRemark(clientId, body.remark) })
         }
         if (request.method === 'DELETE') {
-          this.options.controlPlane.deleteClient(clientId)
+          workspace.deleteClient(clientId)
           return new Response(null, { status: 204, headers: API_HEADERS })
         }
         return error('METHOD_NOT_ALLOWED', 'Use GET, PATCH, or DELETE', 405)
       }
       const rotateClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/rotate$/)
-      if (rotateClientId && request.method === 'POST') {
-        const client = this.options.controlPlane.rotateClientToken(rotateClientId)
-        return json({ version: 1, client: clientView(this.options.controlPlane, this.options.gateway, client) })
-      }
+      if (rotateClientId && request.method === 'POST')
+        return json({ version: 1, client: workspace.rotateClientToken(rotateClientId) })
       const restartClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/restart$/)
       if (restartClientId && request.method === 'POST') {
-        if (!this.options.gateway.restartClient(restartClientId))
-          return error('CLIENT_OFFLINE', 'Trusted Tunnel Client is not connected', 409)
+        workspace.restartClient(restartClientId)
         return json({ version: 1, accepted: true }, 202)
       }
       const tunnelsClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/tunnels$/)
       if (tunnelsClientId) {
         if (request.method === 'GET')
-          return json({ version: 1, tunnels: this.options.controlPlane.listTunnels(tunnelsClientId) })
+          return json({ version: 1, tunnels: workspace.getClient(tunnelsClientId).tunnels })
         if (request.method === 'POST') {
           const body = await requestJson(request, tunnelSchema)
           if (body instanceof Response)
             return body
-          return json({ version: 1, tunnel: this.options.controlPlane.createTunnel(tunnelsClientId, body as TunnelMutationInput) }, 201)
+          return json({ version: 1, tunnel: workspace.createTunnel(tunnelsClientId, body as TunnelMutationInput) }, 201)
         }
         return error('METHOD_NOT_ALLOWED', 'Use GET or POST', 405)
       }
@@ -278,24 +311,17 @@ export class TunnelControlApi {
           const body = await requestJson(request, tunnelPatchSchema)
           if (body instanceof Response)
             return body
-          return json({ version: 1, tunnel: this.options.controlPlane.updateTunnel(tunnelId, body as TunnelPatchInput) })
+          return json({ version: 1, tunnel: workspace.updateTunnel(tunnelId, body as TunnelPatchInput) })
         }
         if (request.method === 'DELETE') {
-          this.options.controlPlane.deleteTunnel(tunnelId)
+          workspace.deleteTunnel(tunnelId)
           return new Response(null, { status: 204, headers: API_HEADERS })
         }
         return error('METHOD_NOT_ALLOWED', 'Use PATCH or DELETE', 405)
       }
-      const action = /^\/api\/server\/frp\/(start|stop|restart)$/.exec(url.pathname)?.[1]
-      if (action && request.method === 'POST') {
-        if (action === 'start')
-          await this.options.frps.start(this.options.frpsConfigPath)
-        else if (action === 'stop')
-          await this.options.frps.stop()
-        else
-          await this.options.frps.restart()
-        return json({ version: 1, frps: this.options.frps.state() })
-      }
+      const action = /^\/api\/server\/frp\/(start|stop|restart)$/.exec(url.pathname)?.[1] as 'start' | 'stop' | 'restart' | undefined
+      if (action && request.method === 'POST')
+        return json({ version: 1, server: await workspace.administration().controlFrps(action) })
       return error('NOT_FOUND', 'Route not found', 404)
     }
     catch (cause) {
@@ -303,9 +329,5 @@ export class TunnelControlApi {
     }
   }
 
-  stop(): void {
-    for (const unsubscribe of this.unsubscribers)
-      unsubscribe()
-    this.eventListeners.clear()
-  }
+  stop(): void {}
 }

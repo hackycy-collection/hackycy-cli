@@ -23,6 +23,7 @@ describe('tunnel configuration', () => {
       YCY_TUNNEL_FRP_PORT: '7100',
       YCY_TUNNEL_PORT_RANGE: '30000-30010',
       YCY_TUNNEL_ADVERTISE_FRP_ADDR: '[2001:db8::1]:7001',
+      YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret',
     })
     expect(config.controlPort).toBe(7600)
     expect(config.frpPort).toBe(7100)
@@ -30,6 +31,7 @@ describe('tunnel configuration', () => {
     expect(config.portRange).toEqual({ start: 30000, end: 30010 })
     expect(config.advertiseFrpAddress).toEqual({ host: '2001:db8::1', port: 7001 })
     expect(config.adminUser).toBe('admin')
+    expect(resolveServerConfig({}, { YCY_TUNNEL_ADMIN_USER: '-operator', YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret' }).adminUser).toBe('-operator')
   })
 
   test('validates port ranges, host-port values, and control origins', () => {
@@ -39,8 +41,12 @@ describe('tunnel configuration', () => {
     expect(normalizeControlPlaneUrl('tunnel.example.com').href).toBe('https://tunnel.example.com/')
     expect(normalizeControlPlaneUrl('http://localhost:7500').href).toBe('http://localhost:7500/')
     expect(() => normalizeControlPlaneUrl('ftp://example.com')).toThrow('HTTP or HTTPS')
-    expect(() => resolveServerConfig({ controlPort: 7000, frpPort: 7000 }, {})).toThrow('must be distinct')
-    expect(() => resolveServerConfig({ controlPort: 20000 }, {})).toThrow('must not include')
+    const environment = { YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret' }
+    expect(() => resolveServerConfig({}, {})).toThrow('YCY_TUNNEL_ADMIN_PASSWORD')
+    expect(() => resolveServerConfig({}, { YCY_TUNNEL_ADMIN_PASSWORD: 'short' })).toThrow('8-256')
+    expect(() => resolveServerConfig({}, { YCY_TUNNEL_ADMIN_USER: ' admin ', YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret' })).toThrow('1-64')
+    expect(() => resolveServerConfig({ controlPort: 7000, frpPort: 7000 }, environment)).toThrow('must be distinct')
+    expect(() => resolveServerConfig({ controlPort: 20000 }, environment)).toThrow('must not include')
   })
 
   test('resolves Client Token precedence including a secret file', async () => {
@@ -85,7 +91,10 @@ describe('FRP foundation', () => {
   })
 
   test('renders exact server and enabled client proxy TOML', () => {
-    const server = resolveServerConfig({ address: '127.0.0.1', frpPort: 7001, httpPort: 8081, portRange: '21000-21005', dataDir: '/tmp/tunnel' }, {})
+    const server = resolveServerConfig(
+      { address: '127.0.0.1', frpPort: 7001, httpPort: 8081, portRange: '21000-21005', dataDir: '/tmp/tunnel' },
+      { YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret' },
+    )
     expect(renderFrpsConfig(server, 'internal')).toContain('allowPorts = [{ start = 21000, end = 21005 }]')
     const client = renderFrpcConfig({
       advertisedFrpHost: 'frp.example.com',

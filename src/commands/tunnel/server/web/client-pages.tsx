@@ -46,7 +46,7 @@ function ClientRemarkEditor({ client, onClose, onSaved }: { client?: ClientView,
   )
 }
 
-export function ClientsPage({ refreshSequence }: { refreshSequence: number }): React.JSX.Element {
+export function ClientsPage({ refreshSequence, showOwner }: { refreshSequence: number, showOwner: boolean }): React.JSX.Element {
   const [clients, setClients] = useState<ClientView[]>([])
   const [error, setError] = useState('')
   const [confirmation, setConfirmation] = useState<ConfirmationRequest>()
@@ -87,6 +87,7 @@ export function ClientsPage({ refreshSequence }: { refreshSequence: number }): R
             <tr>
               <th>Client Token</th>
               <th>Client Remark</th>
+              {showOwner && <th>Owner</th>}
               <th>Connection</th>
               <th>Revision</th>
               <th>Tunnels</th>
@@ -98,6 +99,7 @@ export function ClientsPage({ refreshSequence }: { refreshSequence: number }): R
               <tr key={client.id}>
                 <td className="client-token"><Token value={client.token} /></td>
                 <td className="client-remark">{client.remark || 'Unlabeled client'}</td>
+                {showOwner && <td>{client.owner.username}</td>}
                 <td><Status value={client.runtime.connectionState} /></td>
                 <td className="mono">
                   {client.lastAppliedRevision}
@@ -218,7 +220,7 @@ function TunnelEditor({ clientId, initial, onClose, onSaved }: { clientId: strin
   )
 }
 
-export function ClientDetailPage({ id, refreshSequence }: { id: string, refreshSequence: number }): React.JSX.Element {
+export function ClientDetailPage({ id, refreshSequence, showOwner }: { id: string, refreshSequence: number, showOwner: boolean }): React.JSX.Element {
   const [client, setClient] = useState<ClientView>()
   const [tunnels, setTunnels] = useState<TunnelView[]>([])
   const [editing, setEditing] = useState<TunnelView | null | undefined>()
@@ -287,6 +289,12 @@ export function ClientDetailPage({ id, refreshSequence }: { id: string, refreshS
           <Token value={client.token} />
           <Status value={client.runtime.connectionState} />
           <Status value={client.runtime.processState} />
+          {showOwner && (
+            <span className="mono">
+              Owner
+              {client.owner.username}
+            </span>
+          )}
           <span className="mono">
             Revision
             {' '}

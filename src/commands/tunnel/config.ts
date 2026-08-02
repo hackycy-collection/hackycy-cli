@@ -76,6 +76,12 @@ export function resolveServerConfig(input: ServerOptionInput, env: NodeJS.Proces
     throw new TunnelError('INVALID_CONFIG', 'Tunnel server address is required')
   const dataDir = path.resolve(String(option(input.dataDir, env, 'YCY_TUNNEL_DATA_DIR', defaultServerDataDirectory(env))))
   const advertised = option(input.advertiseFrpAddr, env, 'YCY_TUNNEL_ADVERTISE_FRP_ADDR', '')
+  const adminUser = env.YCY_TUNNEL_ADMIN_USER ?? 'admin'
+  if (!/^[\w.-]{1,64}$/.test(adminUser))
+    throw new TunnelError('INVALID_CONFIG', 'Environment administrator username must contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens')
+  const adminPassword = env.YCY_TUNNEL_ADMIN_PASSWORD
+  if (!adminPassword || adminPassword.length < 8 || adminPassword.length > 256)
+    throw new TunnelError('INVALID_CONFIG', 'YCY_TUNNEL_ADMIN_PASSWORD must contain 8-256 characters')
   const config: ServerTunnelConfig = {
     address,
     controlPort: port(option(input.controlPort, env, 'YCY_TUNNEL_CONTROL_PORT', 7500), 'Control port'),
@@ -84,8 +90,8 @@ export function resolveServerConfig(input: ServerOptionInput, env: NodeJS.Proces
     portRange: parsePortRange(String(option(input.portRange, env, 'YCY_TUNNEL_PORT_RANGE', '20000-20100'))),
     ...(String(advertised).trim() ? { advertiseFrpAddress: parseHostPort(String(advertised).trim()) } : {}),
     dataDir,
-    adminUser: env.YCY_TUNNEL_ADMIN_USER ?? 'admin',
-    adminPassword: env.YCY_TUNNEL_ADMIN_PASSWORD ?? 'admin',
+    adminUser,
+    adminPassword,
   }
   const listenerPorts = [config.controlPort, config.frpPort, config.httpPort]
   if (new Set(listenerPorts).size !== listenerPorts.length)

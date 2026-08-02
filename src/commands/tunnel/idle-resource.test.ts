@@ -100,8 +100,12 @@ describe('Tunnel idle resources', () => {
 
   test('retains one latest runtime entry instead of process-state history', () => {
     const database = new TunnelDatabase(':memory:')
+    database.sqlite.run(`
+      INSERT INTO accounts(internal_id, kind, username, username_key, role, password_hash, created_at, updated_at)
+      VALUES('test-owner', 'environment', 'admin', 'admin', 'admin', NULL, '2026-01-01T00:00:00.000Z', '2026-01-01T00:00:00.000Z')
+    `)
     const controlPlane = new TunnelControlPlane(database, { start: 20000, end: 20001 })
-    const client = controlPlane.createClient()
+    const client = controlPlane.createClient('test-owner')
     const gateway = new AgentGateway(controlPlane, 7000)
     const socket = {
       data: { clientId: client.id, requestHost: 'localhost', phase: 'active', awaitingPong: false },

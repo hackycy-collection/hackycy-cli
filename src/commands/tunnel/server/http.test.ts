@@ -8,6 +8,7 @@ import { AgentGateway } from './agent-gateway'
 import { TunnelControlPlane } from './control-plane'
 import { TunnelDatabase } from './database'
 import { startTunnelHttpServer } from './http'
+import { TunnelManagement } from './tunnel-management'
 
 class FakeChild implements FrpChild {
   readonly pid = 42
@@ -28,6 +29,7 @@ interface Fixture {
   controlPlane: TunnelControlPlane
   gateway: AgentGateway
   frps: FrpSupervisor
+  management: TunnelManagement
   server: ReturnType<typeof startTunnelHttpServer>
 }
 
@@ -35,6 +37,7 @@ const fixtures: Fixture[] = []
 
 afterEach(async () => {
   for (const fixture of fixtures.splice(0)) {
+    fixture.management.stop()
     fixture.gateway.stop()
     await fixture.server.stop()
     await fixture.frps.stop()
@@ -42,7 +45,7 @@ afterEach(async () => {
   }
 })
 
-function fixture(): Fixture {
+async function fixture(): Promise<Fixture> {
   const database = new TunnelDatabase(':memory:')
   const controlPlane = new TunnelControlPlane(database, { start: 20000, end: 20002 })
   const gateway = new AgentGateway(controlPlane, 7000)
@@ -55,19 +58,20 @@ function fixture(): Fixture {
     portRange: { start: 20000, end: 20002 },
     dataDir: '/data',
     adminUser: 'admin',
-    adminPassword: 'secret',
+    adminPassword: 'admin-secret',
   }
-  const server = startTunnelHttpServer({ config, controlPlane, gateway, frps, frpsConfigPath: '/frps.toml' })
-  const result = { database, controlPlane, gateway, frps, server }
+  const management = await TunnelManagement.create({ database, controlPlane, gateway, frps, frpsConfigPath: '/frps.toml', serverConfig: config })
+  const server = startTunnelHttpServer({ management, gateway, address: config.address, controlPort: config.controlPort })
+  const result = { database, controlPlane, gateway, frps, management, server }
   fixtures.push(result)
   return result
 }
 
-async function login(server: Fixture['server']): Promise<string> {
+async function login(server: Fixture['server'], username = 'admin', password = 'admin-secret'): Promise<string> {
   const response = await fetch(new URL('/api/session', server.url), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username: 'admin', password: 'secret' }),
+    body: JSON.stringify({ username, password }),
   })
   expect(response.status).toBe(200)
   return response.headers.get('set-cookie')!.split(';')[0]!
@@ -101,10 +105,10 @@ function openAgent(server: Fixture['server'], token: string): Promise<{ socket: 
 }
 
 describe('Tunnel HTTP control plane', () => {
-  test('bounds administrator sessions with least-recently-used eviction', async () => {
-    const value = fixture()
+  test('bounds account sessions with least-recently-used eviction', async () => {
+    const value = await fixture()
     const cookies: string[] = []
-    for (let index = 0; index < 32; index++)
+    for (let index = 0; index < 8; index++)
       cookies.push(await login(value.server))
     expect((await request(value.server, '/api/state', cookies[0]!)).status).toBe(200)
     cookies.push(await login(value.server))
@@ -115,7 +119,7 @@ describe('Tunnel HTTP control plane', () => {
   })
 
   test('protects admin routes and performs client and tunnel mutations', async () => {
-    const value = fixture()
+    const value = await fixture()
     expect((await fetch(new URL('/healthz', value.server.url))).status).toBe(200)
     expect((await fetch(new URL('/api/state', value.server.url))).status).toBe(401)
     const rejected = await fetch(new URL('/api/session', value.server.url), {
@@ -173,8 +177,8 @@ describe('Tunnel HTTP control plane', () => {
   })
 
   test('authenticates one agent, pushes snapshots, records acknowledgements, and revokes rotation', async () => {
-    const value = fixture()
-    const client = value.controlPlane.createClient('Agent fixture')
+    const value = await fixture()
+    const client = value.controlPlane.createClient('environment-admin', 'Agent fixture')
     const { socket, firstMessage } = await openAgent(value.server, client.token)
     const welcome = await firstMessage
     const artifact = resolveFrpArtifact()
@@ -216,9 +220,9 @@ describe('Tunnel HTTP control plane', () => {
   })
 
   test('keeps a failed Desired Revision in Error while the previous child is running', async () => {
-    const value = fixture()
+    const value = await fixture()
     const cookie = await login(value.server)
-    const client = value.controlPlane.createClient('Failure fixture')
+    const client = value.controlPlane.createClient('environment-admin', 'Failure fixture')
     const { socket, firstMessage } = await openAgent(value.server, client.token)
     await firstMessage
 
@@ -243,18 +247,18 @@ describe('Tunnel HTTP control plane', () => {
   })
 
   test('controls the supervised frps process through every server action', async () => {
-    const value = fixture()
+    const value = await fixture()
     const cookie = await login(value.server)
 
     for (const action of ['start', 'restart', 'stop'] as const) {
       const response = await request(value.server, `/api/server/frp/${action}`, cookie, { method: 'POST' })
       expect(response.status).toBe(200)
-      expect((await response.json()).frps.state).toBe(action === 'stop' ? 'stopped' : 'running')
+      expect((await response.json()).server.frps.state).toBe(action === 'stop' ? 'stopped' : 'running')
     }
   })
 
   test('accepts the external HTTPS origin from a same-host TLS proxy', async () => {
-    const value = fixture()
+    const value = await fixture()
     const cookie = await login(value.server)
     const externalOrigin = new URL(value.server.url)
     externalOrigin.protocol = 'https:'
@@ -271,5 +275,47 @@ describe('Tunnel HTTP control plane', () => {
       body: JSON.stringify({}),
     })
     expect(rejected.status).toBe(403)
+  })
+
+  test('scopes HTTP resources by account and reserves administration for admins', async () => {
+    const value = await fixture()
+    const adminCookie = await login(value.server)
+    for (const username of ['alice', 'bob']) {
+      const response = await request(value.server, '/api/accounts', adminCookie, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username, password: `${username}-secret`, role: 'user' }),
+      })
+      expect(response.status).toBe(201)
+    }
+    const aliceCookie = await login(value.server, 'alice', 'alice-secret')
+    const bobCookie = await login(value.server, 'bob', 'bob-secret')
+    const created = await request(value.server, '/api/clients', aliceCookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ remark: 'Alice client' }),
+    })
+    const client = (await created.json()).client
+    const tunnel = await request(value.server, `/api/clients/${client.id}/tunnels`, aliceCookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ protocol: 'http', hostname: 'alice.example.com', localPort: 3000 }),
+    }).then(response => response.json()).then(body => body.tunnel)
+
+    expect((await request(value.server, '/api/clients', bobCookie).then(response => response.json())).clients).toEqual([])
+    expect((await request(value.server, `/api/clients/${client.id}`, bobCookie)).status).toBe(404)
+    expect((await request(value.server, `/api/tunnels/${tunnel.id}`, bobCookie, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ enabled: false }),
+    })).status).toBe(404)
+    expect((await request(value.server, '/api/accounts', bobCookie)).status).toBe(403)
+    expect((await request(value.server, '/api/server/frp/stop', bobCookie, { method: 'POST' })).status).toBe(403)
+    expect((await request(value.server, '/api/state', bobCookie).then(response => response.json())).server).toBeUndefined()
+
+    const adminState = await request(value.server, '/api/state', adminCookie).then(response => response.json())
+    expect(adminState.server.settings.adminUser).toBe('admin')
+    const adminClient = await request(value.server, `/api/clients/${client.id}`, adminCookie).then(response => response.json())
+    expect(adminClient.client.owner.username).toBe('alice')
   })
 })

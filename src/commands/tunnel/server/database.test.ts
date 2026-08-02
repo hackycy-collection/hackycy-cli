@@ -11,8 +11,18 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, { force: true, recursive: true })))
 })
 
-describe('TunnelDatabase migrations', () => {
-  test('adds an empty Client Remark to schema version 1 records', async () => {
+describe('TunnelDatabase schema', () => {
+  test('creates the fresh account and ownership schema', () => {
+    const database = new TunnelDatabase(':memory:')
+    const tables = database.sqlite.query<{ name: string }, []>('SELECT name FROM sqlite_master WHERE type = \'table\' ORDER BY name').all().map(row => row.name)
+    const clientColumns = database.sqlite.query<{ name: string }, []>('PRAGMA table_info(clients)').all().map(row => row.name)
+    expect(tables).toContain('accounts')
+    expect(clientColumns).toContain('owner_account_id')
+    expect(database.sqlite.query<{ value: string }, []>('SELECT value FROM meta WHERE key = \'schema_version\'').get()).toEqual({ value: '3' })
+    database.close()
+  })
+
+  test('rejects an old development schema instead of migrating it', async () => {
     const directory = await mkdtemp(path.join(os.tmpdir(), 'ycy-tunnel-database-'))
     temporaryDirectories.push(directory)
     const filePath = path.join(directory, 'tunnel.sqlite')
@@ -33,9 +43,6 @@ describe('TunnelDatabase migrations', () => {
     `)
     legacy.close(false)
 
-    const migrated = new TunnelDatabase(filePath)
-    expect(migrated.sqlite.query<{ remark: string }, []>('SELECT remark FROM clients WHERE internal_id = \'legacy-client\'').get()).toEqual({ remark: '' })
-    expect(migrated.sqlite.query<{ value: string }, []>('SELECT value FROM meta WHERE key = \'schema_version\'').get()).toEqual({ value: '2' })
-    migrated.close()
+    expect(() => new TunnelDatabase(filePath)).toThrow('incompatible')
   })
 })
