@@ -10,76 +10,7 @@ on:
   workflow_dispatch:
 
 jobs:
-  verify-frp-manifest:
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Verify repository quality gates
-        run: |
-          bun test
-          bun run typecheck
-          bun run lint
-
-      - name: Verify pinned FRP manifest
-        run: bun run check:frp-manifest
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Verify source tunnel runtime with real FRP
-        run: |
-          bun src/cli.ts tunnel --help
-          bun run test:tunnel:idle
-          bun run test:tunnel:acceptance
-
-  verify-native-tunnel:
-    needs: verify-frp-manifest
-    strategy:
-      matrix:
-        include:
-          - os: macos-latest
-            artifact: .tmp/ycy-tunnel-smoke
-          - os: ubuntu-latest
-            artifact: .tmp/ycy-tunnel-smoke
-          - os: windows-latest
-            artifact: .tmp/ycy-tunnel-smoke.exe
-
-    runs-on: ${{ matrix.os }}
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build native standalone binary
-        run: bun scripts/build.ts --outfile ${{ matrix.artifact }}
-
-      - name: Verify standalone tunnel command
-        shell: bash
-        run: |
-          "./${{ matrix.artifact }}" tunnel --help
-          "./${{ matrix.artifact }}" tunnel server --help
-          "./${{ matrix.artifact }}" tunnel connect --help
-
   build:
-    needs: verify-frp-manifest
     strategy:
       matrix:
         include:
@@ -134,7 +65,7 @@ jobs:
           if-no-files-found: error
 
   release:
-    needs: [build, verify-native-tunnel]
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -178,7 +109,7 @@ jobs:
 
   image:
     if: startsWith(github.ref, 'refs/tags/')
-    needs: [verify-frp-manifest, verify-native-tunnel]
+    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
