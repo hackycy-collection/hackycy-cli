@@ -81,7 +81,7 @@ export const SEVEN_ZIP_ARTIFACTS: Record<SevenZipTarget, SevenZipArtifact> = {
   },
   'win32-x64': {
     asset: '7z2602-x64.exe',
-    sha256: '6745fa76dc2ea031596d8678f6f6b99c3b1c435b4164a63485adbbc7b8d82ef0',
+    sha256: '6745fa76dc2ea031596d8678f6f6b99c3c1b435b4164a63485adbbc7b8d82ef0',
     format: 'windows-installer',
     files: [
       { sourceName: '7z.exe', embeddedName: 'ycy-7z.exe', filename: '7z.exe', sha256: '83967f1b02b43c4efeda302795722c809e0e81b8307de73558d10484d5676a7d', executable: true },
