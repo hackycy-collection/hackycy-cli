@@ -2,6 +2,7 @@ import { Buffer } from 'node:buffer'
 import { createCipheriv, createDecipheriv, pbkdf2Sync, randomBytes } from 'node:crypto'
 import { homedir, platform, userInfo } from 'node:os'
 import path from 'node:path'
+import process from 'node:process'
 
 const ALGORITHM = 'aes-256-gcm'
 const PBKDF2_ITERATIONS = 100_000
@@ -76,6 +77,7 @@ export function decrypt(encryptedStr: string, key: Buffer): string {
   return Buffer.concat([decipher.update(ciphertext), decipher.final()]).toString('utf8')
 }
 
-export function getConfigDir(): string {
-  return path.join(homedir(), '.ycy-cli')
+export function getConfigDir(env: NodeJS.ProcessEnv = process.env): string {
+  const home = env.USERPROFILE || env.HOME || homedir()
+  return path.join(home, '.ycy-cli')
 }

@@ -2,7 +2,7 @@ import type { ServerToAgentMessage } from '../types'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
-import { describe, expect, test } from 'bun:test'
+import { describe, expect, spyOn, test } from 'bun:test'
 import { FRP_VERSION, resolveFrpArtifact } from '../frp/manifest'
 import { TUNNEL_PROTOCOL_VERSION } from '../types'
 import { runTunnelClient } from './run'
@@ -51,9 +51,12 @@ describe('Tunnel client lifecycle', () => {
       },
     })
     let running: Promise<void> | undefined
+    const warnings: string[] = []
+    const warning = spyOn(console, 'warn').mockImplementation(message => warnings.push(String(message)))
     try {
       running = runTunnelClient({ server: new URL(controlServer.url), token: 'token', stateDir }, {
         signal: shutdown.signal,
+        onAuthenticated: async () => { throw new Error('configuration is read only') },
         ensureFrpcBinary: async (signal) => {
           receivedSignal = signal
           bootstrapStarted()
@@ -69,6 +72,7 @@ describe('Tunnel client lifecycle', () => {
       await running
       expect(receivedSignal?.aborted).toBe(true)
       expect(await Bun.file(path.join(stateDir, '.lock', 'owner.json')).exists()).toBe(false)
+      expect(warnings).toEqual(['Could not remember tunnel connection: configuration is read only'])
     }
     finally {
       shutdown.abort()
@@ -77,6 +81,7 @@ describe('Tunnel client lifecycle', () => {
       }
       await Promise.race([running?.catch(() => {}), Bun.sleep(2000)])
       controlServer.stop(true)
+      warning.mockRestore()
       await rm(stateDir, { recursive: true, force: true })
     }
   })

@@ -14,6 +14,7 @@ export interface ClientAgentOptions {
   createWebSocket?: (url: URL, token: string) => WebSocket
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
   backoffMs?: readonly number[]
+  onAuthenticated?: () => Promise<void> | void
   onMessage?: (message: string) => void
 }
 
@@ -47,6 +48,7 @@ export class TunnelClientAgent {
   private authenticationFailure?: Promise<void>
   private reconcilerStop?: Promise<void>
   private messageQueue = Promise.resolve()
+  private authenticationReported = false
   private processState: { state: FrpProcessState, error?: StructuredRuntimeError } = { state: 'stopped' }
   private readonly backoffMs: readonly number[]
 
@@ -188,6 +190,10 @@ export class TunnelClientAgent {
       throw new TunnelError('INCOMPATIBLE_CLIENT', 'Control plane uses an unsupported tunnel protocol; upgrade ycy')
     if (message.type === 'welcome') {
       this.validateWelcome(message)
+      if (!this.authenticationReported) {
+        this.authenticationReported = true
+        await this.options.onAuthenticated?.()
+      }
       this.welcome = message
       this.reconciler ??= await this.options.createReconciler(message)
       if (this.revoked || this.stopped) {

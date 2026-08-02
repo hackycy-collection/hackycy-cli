@@ -11,6 +11,7 @@ import { readAppliedClientState } from './state'
 export interface TunnelClientRunOptions {
   signal?: AbortSignal
   ensureFrpcBinary?: (signal: AbortSignal) => Promise<string>
+  onAuthenticated?: () => Promise<void> | void
 }
 
 export async function runTunnelClient(config: ClientTunnelConfig, options: TunnelClientRunOptions = {}): Promise<void> {
@@ -48,6 +49,14 @@ export async function runTunnelClient(config: ClientTunnelConfig, options: Tunne
       token: config.token,
       ycyVersion: version,
       lastAppliedRevision: applied?.revision ?? 0,
+      async onAuthenticated() {
+        try {
+          await options.onAuthenticated?.()
+        }
+        catch (cause) {
+          console.warn(`Could not remember tunnel connection: ${cause instanceof Error ? cause.message : String(cause)}`)
+        }
+      },
       async createReconciler() {
         if (reconciler)
           return reconciler

@@ -184,15 +184,17 @@ Account usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyp
 ### Client
 
 ```text
-ycy tunnel connect --server <control-plane> --token <client-token>
+ycy tunnel connect [--server <control-plane>] [--token <client-token>]
 ```
 
-| Value | CLI option | Environment variable | Secret file |
-| --- | --- | --- | --- |
-| Server | `--server` | `YCY_TUNNEL_SERVER` | - |
-| Token | `--token` | `YCY_TUNNEL_TOKEN` | `YCY_TUNNEL_TOKEN_FILE` |
+| Value | CLI option | Environment variable | Secret file | Local fallback |
+| --- | --- | --- | --- | --- |
+| Server | `--server` | `YCY_TUNNEL_SERVER` | - | Remembered server, then `DEFAULT_TUNNEL_SERVER` |
+| Token | `--token` | `YCY_TUNNEL_TOKEN` | `YCY_TUNNEL_TOKEN_FILE` | Token remembered for the resolved server |
 
-Precedence is CLI option, direct environment value, then secret file. The control server and Client Token are supplied on every supervisor start and are not written to local ycy configuration. A server without a URL scheme becomes `https://<server>`; an explicit `http://` URL enables an unencrypted local deployment.
+Server precedence is CLI option, environment value, the one remembered connection, then the compile-time `DEFAULT_TUNNEL_SERVER`, which is empty by default. Token precedence is CLI option, direct environment value, secret file, then the remembered token only when its normalized server matches the resolved server. A server without a URL scheme becomes `https://<server>`; an explicit `http://` URL enables an unencrypted local deployment.
+
+Supplying a CLI token marks the final server-token pair for remembering. The pair replaces the previous remembered connection only after the control plane accepts the token and sends a compatible welcome; connection, authentication, and compatibility failures leave the old pair unchanged. A server supplied alone never causes an environment or secret-file token to be stored. The Client Token is encrypted with the existing machine-and-user-bound ycy configuration key before the pair is written to `~/.ycy-cli/config.json`. A write failure warns without stopping the authenticated tunnel client.
 
 ## Listener Contract
 

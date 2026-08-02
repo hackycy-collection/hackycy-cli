@@ -1,5 +1,6 @@
 import type { Command } from 'commander'
 import type { ClientOptionInput, ServerOptionInput } from './config'
+import { rememberTunnelConnection } from '../../config/tunnel'
 import { resolveClientConfig, resolveServerConfig } from './config'
 
 export function register(program: Command): void {
@@ -27,6 +28,11 @@ export function register(program: Command): void {
     .option('--token <client-token>', 'Client Token')
     .action(async (options: ClientOptionInput) => {
       const { runTunnelClient } = await import('./client/run')
-      await runTunnelClient(await resolveClientConfig(options))
+      const resolved = await resolveClientConfig(options)
+      await runTunnelClient(resolved.config, {
+        onAuthenticated: resolved.rememberOnAuthentication
+          ? () => rememberTunnelConnection(resolved.config)
+          : undefined,
+      })
     })
 }

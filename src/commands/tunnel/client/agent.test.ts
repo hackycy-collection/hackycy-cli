@@ -90,6 +90,7 @@ describe('TunnelClientAgent', () => {
   test('refuses an unpinned artifact before creating the reconciler', async () => {
     const socket = new FakeWebSocket()
     let created = false
+    let authenticated = 0
     const agent = new TunnelClientAgent({
       server: new URL('http://control.example.com'),
       token: 'token',
@@ -101,6 +102,7 @@ describe('TunnelClientAgent', () => {
         created = true
         return {} as ClientReconciler
       },
+      onAuthenticated: () => { authenticated++ },
       backoffMs: [1],
     })
     const running = agent.run()
@@ -109,6 +111,30 @@ describe('TunnelClientAgent', () => {
     socket.receive(welcome({ artifact: { ...welcome().artifact, sha256: '0'.repeat(64) } }))
     await expect(running).rejects.toThrow('upgrade ycy')
     expect(created).toBe(false)
+    expect(authenticated).toBe(0)
+  })
+
+  test('does not report authentication when the initial token probe is rejected', async () => {
+    let authenticated = 0
+    let sockets = 0
+    const agent = new TunnelClientAgent({
+      server: new URL('http://control.example.com'),
+      token: 'rejected-token',
+      ycyVersion: 'test',
+      lastAppliedRevision: 0,
+      fetch: async () => new Response(null, { status: 401 }),
+      createWebSocket: () => {
+        sockets++
+        return new FakeWebSocket() as unknown as WebSocket
+      },
+      createReconciler: async () => ({} as ClientReconciler),
+      onAuthenticated: () => { authenticated++ },
+      backoffMs: [1],
+    })
+
+    await expect(agent.run()).rejects.toThrow('Client Token was rejected')
+    expect(authenticated).toBe(0)
+    expect(sockets).toBe(0)
   })
 
   test('reports the previous child state when a Desired Revision fails', async () => {
@@ -156,6 +182,7 @@ describe('TunnelClientAgent', () => {
   test('keeps the applied child running across an ordinary control-link reconnect', async () => {
     const sockets: FakeWebSocket[] = []
     let stops = 0
+    let authenticated = 0
     const reconciler = {
       apply: async () => {},
       restart: async () => {},
@@ -173,6 +200,7 @@ describe('TunnelClientAgent', () => {
         return socket as unknown as WebSocket
       },
       createReconciler: async () => reconciler,
+      onAuthenticated: () => { authenticated++ },
       backoffMs: [1],
     })
     const running = agent.run()
@@ -191,6 +219,7 @@ describe('TunnelClientAgent', () => {
     sockets[1]!.receive(welcome())
     await Bun.sleep(1)
     expect(sockets[1]!.sent.map(value => JSON.parse(value))).toContainEqual(expect.objectContaining({ type: 'process_state', state: 'running' }))
+    expect(authenticated).toBe(1)
     sockets[1]!.receive({ type: 'revoke', tunnelProtocolVersion: TUNNEL_PROTOCOL_VERSION, reason: 'deleted' })
     await running
     expect(stops).toBe(1)

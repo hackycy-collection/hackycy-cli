@@ -3,8 +3,11 @@ import { readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import path from 'node:path'
 import process from 'node:process'
+import { readRememberedTunnelConnection } from '../../config/tunnel'
 import { clientStateDirectory, defaultServerDataDirectory } from './paths'
 import { TunnelError } from './types'
+
+export const DEFAULT_TUNNEL_SERVER = 'tunnel.sooosin.com'
 
 export interface ServerOptionInput {
   address?: string
@@ -19,6 +22,11 @@ export interface ServerOptionInput {
 export interface ClientOptionInput {
   server?: string
   token?: string
+}
+
+export interface ResolvedClientConfig {
+  config: ClientTunnelConfig
+  rememberOnAuthentication: boolean
 }
 
 function option(input: string | number | undefined, env: NodeJS.ProcessEnv, name: string, fallback: string | number): string | number {
@@ -119,10 +127,17 @@ export function normalizeControlPlaneUrl(value: string): URL {
   return url
 }
 
-export async function resolveClientConfig(input: ClientOptionInput, env: NodeJS.ProcessEnv = process.env): Promise<ClientTunnelConfig> {
-  const rawServer = input.server ?? env.YCY_TUNNEL_SERVER
+export async function resolveClientConfig(
+  input: ClientOptionInput,
+  env: NodeJS.ProcessEnv = process.env,
+  defaultServer: string = DEFAULT_TUNNEL_SERVER,
+): Promise<ResolvedClientConfig> {
+  const remembered = await readRememberedTunnelConnection(env)
+  const rawServer = input.server ?? env.YCY_TUNNEL_SERVER ?? remembered?.server ?? defaultServer
   if (!rawServer?.trim())
-    throw new TunnelError('INVALID_CONFIG', 'Control plane is required through --server or YCY_TUNNEL_SERVER')
+    throw new TunnelError('INVALID_CONFIG', 'Control plane is required through --server, YCY_TUNNEL_SERVER, a remembered connection, or DEFAULT_TUNNEL_SERVER')
+
+  const server = normalizeControlPlaneUrl(rawServer.trim())
 
   let token = input.token ?? env.YCY_TUNNEL_TOKEN
   if (token === undefined && env.YCY_TUNNEL_TOKEN_FILE) {
@@ -133,10 +148,15 @@ export async function resolveClientConfig(input: ClientOptionInput, env: NodeJS.
       throw new TunnelError('INVALID_CONFIG', `Could not read Client Token file: ${cause instanceof Error ? cause.message : String(cause)}`)
     }
   }
+  if (token === undefined && remembered && normalizeControlPlaneUrl(remembered.server).origin === server.origin)
+    token = remembered.token
   token = token?.trim()
   if (!token)
-    throw new TunnelError('INVALID_CONFIG', 'Client Token is required through --token, YCY_TUNNEL_TOKEN, or YCY_TUNNEL_TOKEN_FILE')
+    throw new TunnelError('INVALID_CONFIG', 'Client Token is required through --token, YCY_TUNNEL_TOKEN, YCY_TUNNEL_TOKEN_FILE, or a matching remembered connection')
 
-  const server = normalizeControlPlaneUrl(rawServer.trim())
-  return { server, token, stateDir: clientStateDirectory(env) }
+  return {
+    config: { server, token, stateDir: clientStateDirectory(env) },
+    rememberOnAuthentication: input.token !== undefined
+      && (remembered?.server !== server.origin || remembered.token !== token),
+  }
 }

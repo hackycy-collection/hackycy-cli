@@ -1,8 +1,10 @@
-import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
-import { normalizeControlPlaneUrl, parseHostPort, parsePortRange, resolveClientConfig, resolveServerConfig } from './config'
+import { readConfig, writeConfig } from '../../config/store'
+import { readRememberedTunnelConnection, rememberTunnelConnection } from '../../config/tunnel'
+import { DEFAULT_TUNNEL_SERVER, normalizeControlPlaneUrl, parseHostPort, parsePortRange, resolveClientConfig, resolveServerConfig } from './config'
 import { ensureFrpBinary } from './frp/binary'
 import { renderFrpcConfig, renderFrpsConfig } from './frp/config'
 import { FRP_ARTIFACTS, resolveFrpArtifact } from './frp/manifest'
@@ -57,9 +59,92 @@ describe('tunnel configuration', () => {
     const fromFile = await resolveClientConfig({ server: 'localhost' }, { HOME: root, YCY_TUNNEL_TOKEN_FILE: secret })
     const fromEnvironment = await resolveClientConfig({ server: 'localhost' }, { HOME: root, YCY_TUNNEL_TOKEN: 'env-token', YCY_TUNNEL_TOKEN_FILE: secret })
     const fromCli = await resolveClientConfig({ server: 'localhost', token: 'cli-token' }, { HOME: root, YCY_TUNNEL_TOKEN: 'env-token' })
-    expect(fromFile.token).toBe('file-token')
-    expect(fromEnvironment.token).toBe('env-token')
-    expect(fromCli.token).toBe('cli-token')
+    expect(fromFile.config.token).toBe('file-token')
+    expect(fromEnvironment.config.token).toBe('env-token')
+    expect(fromCli.config.token).toBe('cli-token')
+    expect(fromFile.rememberOnAuthentication).toBe(false)
+    expect(fromEnvironment.rememberOnAuthentication).toBe(false)
+    expect(fromCli.rememberOnAuthentication).toBe(true)
+  })
+
+  test('encrypts and replaces one remembered server-token pair without losing other configuration', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-memory-'))
+    temporaryDirectories.push(root)
+    const env = { HOME: root }
+    const config = await readConfig(env)
+    config.cm = { defaultProfile: 'work', profiles: {} }
+    config.fork.instances.github = { host: 'github.com', type: 'github', token: 'existing-encrypted-token' }
+    await writeConfig(config, env)
+
+    await rememberTunnelConnection({ server: new URL('https://first.example.com/'), token: 'first-token' }, env)
+    const raw = JSON.parse(await readFile(path.join(root, '.ycy-cli', 'config.json'), 'utf8'))
+    expect(raw.tunnel.server).toBe('https://first.example.com')
+    expect(raw.tunnel.token).not.toContain('first-token')
+    expect(raw.cm.defaultProfile).toBe('work')
+    expect(raw.fork.instances.github.host).toBe('github.com')
+    expect(await readRememberedTunnelConnection(env)).toEqual({ server: 'https://first.example.com', token: 'first-token' })
+
+    await rememberTunnelConnection({ server: new URL('http://second.example.com:7500/'), token: 'second-token' }, env)
+    expect(await readRememberedTunnelConnection(env)).toEqual({ server: 'http://second.example.com:7500', token: 'second-token' })
+
+    const corrupted = await readConfig(env)
+    corrupted.tunnel!.token = 'invalid-ciphertext'
+    await writeConfig(corrupted, env)
+    expect(await readRememberedTunnelConnection(env)).toBeUndefined()
+    const replacement = await resolveClientConfig({ server: 'replacement.example.com', token: 'replacement-token' }, env)
+    expect(replacement.rememberOnAuthentication).toBe(true)
+  })
+
+  test('uses a remembered pair only for its normalized server', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-resolution-'))
+    temporaryDirectories.push(root)
+    const env = { HOME: root }
+    await rememberTunnelConnection({ server: new URL('https://remembered.example.com/'), token: 'remembered-token' }, env)
+
+    const remembered = await resolveClientConfig({}, env)
+    const sameServer = await resolveClientConfig({ server: 'remembered.example.com' }, env)
+    expect(remembered.config.server.origin).toBe('https://remembered.example.com')
+    expect(remembered.config.token).toBe('remembered-token')
+    expect(sameServer.config.token).toBe('remembered-token')
+    await expect(resolveClientConfig({ server: 'other.example.com' }, env)).rejects.toThrow('matching remembered connection')
+  })
+
+  test('uses the code default after environment and memory, and remembers only a CLI token', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-default-'))
+    temporaryDirectories.push(root)
+    const env = { HOME: root }
+    expect(DEFAULT_TUNNEL_SERVER).toBe('')
+    await expect(resolveClientConfig({}, env)).rejects.toThrow('DEFAULT_TUNNEL_SERVER')
+
+    const fromDefault = await resolveClientConfig({ token: 'cli-token' }, env, 'default.example.com')
+    expect(fromDefault.config.server.origin).toBe('https://default.example.com')
+    expect(fromDefault.rememberOnAuthentication).toBe(true)
+
+    const environmentServer = await resolveClientConfig(
+      { token: 'cli-token' },
+      { HOME: root, YCY_TUNNEL_SERVER: 'environment.example.com' },
+      'default.example.com',
+    )
+    const cliServer = await resolveClientConfig(
+      { server: 'cli.example.com', token: 'cli-token' },
+      { HOME: root, YCY_TUNNEL_SERVER: 'environment.example.com' },
+      'default.example.com',
+    )
+    expect(environmentServer.config.server.origin).toBe('https://environment.example.com')
+    expect(cliServer.config.server.origin).toBe('https://cli.example.com')
+
+    const fromEnvironment = await resolveClientConfig(
+      { server: 'cli.example.com' },
+      { HOME: root, YCY_TUNNEL_TOKEN: 'env-token' },
+      'default.example.com',
+    )
+    expect(fromEnvironment.config.server.origin).toBe('https://cli.example.com')
+    expect(fromEnvironment.rememberOnAuthentication).toBe(false)
+
+    await rememberTunnelConnection({ server: new URL('https://remembered.example.com/'), token: 'old-token' }, env)
+    const rotated = await resolveClientConfig({ token: 'new-token' }, env, 'default.example.com')
+    expect(rotated.config.server.origin).toBe('https://remembered.example.com')
+    expect(rotated.rememberOnAuthentication).toBe(true)
   })
 
   test('uses fixed platform-specific server, client, and managed FRP paths', () => {
