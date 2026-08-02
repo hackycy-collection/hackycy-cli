@@ -6,6 +6,7 @@ import { mkdtemp, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
+import { createServeAuthentication } from './authentication'
 import { createRemoteDownloadManager } from './download-service'
 import { startServeHttpServer } from './server'
 import { THUMBNAIL_MAX_INPUT_BYTES, ThumbnailService } from './thumbnail-service'
@@ -39,6 +40,7 @@ async function startFixtureServer(
   managementEnabled = false,
   createThumbnailService?: (workspace: Awaited<ReturnType<typeof createServeWorkspace>>) => ThumbnailService,
   createDownloadManager?: (workspace: Awaited<ReturnType<typeof createServeWorkspace>>) => ServeDownloadManager,
+  authentication?: Awaited<ReturnType<typeof createServeAuthentication>>,
 ): Promise<{ server: RunningServeServer, root: string }> {
   const root = await mkdtemp(path.join(tmpdir(), 'ycy-serve-http-'))
   temporaryDirectories.push(root)
@@ -49,6 +51,7 @@ async function startFixtureServer(
     address: '127.0.0.1',
     port: 0,
     managementEnabled,
+    authentication,
     thumbnailService: createThumbnailService?.(workspace),
     downloadManager: createDownloadManager?.(workspace),
   })
@@ -56,7 +59,107 @@ async function startFixtureServer(
   return { server, root }
 }
 
+async function login(server: RunningServeServer, username = 'alice', password = 'password123'): Promise<{ response: Response, cookie?: string }> {
+  const response = await fetch(new URL('/api/session', server.url), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Origin': server.url.origin },
+    body: JSON.stringify({ username, password }),
+  })
+  return { response, cookie: response.headers.get('set-cookie')?.split(';')[0] }
+}
+
 describe('ServeHttpServer', () => {
+  test('reports disabled authentication without changing existing access', async () => {
+    const { server } = await startFixtureServer()
+
+    const session = await fetch(new URL('/api/session', server.url))
+    const directory = await fetch(new URL('/api/directory', server.url))
+
+    expect(await session.json()).toEqual({ version: 1, authenticationEnabled: false })
+    expect(directory.status).toBe(200)
+  })
+
+  test('requires a valid account session for every file and data route', async () => {
+    const authentication = await createServeAuthentication(['Alice:password123'])
+    const { server } = await startFixtureServer(true, undefined, undefined, authentication)
+    const protectedRequests = [
+      fetch(new URL('/api/directory', server.url)),
+      fetch(new URL('/api/text?path=hello.txt', server.url)),
+      fetch(new URL('/api/upload', server.url), { method: 'POST' }),
+      fetch(new URL('/api/operations', server.url), { method: 'POST' }),
+      fetch(new URL('/api/downloads', server.url)),
+      fetch(new URL('/api/downloads/events', server.url)),
+      fetch(new URL('/files/hello.txt', server.url)),
+      fetch(new URL('/thumbnails/hello.txt', server.url)),
+    ]
+
+    expect((await fetch(server.url)).status).toBe(200)
+    expect((await fetch(new URL('/browse/private', server.url))).status).toBe(200)
+    for (const response of await Promise.all(protectedRequests)) {
+      expect(response.status).toBe(401)
+      expect(await response.json()).toEqual({
+        version: 1,
+        error: { code: 'AUTHENTICATION_REQUIRED', message: 'Authenticated session is required' },
+      })
+    }
+
+    const missingOrigin = await fetch(new URL('/api/session', server.url), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: 'alice', password: 'password123' }),
+    })
+    expect(missingOrigin.status).toBe(403)
+
+    const rejected = await login(server, 'alice', 'wrong-password')
+    expect(rejected.response.status).toBe(401)
+    expect(await rejected.response.json()).toEqual({
+      version: 1,
+      error: { code: 'AUTHENTICATION_FAILED', message: 'Account credentials are invalid' },
+    })
+
+    const signedIn = await login(server, 'ALICE')
+    expect(signedIn.response.status).toBe(200)
+    expect(signedIn.cookie).toStartWith('ycy_serve_session=')
+    expect(signedIn.response.headers.get('set-cookie')).toContain('HttpOnly; SameSite=Strict; Path=/; Max-Age=43200')
+
+    const session = await fetch(new URL('/api/session', server.url), { headers: { Cookie: signedIn.cookie! } })
+    expect(await session.json()).toEqual({
+      version: 1,
+      authenticationEnabled: true,
+      authenticated: true,
+      account: { username: 'Alice' },
+    })
+    expect((await fetch(new URL('/api/directory', server.url), { headers: { Cookie: signedIn.cookie! } })).status).toBe(200)
+
+    const file = await fetch(new URL('/files/hello.txt', server.url), { headers: { Cookie: signedIn.cookie! } })
+    expect(file.status).toBe(200)
+    expect(await file.text()).toBe('hello world')
+    expect(file.headers.get('access-control-allow-origin')).toBeNull()
+    const preflight = await fetch(new URL('/files/hello.txt', server.url), { method: 'OPTIONS', headers: { Cookie: signedIn.cookie! } })
+    expect(preflight.status).toBe(204)
+    expect(preflight.headers.get('access-control-allow-origin')).toBeNull()
+
+    const signedOut = await fetch(new URL('/api/session', server.url), {
+      method: 'DELETE',
+      headers: { Cookie: signedIn.cookie!, Origin: server.url.origin },
+    })
+    expect(signedOut.status).toBe(204)
+    expect(signedOut.headers.get('set-cookie')).toContain('Max-Age=0')
+    expect((await fetch(new URL('/api/directory', server.url), { headers: { Cookie: signedIn.cookie! } })).status).toBe(401)
+  })
+
+  test('closes an authenticated download event stream when its session expires', async () => {
+    const authentication = await createServeAuthentication(['alice:password123'], { sessionLifetimeMs: 40 })
+    const { server } = await startFixtureServer(true, undefined, undefined, authentication)
+    const signedIn = await login(server)
+    const response = await fetch(new URL('/api/downloads/events', server.url), { headers: { Cookie: signedIn.cookie! } })
+    const reader = response.body!.getReader()
+
+    expect(response.status).toBe(200)
+    expect((await reader.read()).done).toBe(false)
+    expect((await reader.read()).done).toBe(true)
+  })
+
   test('serves a versioned directory listing with API security headers', async () => {
     const { server, root } = await startFixtureServer()
 

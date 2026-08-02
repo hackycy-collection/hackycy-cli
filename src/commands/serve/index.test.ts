@@ -21,4 +21,23 @@ describe('serve command registration', () => {
     expect(command.options.map(option => option.long)).not.toContain('--upload')
     expect(command.getOptionValue('manage')).toBe(false)
   })
+
+  test('collects repeated accounts without enabling authentication by default', () => {
+    const program = new Command()
+    register(program)
+
+    const command = program.commands[0]!
+    expect(command.getOptionValue('account')).toEqual([])
+
+    command.parseOptions([
+      '--account',
+      'alice:password123',
+      '--account',
+      'bob:password456',
+    ])
+    expect(command.getOptionValue('account')).toEqual([
+      'alice:password123',
+      'bob:password456',
+    ])
+  })
 })

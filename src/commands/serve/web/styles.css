@@ -78,6 +78,115 @@ body {
   letter-spacing: 0;
 }
 
+.auth-shell {
+  display: flex;
+  width: 100%;
+  height: 100dvh;
+  min-width: 320px;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--window);
+}
+
+.auth-stage {
+  display: grid;
+  min-height: 0;
+  flex: 1;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-panel {
+  display: flex;
+  width: min(100%, 340px);
+  flex-direction: column;
+  gap: 18px;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--content);
+  box-shadow: var(--shadow);
+  padding: 24px;
+}
+
+.login-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 2px;
+}
+
+.login-brand strong {
+  display: block;
+  margin-top: 2px;
+  font-size: 14px;
+  line-height: 18px;
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted-foreground);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.login-field input {
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--border-strong);
+  border-radius: 5px;
+  outline: 0;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0 10px;
+  font-size: 13px;
+  font-weight: 400;
+}
+
+.login-field input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.login-error {
+  margin: -4px 0 0;
+  color: #b42318;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
+.dark .login-error {
+  color: #ff9b93;
+}
+
+.login-submit {
+  width: 100%;
+  height: 36px;
+  gap: 7px;
+  border-radius: 5px !important;
+  background: var(--accent) !important;
+  color: white !important;
+}
+
+.dark .login-submit {
+  color: #101010 !important;
+}
+
+.login-submit:hover:not(:disabled) {
+  background: var(--accent-hover) !important;
+}
+
+.session-state {
+  display: flex;
+  max-width: min(440px, 100%);
+  align-items: center;
+  gap: 10px;
+  color: var(--muted-foreground);
+  overflow-wrap: anywhere;
+}
+
 button,
 select,
 input {
@@ -126,6 +235,28 @@ button:disabled {
   height: 44px;
   gap: 8px;
   padding: 0 12px;
+}
+
+.account-identity {
+  display: flex;
+  min-width: 0;
+  max-width: 180px;
+  align-items: center;
+  gap: 6px;
+  border-left: 1px solid var(--border);
+  padding-left: 10px;
+  color: var(--muted-foreground);
+  font-size: 11px;
+}
+
+.account-identity > svg {
+  flex: 0 0 14px;
+}
+
+.account-identity > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .app-icon {
@@ -1161,6 +1292,10 @@ button.details-heading:hover {
     display: none;
   }
 
+  .account-identity {
+    max-width: 120px;
+  }
+
   .command-bar {
     overflow-x: auto;
     scrollbar-width: none;
@@ -1290,6 +1425,20 @@ button.details-heading:hover {
 }
 
 @media (max-width: 560px) {
+  .auth-stage {
+    padding: 16px;
+  }
+
+  .login-panel {
+    padding: 20px;
+  }
+
+  .login-field input,
+  .login-submit {
+    height: 44px;
+    font-size: 16px;
+  }
+
   .title-bar {
     padding-inline: 7px;
   }
@@ -1302,6 +1451,16 @@ button.details-heading:hover {
     width: 26px;
     height: 26px;
     flex-basis: 26px;
+  }
+
+  .account-identity {
+    width: 24px;
+    padding-left: 8px;
+    border-left: 0;
+  }
+
+  .account-identity > span {
+    display: none;
   }
 
   .navigation-buttons .command-button:nth-child(2) {

@@ -6,6 +6,7 @@ import process from 'node:process'
 import { cancel, intro, note, outro } from '@clack/prompts'
 import ansis from 'ansis'
 import { printTitle } from '../../shared/utils'
+import { createServeAuthentication } from './authentication'
 import { startServeHttpServer } from './server'
 import { createServeWorkspace } from './workspace'
 
@@ -44,6 +45,15 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
     return
   }
 
+  let authentication: Awaited<ReturnType<typeof createServeAuthentication>>
+  try {
+    authentication = await createServeAuthentication(options.accounts)
+  }
+  catch (cause) {
+    cancel(`Invalid account configuration: ${cause instanceof Error ? cause.message : String(cause)}`)
+    return
+  }
+
   let server: ReturnType<typeof startServeHttpServer>
   try {
     server = startServeHttpServer({
@@ -51,9 +61,11 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
       address: options.address,
       port: options.port,
       managementEnabled: options.manage,
+      authentication,
     })
   }
   catch (cause) {
+    authentication?.close()
     cancel(`Failed to start server: ${cause instanceof Error ? cause.message : String(cause)}`)
     return
   }
@@ -63,9 +75,10 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
   messages.push(`  ${ansis.dim('Directory'.padEnd(9))} ${ansis.dim(path.resolve(options.directory))}`)
   messages.push(`  ${ansis.dim('Bind'.padEnd(9))} ${ansis.dim(`${options.address}:${server.url.port}`)}`)
   messages.push(`  ${ansis.dim('Management'.padEnd(11))} ${options.manage ? ansis.green('enabled') : ansis.dim('disabled')}`)
+  messages.push(`  ${ansis.dim('Authentication'.padEnd(15))} ${authentication ? ansis.green(`enabled (${authentication.accountCount} ${authentication.accountCount === 1 ? 'account' : 'accounts'})`) : ansis.dim('disabled')}`)
   note(messages.join('\n'), 'Server running')
 
-  if (options.manage && !['127.0.0.1', '::1', 'localhost'].includes(options.address)) {
+  if (options.manage && !authentication && !['127.0.0.1', '::1', 'localhost'].includes(options.address)) {
     note(
       ansis.yellow('Anyone who can reach this server can upload, remotely download, move, and permanently delete files in the served directory.'),
       'Trusted networks only',

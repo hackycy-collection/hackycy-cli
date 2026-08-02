@@ -1,3 +1,4 @@
+import type { ServeAuthentication } from './authentication'
 import type { DownloadErrorCode } from './download-service'
 import type { ServeDownloadManager, ServeErrorCode, ServeWorkspace } from './types'
 import { isIP } from 'node:net'
@@ -23,6 +24,8 @@ const API_HEADERS = {
 
 const APP_CONTENT_SECURITY_POLICY = 'default-src \'self\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\'; img-src \'self\' blob: data:; media-src \'self\'; frame-src \'self\'; connect-src \'self\'; object-src \'none\'; base-uri \'none\'; frame-ancestors \'none\''
 const ACTIVE_FILE_CONTENT_SECURITY_POLICY = 'sandbox; default-src \'none\'; style-src \'unsafe-inline\'; img-src data:; object-src \'none\'; base-uri \'none\'; frame-ancestors \'none\''
+const SESSION_COOKIE = 'ycy_serve_session'
+const SESSION_COOKIE_ATTRIBUTES = 'HttpOnly; SameSite=Strict; Path=/'
 
 const operationPathSchema = z.string().max(4096)
 const operationPathsSchema = z.array(operationPathSchema).min(1).max(1000)
@@ -38,6 +41,11 @@ const downloadRequestSchema = z.object({
   url: z.string().max(8192),
   directoryPath: z.string().max(4096),
   filename: z.string().max(4096).optional(),
+}).strict()
+
+const sessionSchema = z.object({
+  username: z.string().max(64),
+  password: z.string().max(256),
 }).strict()
 
 function configureWebBundleHeaders(bundle: Bun.HTMLBundle): void {
@@ -70,8 +78,8 @@ const ERROR_STATUS: Record<ServeErrorCode, number> = {
   UNAVAILABLE: 500,
 }
 
-function json(data: unknown, status = 200): Response {
-  return Response.json(data, { status, headers: API_HEADERS })
+function json(data: unknown, status = 200, headers?: HeadersInit): Response {
+  return Response.json(data, { status, headers: { ...API_HEADERS, ...headers } })
 }
 
 function error(code: string, message: string, status: number): Response {
@@ -104,6 +112,31 @@ function requireMethod(request: Request, method: string): Response | undefined {
   return request.method === method ? undefined : error('METHOD_NOT_ALLOWED', `Use ${method}`, 405)
 }
 
+function sessionToken(request: Request): string | undefined {
+  return request.headers.get('Cookie')
+    ?.split(';')
+    .map(value => value.trim())
+    .find(value => value.startsWith(`${SESSION_COOKIE}=`))
+    ?.slice(SESSION_COOKIE.length + 1)
+}
+
+function activeSessionCookie(token: string): string {
+  return `${SESSION_COOKIE}=${token}; ${SESSION_COOKIE_ATTRIBUTES}; Max-Age=43200`
+}
+
+function expiredSessionCookie(): string {
+  return `${SESSION_COOKIE}=; ${SESSION_COOKIE_ATTRIBUTES}; Max-Age=0`
+}
+
+function protectedPath(pathname: string): boolean {
+  return pathname === '/api'
+    || pathname.startsWith('/api/')
+    || pathname === '/files'
+    || pathname.startsWith('/files/')
+    || pathname === '/thumbnails'
+    || pathname.startsWith('/thumbnails/')
+}
+
 function bindingAllowsHostname(bindingAddress: string, hostname: string): boolean {
   if (bindingAddress === '0.0.0.0')
     return hostname === 'localhost' || isIP(hostname) === 4
@@ -118,7 +151,7 @@ function validateMutationOrigin(request: Request, bindingAddress: string): Respo
   const requestUrl = new URL(request.url)
   const origin = request.headers.get('Origin')
   if (!origin || origin !== requestUrl.origin || !bindingAllowsHostname(bindingAddress, requestUrl.hostname))
-    return error('ORIGIN_FORBIDDEN', 'Management requests must come from the bound same origin', 403)
+    return error('ORIGIN_FORBIDDEN', 'Mutation requests must come from the bound same origin', 403)
   return undefined
 }
 
@@ -205,16 +238,18 @@ function rangeAllowed(request: Request, etag: string, modifiedAt: Date): boolean
   return Number.isFinite(timestamp) && modifiedAt.getTime() < timestamp + 1000
 }
 
-async function serveOriginalFile(request: Request, workspace: ServeWorkspace): Promise<Response> {
+async function serveOriginalFile(request: Request, workspace: ServeWorkspace, corsEnabled: boolean): Promise<Response> {
   if (request.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
-      headers: {
-        'Access-Control-Allow-Headers': 'Range, If-None-Match, If-Modified-Since, If-Range',
-        'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
-        'Access-Control-Allow-Origin': '*',
-        'Access-Control-Max-Age': '86400',
-      },
+      headers: corsEnabled
+        ? {
+            'Access-Control-Allow-Headers': 'Range, If-None-Match, If-Modified-Since, If-Range',
+            'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+            'Access-Control-Allow-Origin': '*',
+            'Access-Control-Max-Age': '86400',
+          }
+        : undefined,
     })
   }
   if (!['GET', 'HEAD'].includes(request.method))
@@ -234,7 +269,6 @@ async function serveOriginalFile(request: Request, workspace: ServeWorkspace): P
     const etag = `W/"${file.size}-${file.modifiedAt.getTime()}"`
     const headers = new Headers({
       'Accept-Ranges': 'bytes',
-      'Access-Control-Allow-Origin': '*',
       'Cache-Control': 'no-cache',
       'Content-Disposition': contentDisposition(file.name, !forceDownload && inlineMimeType(file.mimeType)),
       'Content-Length': String(file.size),
@@ -244,6 +278,8 @@ async function serveOriginalFile(request: Request, workspace: ServeWorkspace): P
       'Referrer-Policy': 'no-referrer',
       'X-Content-Type-Options': 'nosniff',
     })
+    if (corsEnabled)
+      headers.set('Access-Control-Allow-Origin', '*')
     if (requiresDocumentSandbox(file.mimeType))
       headers.set('Content-Security-Policy', ACTIVE_FILE_CONTENT_SECURITY_POLICY)
 
@@ -329,6 +365,7 @@ export function startServeHttpServer(options: {
   address: string
   port: number
   managementEnabled: boolean
+  authentication?: ServeAuthentication
   thumbnailService?: ThumbnailService
   downloadManager?: ServeDownloadManager
 }): RunningServeServer {
@@ -360,6 +397,68 @@ export function startServeHttpServer(options: {
     },
     async fetch(request, bunServer) {
       const url = new URL(request.url)
+      const token = sessionToken(request)
+      if (url.pathname === '/api/session') {
+        if (request.method === 'GET') {
+          if (!options.authentication) {
+            return json(
+              { version: 1, authenticationEnabled: false },
+              200,
+              token ? { 'Set-Cookie': expiredSessionCookie() } : undefined,
+            )
+          }
+          const session = options.authentication.resume(token)
+          return json(
+            {
+              version: 1,
+              authenticationEnabled: true,
+              authenticated: session !== undefined,
+              ...(session ? { account: session.account } : {}),
+            },
+            200,
+            token && !session ? { 'Set-Cookie': expiredSessionCookie() } : undefined,
+          )
+        }
+        if (request.method === 'POST') {
+          if (!options.authentication)
+            return error('AUTHENTICATION_DISABLED', 'No accounts are configured for this server', 403)
+          const invalidOrigin = validateMutationOrigin(request, options.address)
+          if (invalidOrigin)
+            return invalidOrigin
+          if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
+            return error('UNSUPPORTED_MEDIA_TYPE', 'Login requests must use JSON', 415)
+          let body: unknown
+          try {
+            body = await request.json()
+          }
+          catch {
+            return error('INVALID_REQUEST', 'Login request must be valid JSON', 400)
+          }
+          const parsed = sessionSchema.safeParse(body)
+          if (!parsed.success)
+            return error('INVALID_REQUEST', 'Login request is invalid', 400)
+          const grant = await options.authentication.signIn(parsed.data)
+          if (!grant)
+            return error('AUTHENTICATION_FAILED', 'Account credentials are invalid', 401)
+          return json(
+            { version: 1, authenticationEnabled: true, authenticated: true, account: grant.account },
+            200,
+            { 'Set-Cookie': activeSessionCookie(grant.token) },
+          )
+        }
+        if (request.method === 'DELETE') {
+          const invalidOrigin = validateMutationOrigin(request, options.address)
+          if (invalidOrigin)
+            return invalidOrigin
+          options.authentication?.signOut(token)
+          return new Response(null, { status: 204, headers: { ...API_HEADERS, 'Set-Cookie': expiredSessionCookie() } })
+        }
+        return error('METHOD_NOT_ALLOWED', 'Use GET, POST, or DELETE', 405)
+      }
+
+      if (options.authentication && protectedPath(url.pathname) && !options.authentication.resume(token))
+        return error('AUTHENTICATION_REQUIRED', 'Authenticated session is required', 401)
+
       if (url.pathname === '/api/directory') {
         const invalidMethod = requireMethod(request, 'GET')
         if (invalidMethod)
@@ -456,14 +555,32 @@ export function startServeHttpServer(options: {
         bunServer.timeout(request, 0)
         const encoder = new TextEncoder()
         let unsubscribe: (() => void) | undefined
+        let stopObservingSession: (() => void) | undefined
+        let closed = false
+        const dispose = (): void => {
+          unsubscribe?.()
+          stopObservingSession?.()
+          unsubscribe = undefined
+          stopObservingSession = undefined
+        }
         const stream = new ReadableStream<Uint8Array>({
           start(controller) {
             unsubscribe = downloads.subscribe((tasks) => {
               controller.enqueue(encoder.encode(`data: ${JSON.stringify({ version: 1, tasks })}\n\n`))
             })
+            if (options.authentication && token) {
+              stopObservingSession = options.authentication.observe(token, () => {
+                if (closed)
+                  return
+                closed = true
+                dispose()
+                controller.close()
+              })
+            }
           },
           cancel() {
-            unsubscribe?.()
+            closed = true
+            dispose()
           },
         })
         return new Response(stream, {
@@ -552,7 +669,7 @@ export function startServeHttpServer(options: {
         }
       }
       if (url.pathname === '/files' || url.pathname.startsWith('/files/'))
-        return serveOriginalFile(request, options.workspace)
+        return serveOriginalFile(request, options.workspace, !options.authentication)
       if (url.pathname.startsWith('/thumbnails/'))
         return serveThumbnail(request, thumbnails)
       return error('NOT_FOUND', 'Route not found', 404)
@@ -563,6 +680,7 @@ export function startServeHttpServer(options: {
     url: new URL(server.url),
     finished,
     async stop() {
+      options.authentication?.close()
       await downloads.close()
       thumbnails.close()
       await server.stop(true)

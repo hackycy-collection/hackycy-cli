@@ -11,9 +11,18 @@ Options:
   -p, --port <number>       Port to serve on (default: 1204)
   -a, --address <string>    Address to bind to (default: 0.0.0.0)
   -m, --manage              Enable uploads, remote downloads, and filesystem management
+      --account <user:pass> Require login with an account (repeatable)
 ```
 
-The directory defaults to the current working directory. The default binding is available to the local network; use `--address 127.0.0.1` for local-only access. Management mode has no authentication and allows upload, copy, move, rename, and permanent deletion. Use it only with a trusted directory and network.
+The directory defaults to the current working directory. The default binding is available to the local network; use `--address 127.0.0.1` for local-only access. Management mode allows upload, copy, move, rename, and permanent deletion. Without `--account`, use it only with a trusted directory and network.
+
+Passing one or more accounts enables login mode:
+
+```bash
+ycy serve --account 'alice:password123' --account 'bob:another-password' ./shared
+```
+
+The first colon separates the username from the password, so the password may contain additional colons. Usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens and are matched without case sensitivity. Passwords contain 8-256 characters. Duplicate usernames stop startup. Account specifications are process arguments and may be visible in shell history and process inspection tools.
 
 ## Architecture
 
@@ -21,6 +30,7 @@ The directory defaults to the current working directory. The default binding is 
 CLI registration (index.ts)
   -> process composition (run.ts)
      -> ServeWorkspace (workspace.ts)
+     -> ServeAuthentication (authentication.ts, when accounts are configured)
      -> ServeHttpServer (server.ts)
         -> JSON and file HTTP adapter
         -> RemoteDownloadManager with a bounded process-local queue
@@ -29,6 +39,7 @@ CLI registration (index.ts)
 ```
 
 - `workspace.ts` owns root confinement, symlink policy, metadata, text decoding, and atomic upload naming. Callers pass only POSIX relative paths.
+- `authentication.ts` owns account parsing, password hashing, bounded process-local sessions, expiration, and revocation notifications.
 - `server.ts` maps workspace results to HTTP, validates methods and mutation origins, implements cache and Range semantics, and serves the embedded HTML bundle.
 - `download-service.ts` validates remote HTTP(S) targets, blocks literal private and reserved IP addresses, follows validated redirects, and owns the bounded process-local download queue.
 - `thumbnail-service.ts` owns input limits, request coalescing, the bounded worker queue, and the session-only LRU. `thumbnail-worker.ts` performs WASM decoding and WebP conversion off the HTTP thread.
@@ -40,6 +51,7 @@ CLI registration (index.ts)
 | Route | Behavior |
 | --- | --- |
 | `GET /`, `GET /browse/*` | Embedded React application and browser history fallback. |
+| `GET\|POST\|DELETE /api/session` | Inspect the current login state, authenticate, or end the current session. |
 | `GET /api/directory?path=` | Current directory metadata and entries. |
 | `GET /api/text?path=` | UTF-8 or BOM-marked UTF-16 text up to 2 MiB. |
 | `POST /api/upload?path=` | One multipart file per request when `--manage` is enabled. |
@@ -53,7 +65,17 @@ CLI registration (index.ts)
 
 The former direct file URL shape is intentionally not retained. A served path such as `docs/readme.txt` is available at `/files/docs/readme.txt`; `/browse/docs` is the browser route.
 
-Errors use `{ version: 1, error: { code, message } }`. Directory and text responses are not cacheable. Original files support ETag, Last-Modified, HEAD, and one byte range. Thumbnail responses support ETag, Last-Modified, and conditional 304 responses. Only `/files/*` enables wildcard CORS.
+Errors use `{ version: 1, error: { code, message } }`. Directory and text responses are not cacheable. Original files support ETag, Last-Modified, HEAD, and one byte range. Thumbnail responses support ETag, Last-Modified, and conditional 304 responses. Only `/files/*` enables wildcard CORS, and only when login mode is disabled.
+
+## Authentication Invariants
+
+- Login mode is enabled by the presence of at least one `--account`. Without accounts, the HTTP behavior remains unauthenticated and `/api/session` reports that authentication is disabled.
+- The application shell and its compiled assets remain public so the browser can render the login form. Every other `/api/*`, `/files/*`, and `/thumbnails/*` request requires a valid session.
+- Passwords are hashed with Argon2id during startup. Failed logins use the same verification path whether or not the username exists.
+- Sessions use random process-local tokens in an `HttpOnly`, `SameSite=Strict` cookie. They expire after 12 hours, do not survive a restart, and are bounded to eight per account and 128 for the server.
+- Logging out, session expiry, or bounded-session eviction revokes the token and closes its active remote-download event stream.
+- All configured accounts have the same read and management permissions. There is no registration, role, password-change, or persistent account interface.
+- Authentication does not add TLS. Passwords and session cookies travel over the HTTP connection exposed by `serve`.
 
 ## Filesystem And Management Invariants
 
@@ -76,6 +98,7 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 
 ## Web Application Invariants
 
+- The application resolves `/api/session` before mounting the file browser. Authentication failures from JSON, upload, or event-stream requests return it to the login form.
 - Directory URLs use `/browse/<encoded-path>` and browser History. Preview selection uses the `preview` query parameter but always replaces the current URL, so opening, switching, and closing previews never create History entries.
 - List and grid views virtualize fixed-size rows with `@tanstack/react-virtual`, rendering four extra list rows or one extra grid row around the viewport. Grid columns are measured before entries mount and only change at layout breakpoints. Directories remain ahead of files for every sort. Search filters only the loaded directory.
 - Main-list image elements load only `thumbnailUrl`, with lazy asynchronous low-priority decoding. Original `fileUrl` bytes are reserved for preview, opening, and download.

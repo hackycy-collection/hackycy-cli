@@ -3,6 +3,7 @@ export interface ServeOptions {
   port: number
   address: string
   manage: boolean
+  accounts: string[]
 }
 
 export type ServeEntryKind = 'directory' | 'file' | 'unavailable'

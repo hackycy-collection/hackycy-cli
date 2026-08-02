@@ -1,5 +1,6 @@
+import type { FormEvent } from 'react'
 import type { Layout, LayoutChangedMeta } from 'react-resizable-panels'
-import type { DirectoryEntry, DirectoryListing, DownloadList, DownloadTask, OperationCommand, OperationResult } from './api'
+import type { DirectoryEntry, DirectoryListing, DownloadList, DownloadTask, OperationCommand, OperationResult, SessionState } from './api'
 import type { ExplorerClipboard, ExplorerSelection, NavigationHistory } from './explorer-state'
 import type { ActivityTask, SortDirection, SortKey, ViewMode } from './types'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
@@ -18,6 +19,8 @@ import {
   HardDrive,
   List,
   LoaderCircle,
+  LogIn,
+  LogOut,
   Menu,
   Moon,
   MoreHorizontal,
@@ -29,6 +32,7 @@ import {
   Sun,
   Trash2,
   Upload,
+  UserRound,
   X,
 } from 'lucide-react'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -119,7 +123,138 @@ function useMobile(): boolean {
   return mobile
 }
 
+function Login({ onLogin }: { onLogin: (session: Extract<SessionState, { authenticated: true }>) => void }): React.JSX.Element {
+  const [error, setError] = useState<string>()
+  const [submitting, setSubmitting] = useState(false)
+  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    setError(undefined)
+    setSubmitting(true)
+    try {
+      const session = await apiJson<SessionState>('/api/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ username: form.get('username'), password: form.get('password') }),
+      })
+      if (!session.authenticationEnabled || !session.authenticated)
+        throw new Error('The server did not create a session')
+      onLogin(session)
+    }
+    catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+    finally {
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="auth-shell">
+      <div className="brand-line" />
+      <main className="auth-stage">
+        <form className="login-panel" onSubmit={event => void submit(event)}>
+          <div className="login-brand">
+            <span className="app-icon"><HardDrive className="size-4" /></span>
+            <div>
+              <div className="brand-label">HACKYCY CLI</div>
+              <strong>File Server</strong>
+            </div>
+          </div>
+          <label className="login-field">
+            <span>Username</span>
+            <input name="username" autoComplete="username" maxLength={64} required autoFocus />
+          </label>
+          <label className="login-field">
+            <span>Password</span>
+            <input name="password" type="password" autoComplete="current-password" minLength={8} maxLength={256} required />
+          </label>
+          {error && <p role="alert" className="login-error">{error}</p>}
+          <Button className="login-submit" type="submit" disabled={submitting}>
+            {submitting ? <LoaderCircle className="size-4 animate-spin" /> : <LogIn className="size-4" />}
+            {submitting ? 'Signing in' : 'Sign in'}
+          </Button>
+        </form>
+      </main>
+    </div>
+  )
+}
+
 export function App(): React.JSX.Element {
+  const [theme, setTheme] = useStoredValue<'light' | 'dark'>('ycy-serve-theme', () => matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+  const [session, setSession] = useState<SessionState>()
+  const [sessionError, setSessionError] = useState<string>()
+  const loadSession = useCallback(async (): Promise<void> => {
+    setSessionError(undefined)
+    try {
+      setSession(await apiJson<SessionState>('/api/session'))
+    }
+    catch (cause) {
+      setSessionError(cause instanceof Error ? cause.message : String(cause))
+    }
+  }, [])
+
+  useEffect(() => {
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+  }, [theme])
+
+  useEffect(() => void loadSession(), [loadSession])
+
+  useEffect(() => {
+    const sessionEnded = (): void => setSession({ version: 1, authenticationEnabled: true, authenticated: false })
+    window.addEventListener('serve-authentication-required', sessionEnded)
+    return () => window.removeEventListener('serve-authentication-required', sessionEnded)
+  }, [])
+
+  if (!session) {
+    return (
+      <div className="auth-shell">
+        <div className="brand-line" />
+        <main className="auth-stage">
+          {sessionError
+            ? (
+                <div className="session-state" role="alert">
+                  <span>{sessionError}</span>
+                  <Button type="button" variant="outline" onClick={() => void loadSession()}>Retry</Button>
+                </div>
+              )
+            : (
+                <div className="session-state">
+                  <LoaderCircle className="size-5 animate-spin" />
+                  <span>Loading</span>
+                </div>
+              )}
+        </main>
+      </div>
+    )
+  }
+
+  if (session.authenticationEnabled && !session.authenticated)
+    return <Login onLogin={setSession} />
+
+  const account = session.authenticationEnabled ? session.account : undefined
+  const signOut = async (): Promise<void> => {
+    try {
+      await apiJson<void>('/api/session', { method: 'DELETE' })
+    }
+    finally {
+      setSession({ version: 1, authenticationEnabled: true, authenticated: false })
+    }
+  }
+  return <ExplorerApp account={account} theme={theme} setTheme={setTheme} onSignOut={() => void signOut()} />
+}
+
+function ExplorerApp({
+  account,
+  theme,
+  setTheme,
+  onSignOut,
+}: {
+  account?: { username: string }
+  theme: 'light' | 'dark'
+  setTheme: (theme: 'light' | 'dark') => void
+  onSignOut: () => void
+}): React.JSX.Element {
   const initialRoute = useMemo(routeState, [])
   const [initialNavigationPanelWidth] = useState(() => {
     try {
@@ -141,7 +276,6 @@ export function App(): React.JSX.Element {
   const [viewMode, setViewMode] = useStoredValue<ViewMode>('ycy-serve-view', () => 'list')
   const [sortKey, setSortKey] = useStoredValue<SortKey>('ycy-serve-sort', () => 'name')
   const [sortDirection, setSortDirection] = useStoredValue<SortDirection>('ycy-serve-sort-direction', () => 'asc')
-  const [theme, setTheme] = useStoredValue<'light' | 'dark'>('ycy-serve-theme', () => matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
   const [query, setQuery] = useState('')
   const [selection, setSelection] = useState<ExplorerSelection>({ paths: [] })
   const [clipboard, setClipboard] = useState<ExplorerClipboard>()
@@ -183,10 +317,6 @@ export function App(): React.JSX.Element {
   useEffect(() => {
     navigationRef.current = navigation
   }, [navigation])
-
-  useEffect(() => {
-    document.documentElement.classList.toggle('dark', theme === 'dark')
-  }, [theme])
 
   useEffect(() => {
     history.replaceState({ serveCursor: 0 }, '', window.location.href)
@@ -266,6 +396,12 @@ export function App(): React.JSX.Element {
           catch {
             setDownloadError('Download progress update was invalid')
           }
+        }
+        events.onerror = () => {
+          void apiJson<SessionState>('/api/session').then((session) => {
+            if (session.authenticationEnabled && !session.authenticated)
+              window.dispatchEvent(new Event('serve-authentication-required'))
+          }).catch(() => {})
         }
       })
       .catch((cause) => {
@@ -807,6 +943,19 @@ export function App(): React.JSX.Element {
             {theme === 'light' ? <Moon className="size-4" /> : <Sun className="size-4" />}
           </Button>
         </Tooltip>
+        {account && (
+          <div className="account-identity" title={account.username}>
+            <UserRound className="size-3.5" />
+            <span>{account.username}</span>
+          </div>
+        )}
+        {account && (
+          <Tooltip label="Sign out">
+            <Button aria-label="Sign out" className="command-button" size="icon" variant="ghost" onClick={onSignOut}>
+              <LogOut className="size-4" />
+            </Button>
+          </Tooltip>
+        )}
       </header>
 
       <div className="address-bar">

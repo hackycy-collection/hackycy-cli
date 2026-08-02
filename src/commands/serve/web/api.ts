@@ -27,6 +27,11 @@ export interface DirectoryListing {
   entries: DirectoryEntry[]
 }
 
+export type SessionState
+  = | { version: 1, authenticationEnabled: false }
+    | { version: 1, authenticationEnabled: true, authenticated: false }
+    | { version: 1, authenticationEnabled: true, authenticated: true, account: { username: string } }
+
 export type TextPreview
   = | { version: 1, status: 'ready', text: string, encoding: string, size: number }
     | { version: 1, status: 'too_large', size: number, maxBytes: number }
@@ -91,10 +96,13 @@ interface ErrorBody {
 
 export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, init)
-  const body = await response.json() as T & ErrorBody
-  if (!response.ok)
-    throw new Error(body.error?.message ?? `Request failed (${response.status})`)
-  return body
+  const body = response.status === 204 ? undefined : await response.json() as T & ErrorBody
+  if (!response.ok) {
+    if (response.status === 401 && url !== '/api/session')
+      window.dispatchEvent(new Event('serve-authentication-required'))
+    throw new Error(body?.error?.message ?? `Request failed (${response.status})`)
+  }
+  return body as T
 }
 
 export function applyOperation(operation: OperationCommand): Promise<OperationResult> {
@@ -122,11 +130,7 @@ export function retryDownload(id: string): Promise<DownloadResponse> {
 }
 
 export async function clearDownloads(): Promise<void> {
-  const response = await fetch('/api/downloads?terminal=1', { method: 'DELETE' })
-  if (!response.ok) {
-    const body = await response.json() as ErrorBody
-    throw new Error(body.error?.message ?? `Request failed (${response.status})`)
-  }
+  await apiJson<void>('/api/downloads?terminal=1', { method: 'DELETE' })
 }
 
 export function uploadFile(
@@ -147,6 +151,8 @@ export function uploadFile(
         resolve(request.response as UploadResult)
         return
       }
+      if (request.status === 401)
+        window.dispatchEvent(new Event('serve-authentication-required'))
       const body = request.response as ErrorBody | null
       reject(new Error(body?.error?.message ?? `Upload failed (${request.status})`))
     }
