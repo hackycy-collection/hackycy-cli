@@ -2,6 +2,7 @@ services:
   tunnel:
     image: ghcr.io/hackycy/hackycy-cli:${YCY_VERSION:-latest}
     restart: unless-stopped
+    command: [tunnel, server]
     environment:
       YCY_TUNNEL_DATA_DIR: /data
       YCY_TUNNEL_ADMIN_USER: admin

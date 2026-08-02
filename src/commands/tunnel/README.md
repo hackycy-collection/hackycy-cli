@@ -511,15 +511,16 @@ There is no `Healthy`, `Unhealthy`, throughput, or connection-count state.
 
 ## Docker Deployment
 
-One multi-architecture Linux x64/arm64 image is published. It contains the standalone ycy binary and pinned FRP distribution, declares `/data` as the server data directory, and defaults to `ycy tunnel server`. No separate client image or client-container documentation is maintained.
+One multi-architecture Linux x64/arm64 image is published. It contains the standalone ycy binary and pinned FRP distribution, with `ycy` as its entrypoint but no default subcommand. Tunnel-specific data storage, ports, and the `tunnel server` command belong to the deployment configuration. No separate client image or client-container documentation is maintained.
 
-A representative deployment publishes:
+A representative deployment is started with `docker compose -f docker-compose.tunnel.yml up -d` and publishes:
 
 ```yaml
 services:
   tunnel:
     image: ghcr.io/hackycy/hackycy-cli:<version>
     restart: unless-stopped
+    command: [tunnel, server]
     environment:
       YCY_TUNNEL_DATA_DIR: /data
       YCY_TUNNEL_ADMIN_USER: admin

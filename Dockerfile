@@ -24,10 +24,6 @@ RUN apt-get update \
 COPY --from=build /out/ycy /usr/local/bin/ycy
 COPY --from=build /out/tunnel-state/ycy/frp /opt/ycy/frp
 
-ENV YCY_TUNNEL_DOCKER=1 \
-    YCY_TUNNEL_DATA_DIR=/data
+ENV YCY_TUNNEL_DOCKER=1
 
-VOLUME ["/data"]
-EXPOSE 7000/tcp 7500/tcp 8080/tcp 20000-20100/tcp 20000-20100/udp
 ENTRYPOINT ["/usr/local/bin/ycy"]
-CMD ["tunnel", "server"]
