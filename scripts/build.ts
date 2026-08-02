@@ -31,6 +31,9 @@ const result = await Bun.build({
     path.resolve('src/commands/serve/thumbnail-worker.ts'),
     ...sevenZipEntrypoints,
   ],
+  naming: {
+    entry: '[dir]/[name]-[hash].[ext]',
+  },
   minify: true,
   plugins: [tailwind],
   root: path.resolve('.'),
