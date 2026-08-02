@@ -1,6 +1,7 @@
 import type { DirectoryEntry } from '../api'
 import {
   File,
+  FileArchive,
   FileText,
   Film,
   Folder,
@@ -16,6 +17,8 @@ export function EntryGlyph({ entry, className }: { entry: DirectoryEntry, classN
     return <ShieldAlert className={cn(iconClass, 'text-amber-600 dark:text-amber-400')} />
   if (entry.kind === 'directory')
     return <Folder className={cn(iconClass, 'fill-folder/30 text-folder')} />
+  if (entry.extractable)
+    return <FileArchive className={cn(iconClass, 'text-blue-600 dark:text-blue-400')} />
   if (entry.previewKind === 'image')
     return <Image className={cn(iconClass, 'text-teal-600 dark:text-teal-400')} />
   if (entry.previewKind === 'video')

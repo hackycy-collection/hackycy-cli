@@ -23,6 +23,7 @@ export interface ServeDirectoryEntry {
   fileUrl?: string
   thumbnailUrl?: string
   downloadUrl?: string
+  extractable: boolean
 }
 
 export interface ServeDirectoryListing {
@@ -54,6 +55,45 @@ export interface ServeUploadResult {
 export interface ServeStreamWriteOptions {
   signal?: AbortSignal
   onProgress?: (bytesWritten: number) => void
+}
+
+export interface ServeArchiveExtractOptions {
+  signal?: AbortSignal
+  onProgress?: (progress: number) => void
+  onInspect?: (details: { uncompressedBytes: number, entryCount: number }) => void
+}
+
+export interface ServeArchiveExtractResult {
+  archivePath: string
+  destinationPath: string
+  uncompressedBytes: number
+  entryCount: number
+}
+
+export type ServeExtractionStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
+
+export interface ServeExtractionTask {
+  id: string
+  archivePath: string
+  status: ServeExtractionStatus
+  progress?: number
+  uncompressedBytes?: number
+  entryCount?: number
+  destinationPath?: string
+  createdAt: string
+  startedAt?: string
+  finishedAt?: string
+  error?: string
+}
+
+export interface ServeExtractionManager {
+  list: () => ServeExtractionTask[]
+  enqueue: (paths: string[]) => Promise<ServeExtractionTask[]>
+  cancel: (id: string) => ServeExtractionTask | undefined
+  retry: (id: string) => Promise<ServeExtractionTask>
+  clearTerminal: () => void
+  subscribe: (listener: (tasks: ServeExtractionTask[]) => void) => () => void
+  close: () => Promise<void>
 }
 
 export type ServeDownloadStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
@@ -122,6 +162,7 @@ export interface ServeWorkspace {
   readTextPreview: (relativePath: string) => Promise<ServeTextPreview>
   uploadFile: (directoryPath: string, file: File) => Promise<ServeUploadResult>
   writeFileStream: (directoryPath: string, filename: string, stream: ReadableStream<Uint8Array>, options?: ServeStreamWriteOptions) => Promise<ServeUploadResult>
+  extractArchive: (archivePath: string, options?: ServeArchiveExtractOptions) => Promise<ServeArchiveExtractResult>
   applyOperation: (operation: ServeOperation) => Promise<ServeOperationResult>
 }
 
@@ -139,6 +180,10 @@ export type ServeErrorCode
     | 'ALREADY_EXISTS'
     | 'ROOT_IMMUTABLE'
     | 'UNAVAILABLE'
+    | 'UNSUPPORTED_ARCHIVE'
+    | 'INVALID_ARCHIVE'
+    | 'ENCRYPTED_ARCHIVE'
+    | 'INSUFFICIENT_SPACE'
 
 export class ServeWorkspaceError extends Error {
   constructor(

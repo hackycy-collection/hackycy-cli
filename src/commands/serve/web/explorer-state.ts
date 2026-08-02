@@ -1,4 +1,4 @@
-import type { DirectoryEntry, OperationResult } from './api'
+import type { DirectoryEntry, ExtractionTask, OperationResult } from './api'
 import type { ActivityTask, SortDirection, SortKey } from './types'
 
 export interface ExplorerSelection {
@@ -33,6 +33,47 @@ export function renameSelectionEnd(entry: Pick<DirectoryEntry, 'kind' | 'name'>)
 
 export function parentDirectoryPath(entryPath: string): string {
   return entryPath.split('/').slice(0, -1).join('/')
+}
+
+export function extractableSelection(entries: DirectoryEntry[], paths: string[]): boolean {
+  if (paths.length === 0)
+    return false
+  const extractable = new Map(entries.map(entry => [entry.path, entry.extractable]))
+  return paths.every(path => extractable.get(path) === true)
+}
+
+const EXTRACTION_STATUS_RANK: Record<ExtractionTask['status'], number> = {
+  queued: 0,
+  running: 1,
+  done: 2,
+  error: 2,
+  cancelled: 2,
+}
+
+export function mergeExtractionTasks(current: ExtractionTask[], updates: ExtractionTask[]): ExtractionTask[] {
+  const currentById = new Map(current.map(task => [task.id, task]))
+  const mergedUpdates = updates.map((update) => {
+    const previous = currentById.get(update.id)
+    if (!previous)
+      return update
+    const previousRank = EXTRACTION_STATUS_RANK[previous.status]
+    const updateRank = EXTRACTION_STATUS_RANK[update.status]
+    if (updateRank < previousRank)
+      return previous
+    if (previousRank === 2 && updateRank === 2) {
+      const previousFinished = Date.parse(previous.finishedAt ?? '') || 0
+      const updateFinished = Date.parse(update.finishedAt ?? '') || 0
+      return updateFinished > previousFinished ? { ...previous, ...update } : previous
+    }
+    const progress = previous.progress === undefined
+      ? update.progress
+      : update.progress === undefined
+        ? previous.progress
+        : Math.max(previous.progress, update.progress)
+    return { ...previous, ...update, ...(progress === undefined ? {} : { progress }) }
+  })
+  const updateIds = new Set(updates.map(task => task.id))
+  return [...mergedUpdates, ...current.filter(task => !updateIds.has(task.id))]
 }
 
 export function createNavigationHistory(initialPath: string): NavigationHistory {

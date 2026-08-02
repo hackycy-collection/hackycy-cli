@@ -1,4 +1,4 @@
-import type { DownloadTask } from '../api'
+import type { DownloadTask, ExtractionTask } from '../api'
 import type { ActivityTask } from '../types'
 import { Check, CircleStop, LoaderCircle, RotateCcw, TriangleAlert, X } from 'lucide-react'
 import { Button } from '../../../../shared/web/components/ui/button'
@@ -32,26 +32,57 @@ export function downloadDetail(task: DownloadTask): string {
   return `${size}${task.speedBytesPerSecond ? ` · ${formatBytes(task.speedBytesPerSecond)}/s` : ''}`
 }
 
+export function extractionDetail(task: ExtractionTask): string {
+  if (task.error)
+    return task.error
+  if (task.status === 'queued')
+    return 'Waiting to extract'
+  if (task.status === 'cancelled')
+    return 'Cancelled'
+  if (task.status === 'done')
+    return task.destinationPath ? `Extracted to /${task.destinationPath}` : 'Extraction complete'
+  if (task.progress === undefined)
+    return 'Checking archive'
+  const details = [
+    task.uncompressedBytes === undefined ? undefined : formatBytes(task.uncompressedBytes),
+    task.entryCount === undefined ? undefined : `${task.entryCount} ${task.entryCount === 1 ? 'entry' : 'entries'}`,
+  ].filter(Boolean)
+  return details.length > 0 ? details.join(' · ') : 'Extracting'
+}
+
 export function ActivityCenter({
   tasks,
   downloads,
+  extractions,
   onClear,
   onCancelDownload,
   onRetryDownload,
   onClearDownloads,
+  onCancelExtraction,
+  onRetryExtraction,
+  onClearExtractions,
 }: {
   tasks: ActivityTask[]
   downloads: DownloadTask[]
+  extractions: ExtractionTask[]
   onClear: () => void
   onCancelDownload: (id: string) => void
   onRetryDownload: (id: string) => void
   onClearDownloads: () => void
+  onCancelExtraction: (id: string) => void
+  onRetryExtraction: (id: string) => void
+  onClearExtractions: () => void
 }): React.JSX.Element | null {
-  if (tasks.length === 0 && downloads.length === 0)
+  if (tasks.length === 0 && downloads.length === 0 && extractions.length === 0)
     return null
-  const pending = tasks.some(task => task.status === 'queued' || task.status === 'running') || downloads.some(task => task.status === 'queued' || task.status === 'running')
-  const complete = tasks.filter(task => task.status === 'done').length + downloads.filter(task => task.status === 'done').length
-  const allTasks: Array<{ kind: 'download', task: DownloadTask } | { kind: 'local', task: ActivityTask }> = [
+  const pending = tasks.some(task => task.status === 'queued' || task.status === 'running')
+    || downloads.some(task => task.status === 'queued' || task.status === 'running')
+    || extractions.some(task => task.status === 'queued' || task.status === 'running')
+  const complete = tasks.filter(task => task.status === 'done').length
+    + downloads.filter(task => task.status === 'done').length
+    + extractions.filter(task => task.status === 'done').length
+  const allTasks: Array<{ kind: 'extraction', task: ExtractionTask } | { kind: 'download', task: DownloadTask } | { kind: 'local', task: ActivityTask }> = [
+    ...extractions.map(task => ({ kind: 'extraction' as const, task })),
     ...downloads.map(task => ({ kind: 'download' as const, task })),
     ...tasks.map(task => ({ kind: 'local' as const, task })),
   ]
@@ -70,6 +101,7 @@ export function ActivityCenter({
             onClick={() => {
               onClear()
               onClearDownloads()
+              onClearExtractions()
             }}
           >
             <X className="size-3.5" />
@@ -80,12 +112,13 @@ export function ActivityCenter({
         <div className="divide-y divide-border/70">
           {allTasks.map(({ kind, task }) => {
             const download = kind === 'download' ? task : undefined
+            const extraction = kind === 'extraction' ? task : undefined
             const local = kind === 'local' ? task : undefined
             const status = task.status
-            const label = download ? (download.filename ?? download.url) : local!.label
-            const detail = download ? downloadDetail(download) : local!.detail ?? local!.status
-            const progress = download ? download.progress : local!.progress
-            const indeterminate = download !== undefined && status === 'running' && progress === undefined
+            const label = download ? (download.filename ?? download.url) : extraction ? extraction.archivePath.split('/').at(-1)! : local!.label
+            const detail = download ? downloadDetail(download) : extraction ? extractionDetail(extraction) : local!.detail ?? local!.status
+            const progress = download ? download.progress : extraction ? extraction.progress : local!.progress
+            const indeterminate = (download !== undefined || extraction !== undefined) && status === 'running' && progress === undefined
             return (
               <div key={`${kind}:${task.id}`} className="activity-row">
                 {status === 'done' && <Check className="size-4 text-emerald-600" />}
@@ -93,7 +126,7 @@ export function ActivityCenter({
                 {status === 'queued' && <span className="size-2 justify-self-center rounded-full bg-zinc-400" />}
                 {status === 'running' && <LoaderCircle className="size-4 animate-spin text-accent" />}
                 <span className="min-w-0">
-                  <span className="block truncate text-xs font-medium" title={download?.url}>{label}</span>
+                  <span className="block truncate text-xs font-medium" title={download?.url ?? extraction?.archivePath}>{label}</span>
                   <span className="block truncate text-[10px] text-muted-foreground">{detail}</span>
                 </span>
                 <span className="text-right text-[10px] tabular-nums text-muted-foreground">
@@ -107,6 +140,16 @@ export function ActivityCenter({
                 {download && (status === 'error' || status === 'cancelled') && (
                   <span className="activity-actions">
                     <Button className="size-6" size="icon" variant="ghost" aria-label="Retry download" onClick={() => onRetryDownload(download.id)}><RotateCcw className="size-3.5" /></Button>
+                  </span>
+                )}
+                {extraction && (status === 'running' || status === 'queued') && (
+                  <span className="activity-actions">
+                    <Button className="size-6" size="icon" variant="ghost" aria-label="Cancel extraction" onClick={() => onCancelExtraction(extraction.id)}><CircleStop className="size-3.5" /></Button>
+                  </span>
+                )}
+                {extraction && (status === 'error' || status === 'cancelled') && (
+                  <span className="activity-actions">
+                    <Button className="size-6" size="icon" variant="ghost" aria-label="Retry extraction" onClick={() => onRetryExtraction(extraction.id)}><RotateCcw className="size-3.5" /></Button>
                   </span>
                 )}
                 {(progress !== undefined || indeterminate) && (

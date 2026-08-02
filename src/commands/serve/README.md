@@ -10,11 +10,11 @@ ycy serve [options] [directory]
 Options:
   -p, --port <number>       Port to serve on (default: 1204)
   -a, --address <string>    Address to bind to (default: 0.0.0.0)
-  -m, --manage              Enable uploads, remote downloads, and filesystem management
+  -m, --manage              Enable uploads, downloads, extraction, and filesystem management
       --account <user:pass> Require login with an account (repeatable)
 ```
 
-The directory defaults to the current working directory. The default binding is available to the local network; use `--address 127.0.0.1` for local-only access. Management mode allows upload, copy, move, rename, and permanent deletion. Without `--account`, use it only with a trusted directory and network.
+The directory defaults to the current working directory. The default binding is available to the local network; use `--address 127.0.0.1` for local-only access. Management mode allows upload, remote download, archive extraction, copy, move, rename, and permanent deletion. Without `--account`, use it only with a trusted directory and network.
 
 Passing one or more accounts enables login mode:
 
@@ -34,6 +34,7 @@ CLI registration (index.ts)
      -> ServeHttpServer (server.ts)
         -> JSON and file HTTP adapter
         -> RemoteDownloadManager with a bounded process-local queue
+        -> ExtractionManager with a single-worker process-local queue
         -> ThumbnailService and two persistent conversion workers
         -> embedded React application (web/)
 ```
@@ -42,6 +43,7 @@ CLI registration (index.ts)
 - `authentication.ts` owns account parsing, password hashing, bounded process-local sessions, expiration, and revocation notifications.
 - `server.ts` maps workspace results to HTTP, validates methods and mutation origins, implements cache and Range semantics, and serves the embedded HTML bundle.
 - `download-service.ts` validates remote HTTP(S) targets, blocks literal private and reserved IP addresses, follows validated redirects, and owns the bounded process-local download queue.
+- `archive-extractor.ts` owns 7-Zip inspection, capacity checks, multi-layer TAR extraction, process cancellation, and normalized failures. `workspace.ts` owns staging, output validation, collision-safe naming, and atomic publication. `extraction-service.ts` owns the bounded single-worker queue.
 - `thumbnail-service.ts` owns input limits, request coalescing, the bounded worker queue, and the session-only LRU. `thumbnail-worker.ts` performs WASM decoding and WebP conversion off the HTTP thread.
 - `web/` owns directory History navigation, sorting, virtualization, preview state, theme, one syntax-highlighting worker, and the three-worker upload queue. It never constructs absolute filesystem paths.
 - Shared Radix/Tailwind primitives live under `src/shared/web` and are consumed by both `serve` and `diff`.
@@ -60,6 +62,10 @@ CLI registration (index.ts)
 | `GET /api/downloads/events` | Server-sent task snapshots for remote-download progress. |
 | `POST /api/downloads/:id/cancel` | Cancel one queued or active remote download. |
 | `POST /api/downloads/:id/retry` | Retry one failed or cancelled remote download as a new task. |
+| `GET\|POST\|DELETE /api/extractions` | List, enqueue up to 100 archive paths, or clear terminal extraction tasks in management mode. |
+| `GET /api/extractions/events` | Server-sent task snapshots for extraction progress. |
+| `POST /api/extractions/:id/cancel` | Cancel one queued or active extraction. |
+| `POST /api/extractions/:id/retry` | Retry one failed or cancelled extraction as a new task. |
 | `GET\|HEAD /files/*` | Original file bytes; `?download=1` forces attachment. |
 | `GET\|HEAD /thumbnails/*` | 160×160 WebP thumbnail for JPEG, PNG, WebP, AVIF, or GIF input. |
 
@@ -90,6 +96,10 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 - At most two remote downloads run concurrently, at most 100 wait in the queue, and terminal task records are pruned to a bounded history. Cancelling a task or stopping the server aborts the request and removes its temporary file.
 - Remote download URLs permit only HTTP(S) and cannot contain credentials. Literal loopback, private, link-local, multicast, documentation, and other reserved IP addresses are rejected without resolving domain names. Every redirect is revalidated and the chain is capped at five hops.
 - Remote-download state is process-local. Browser reloads recover active tasks through the list and event interfaces; process restarts do not resume tasks or retain their history.
+- Archive extraction uses official 7-Zip 26.02. Release builds embed the matching `7zz`, or `7z.exe` and `7z.dll`, plus the complete upstream `License.txt`; files are SHA-256 verified before build and before release into the versioned application state directory.
+- Source mode falls back to `7zz` or `7z` in `PATH` when no embedded runtime exists. Supported archive names include 7z, ZIP, RAR, TAR, gzip, bzip2, XZ, Zstandard, CAB, ARJ, LZH/LHA, CPIO, and compressed TAR variants.
+- Extraction inspects archives before writing and rejects encryption, multipart archives, unsafe paths, unsafe links, and special filesystem entries. It checks available bytes and inodes, stages beside the source, preserves the archive, and atomically publishes to a collision-safe same-name directory.
+- Exactly one archive is extracted at a time. At most 100 tasks wait and at most 100 task records are retained. Cancellation or server shutdown terminates the child process and removes staging content; old hidden staging directories are removed on a later extraction after 24 hours.
 - Existing names are never overwritten. Collisions receive `name (1).ext` through `name (9999).ext`.
 - The served root cannot be renamed, moved, copied, or deleted. Directories cannot be copied or moved into themselves.
 - Rename and move reject collisions. Copy and upload choose collision-safe numbered names. Recursive copy does not dereference symbolic links.
@@ -109,6 +119,7 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 - Theme, view mode, sort key, and direction may be stored locally. Paths and file contents are not persisted.
 - Multi-file upload runs at most three requests concurrently and refreshes the current listing when the queue settles.
 - Remote-download tasks share the activity center with uploads and file operations. They show transferred bytes, known percentage, server-measured speed, cancellation, and retry controls; unknown response lengths use an indeterminate progress bar.
+- Extraction tasks use the same activity center and show waiting, inspection, progress, completion destination, cancellation, and retry states. Completing an extraction beside the visible directory refreshes its listing.
 
 ## Verification
 

@@ -1,11 +1,11 @@
 import type { DirectoryEntry } from './api'
 import { describe, expect, test } from 'bun:test'
-import { clipboardOperation, createNavigationHistory, entryNameError, moveNavigation, operationActivities, parentDirectoryPath, pushNavigation, renameSelectionEnd, selectEntry, settleClipboard, visibleEntries } from './explorer-state'
+import { clipboardOperation, createNavigationHistory, entryNameError, extractableSelection, mergeExtractionTasks, moveNavigation, operationActivities, parentDirectoryPath, pushNavigation, renameSelectionEnd, selectEntry, settleClipboard, visibleEntries } from './explorer-state'
 
 const entries: DirectoryEntry[] = [
-  { name: 'zeta.txt', path: 'zeta.txt', kind: 'file', isSymlink: false, previewKind: 'text', size: 8 },
-  { name: 'Alpha.txt', path: 'Alpha.txt', kind: 'file', isSymlink: false, previewKind: 'text', size: 4 },
-  { name: 'Alpha docs', path: 'Alpha docs', kind: 'directory', isSymlink: false, previewKind: 'none' },
+  { name: 'zeta.txt', path: 'zeta.txt', kind: 'file', isSymlink: false, previewKind: 'text', size: 8, extractable: false },
+  { name: 'Alpha.txt', path: 'Alpha.txt', kind: 'file', isSymlink: false, previewKind: 'text', size: 4, extractable: false },
+  { name: 'Alpha docs', path: 'Alpha docs', kind: 'directory', isSymlink: false, previewKind: 'none', extractable: false },
 ]
 
 describe('explorer state', () => {
@@ -38,6 +38,52 @@ describe('explorer state', () => {
     expect(first).toEqual({ paths: ['Alpha.txt'], anchorPath: 'Alpha.txt' })
     expect(additive).toEqual({ paths: ['Alpha.txt', 'zeta.txt'], anchorPath: 'zeta.txt' })
     expect(range).toEqual({ paths: ['Alpha docs', 'Alpha.txt', 'zeta.txt'], anchorPath: 'zeta.txt' })
+  })
+
+  test('enables extraction only when every selected entry is extractable', () => {
+    const archiveEntries: DirectoryEntry[] = [
+      ...entries,
+      { name: 'one.zip', path: 'one.zip', kind: 'file', isSymlink: false, previewKind: 'none', extractable: true },
+      { name: 'two.tar.gz', path: 'two.tar.gz', kind: 'file', isSymlink: false, previewKind: 'none', extractable: true },
+    ]
+
+    expect(extractableSelection(archiveEntries, ['one.zip'])).toBe(true)
+    expect(extractableSelection(archiveEntries, ['one.zip', 'two.tar.gz'])).toBe(true)
+    expect(extractableSelection(archiveEntries, ['one.zip', 'Alpha.txt'])).toBe(false)
+    expect(extractableSelection(archiveEntries, [])).toBe(false)
+    expect(extractableSelection(archiveEntries, ['missing.zip'])).toBe(false)
+  })
+
+  test('does not regress extraction state when a stale request response arrives after SSE', () => {
+    const completed = {
+      id: 'extract',
+      archivePath: 'backup.zip',
+      destinationPath: 'backup',
+      status: 'done' as const,
+      progress: 100,
+      uncompressedBytes: 17,
+      entryCount: 1,
+      createdAt: '2026-01-01T00:00:00.000Z',
+      startedAt: '2026-01-01T00:00:01.000Z',
+      finishedAt: '2026-01-01T00:00:02.000Z',
+    }
+
+    expect(mergeExtractionTasks([completed], [{
+      id: 'extract',
+      archivePath: 'backup.zip',
+      status: 'running',
+      createdAt: completed.createdAt,
+      startedAt: completed.startedAt,
+    }])).toEqual([completed])
+
+    expect(mergeExtractionTasks([{ ...completed, status: 'running', progress: 60, destinationPath: undefined, finishedAt: undefined }], [{
+      id: 'extract',
+      archivePath: 'backup.zip',
+      status: 'running',
+      progress: 20,
+      createdAt: completed.createdAt,
+      startedAt: completed.startedAt,
+    }])[0]).toMatchObject({ progress: 60, uncompressedBytes: 17, entryCount: 1 })
   })
 
   test('creates paste operations and only removes successfully moved clipboard items', () => {

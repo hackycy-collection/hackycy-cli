@@ -1,10 +1,11 @@
 import type { FormEvent } from 'react'
 import type { Layout, LayoutChangedMeta } from 'react-resizable-panels'
-import type { DirectoryEntry, DirectoryListing, DownloadList, DownloadTask, OperationCommand, OperationResult, SessionState } from './api'
+import type { DirectoryEntry, DirectoryListing, DownloadList, DownloadTask, ExtractionList, ExtractionTask, OperationCommand, OperationResult, SessionState } from './api'
 import type { ExplorerClipboard, ExplorerSelection, NavigationHistory } from './explorer-state'
 import type { ActivityTask, SortDirection, SortKey, ViewMode } from './types'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import {
+  ArchiveRestore,
   ArrowLeft,
   ArrowRight,
   ArrowUp,
@@ -42,7 +43,7 @@ import { Button } from '../../../shared/web/components/ui/button'
 import { Sheet, SheetContent } from '../../../shared/web/components/ui/sheet'
 import { Tooltip } from '../../../shared/web/components/ui/tooltip'
 import { cn } from '../../../shared/web/lib/utils'
-import { apiJson, applyOperation, cancelDownload, clearDownloads as clearServerDownloads, createDownload, retryDownload, uploadFile } from './api'
+import { apiJson, applyOperation, cancelDownload, cancelExtraction, clearDownloads as clearServerDownloads, clearExtractions as clearServerExtractions, createDownload, createExtractions, retryDownload, retryExtraction, uploadFile } from './api'
 import { ActivityCenter } from './components/activity-center'
 import { DeleteDialog } from './components/delete-dialog'
 import { DownloadDialog } from './components/download-dialog'
@@ -54,6 +55,8 @@ import {
   clipboardOperation,
   createNavigationHistory,
   entryNameError,
+  extractableSelection,
+  mergeExtractionTasks,
   moveNavigation,
   operationActivities,
   parentDirectoryPath,
@@ -287,6 +290,7 @@ function ExplorerApp({
   const [operationBusy, setOperationBusy] = useState(false)
   const [activities, setActivities] = useState<ActivityTask[]>([])
   const [downloadTasks, setDownloadTasks] = useState<DownloadTask[]>([])
+  const [extractionTasks, setExtractionTasks] = useState<ExtractionTask[]>([])
   const [downloadDialogOpen, setDownloadDialogOpen] = useState(false)
   const [downloadBusy, setDownloadBusy] = useState(false)
   const [downloadError, setDownloadError] = useState<string>()
@@ -407,6 +411,54 @@ function ExplorerApp({
       .catch((cause) => {
         if (active)
           setDownloadError(cause instanceof Error ? cause.message : String(cause))
+      })
+    return () => {
+      active = false
+      events?.close()
+    }
+  }, [directoryPath, listing?.managementEnabled])
+
+  useEffect(() => {
+    if (!listing?.managementEnabled) {
+      setExtractionTasks([])
+      return
+    }
+    let active = true
+    let events: EventSource | undefined
+    const applyExtractionTasks = (body: ExtractionList): void => {
+      setExtractionTasks((current) => {
+        const previous = new Map(current.map(task => [task.id, task]))
+        if (body.tasks.some(task => task.status === 'done' && previous.get(task.id)?.status !== 'done' && parentDirectoryPath(task.archivePath) === directoryPath))
+          setReloadVersion(version => version + 1)
+        return body.tasks
+      })
+    }
+    void apiJson<ExtractionList>('/api/extractions')
+      .then((body) => {
+        if (!active)
+          return
+        applyExtractionTasks(body)
+        events = new EventSource('/api/extractions/events')
+        events.onmessage = (event) => {
+          if (!active)
+            return
+          try {
+            applyExtractionTasks(JSON.parse(event.data) as ExtractionList)
+          }
+          catch {
+            setToast('Extraction progress update was invalid')
+          }
+        }
+        events.onerror = () => {
+          void apiJson<SessionState>('/api/session').then((session) => {
+            if (session.authenticationEnabled && !session.authenticated)
+              window.dispatchEvent(new Event('serve-authentication-required'))
+          }).catch(() => {})
+        }
+      })
+      .catch((cause) => {
+        if (active)
+          setToast(cause instanceof Error ? cause.message : String(cause))
       })
     return () => {
       active = false
@@ -567,6 +619,42 @@ function ExplorerApp({
     }
   }
 
+  const upsertExtractionTasks = (nextTasks: ExtractionTask[]): void => {
+    setExtractionTasks(current => mergeExtractionTasks(current, nextTasks))
+  }
+
+  const stopExtraction = async (id: string): Promise<void> => {
+    try {
+      const response = await cancelExtraction(id)
+      upsertExtractionTasks([response.task])
+    }
+    catch (cause) {
+      setToast(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  const retryArchiveExtraction = async (id: string): Promise<void> => {
+    try {
+      const response = await retryExtraction(id)
+      upsertExtractionTasks([response.task])
+    }
+    catch (cause) {
+      setToast(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
+  const clearArchiveExtractions = async (): Promise<void> => {
+    if (extractionTasks.some(task => task.status === 'queued' || task.status === 'running'))
+      return
+    try {
+      await clearServerExtractions()
+      setExtractionTasks([])
+    }
+    catch (cause) {
+      setToast(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
+
   const runOperation = useCallback(async (label: string, command: OperationCommand): Promise<OperationResult | undefined> => {
     const id = uuidv4()
     setActivities(current => [{ id, label, status: 'running', detail: 'Working' }, ...current])
@@ -601,9 +689,25 @@ function ExplorerApp({
   const previewEntry = entryMap.get(previewPath ?? '')
   const renamingEntry = entryMap.get(renamingPath ?? '')
   const managementEnabled = listing?.managementEnabled ?? false
+  const canExtractSelection = extractableSelection(listing?.entries ?? [], selection.paths)
   const visibleError = routeError ?? loadError
 
   const selectedPathsFor = (entry?: DirectoryEntry): string[] => entry && !selectedSet.has(entry.path) ? [entry.path] : selection.paths
+
+  const extractSelection = async (entry?: DirectoryEntry): Promise<void> => {
+    const paths = entry
+      ? canExtractSelection && selectedSet.has(entry.path) ? selection.paths : [entry.path]
+      : canExtractSelection ? selection.paths : []
+    if (!managementEnabled || paths.length === 0)
+      return
+    try {
+      const response = await createExtractions(paths)
+      upsertExtractionTasks(response.tasks)
+    }
+    catch (cause) {
+      setToast(cause instanceof Error ? cause.message : String(cause))
+    }
+  }
 
   const startCreateFolder = (): void => {
     if (!managementEnabled || operationBusy)
@@ -909,6 +1013,7 @@ function ExplorerApp({
           onPaste={destination => void pasteClipboard(destination)}
           onStartRename={startRename}
           onDelete={requestDelete}
+          onExtract={entry => void extractSelection(entry)}
           onNewFolder={startCreateFolder}
           onRefresh={refresh}
         />
@@ -1009,6 +1114,7 @@ function ExplorerApp({
             <IconCommand icon={<Scissors />} label="Cut" disabled={selection.paths.length === 0} onClick={() => copySelection('move')} />
             <IconCommand icon={<Copy />} label="Copy" disabled={selection.paths.length === 0} onClick={() => copySelection('copy')} />
             <IconCommand icon={<ClipboardPaste />} label="Paste" disabled={!clipboard || operationBusy} onClick={() => void pasteClipboard()} />
+            <IconCommand icon={<ArchiveRestore />} label="Extract" disabled={!canExtractSelection} onClick={() => void extractSelection()} />
             <IconCommand icon={<Pencil />} label="Rename" disabled={selectedEntries.length !== 1 || operationBusy} onClick={() => selectedEntries[0] && startRename(selectedEntries[0])} />
             <IconCommand icon={<Trash2 />} label="Delete" destructive disabled={selection.paths.length === 0 || operationBusy} onClick={() => requestDelete()} />
           </div>
@@ -1026,11 +1132,13 @@ function ExplorerApp({
           hasSelection={selection.paths.length > 0}
           oneSelected={selectedEntries.length === 1}
           canPaste={clipboard !== undefined}
+          canExtract={canExtractSelection}
           sortKey={sortKey}
           direction={sortDirection}
           onCut={() => copySelection('move')}
           onCopy={() => copySelection('copy')}
           onPaste={() => void pasteClipboard()}
+          onExtract={() => void extractSelection()}
           onRename={() => selectedEntries[0] && startRename(selectedEntries[0])}
           onDelete={() => requestDelete()}
           onList={() => setViewMode('list')}
@@ -1121,10 +1229,14 @@ function ExplorerApp({
       <ActivityCenter
         tasks={activities}
         downloads={downloadTasks}
+        extractions={extractionTasks}
         onClear={() => setActivities([])}
         onCancelDownload={id => void stopDownload(id)}
         onRetryDownload={id => void retryRemoteDownload(id)}
         onClearDownloads={() => void clearRemoteDownloads()}
+        onCancelExtraction={id => void stopExtraction(id)}
+        onRetryExtraction={id => void retryArchiveExtraction(id)}
+        onClearExtractions={() => void clearArchiveExtractions()}
       />
       {toast && (
         <div role="status" className="toast">
@@ -1177,11 +1289,13 @@ function MoreMenu(props: {
   hasSelection: boolean
   oneSelected: boolean
   canPaste: boolean
+  canExtract: boolean
   sortKey: SortKey
   direction: SortDirection
   onCut: () => void
   onCopy: () => void
   onPaste: () => void
+  onExtract: () => void
   onRename: () => void
   onDelete: () => void
   onList: () => void
@@ -1214,6 +1328,12 @@ function MoreMenu(props: {
             <DropdownMenu.Item className="menu-item" disabled={!props.canPaste} onSelect={props.onPaste}>
               <ClipboardPaste />
               <span>Paste</span>
+            </DropdownMenu.Item>
+          )}
+          {props.mobile && props.managementEnabled && (
+            <DropdownMenu.Item className="menu-item" disabled={!props.canExtract} onSelect={props.onExtract}>
+              <ArchiveRestore />
+              <span>Extract</span>
             </DropdownMenu.Item>
           )}
           {props.mobile && props.managementEnabled && (

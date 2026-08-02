@@ -9,7 +9,7 @@ export function register(program: Command): void {
     .description('Serve static files from a directory (defaults to current directory)')
     .option('-p, --port <number>', 'Port to serve on', parseIntArg, 1204)
     .option('-a, --address <string>', 'Address to bind to', '0.0.0.0')
-    .option('-m, --manage', 'Enable uploads, remote downloads, and filesystem management', false)
+    .option('-m, --manage', 'Enable uploads, downloads, extraction, and filesystem management', false)
     .option('--account <username:password>', 'Require login with an account (repeatable)', (value, values: string[]) => [...values, value], [])
     .action(async (directory: string | undefined, options: Omit<ServeOptions, 'directory' | 'accounts'> & { account: string[] }) => {
       const { runServeCommand } = await import('./run')

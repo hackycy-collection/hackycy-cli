@@ -15,6 +15,7 @@ export interface DirectoryEntry {
   fileUrl?: string
   thumbnailUrl?: string
   downloadUrl?: string
+  extractable: boolean
 }
 
 export interface DirectoryListing {
@@ -90,6 +91,37 @@ export interface DownloadResponse {
   task: DownloadTask
 }
 
+export type ExtractionStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
+
+export interface ExtractionTask {
+  id: string
+  archivePath: string
+  destinationPath?: string
+  status: ExtractionStatus
+  progress?: number
+  uncompressedBytes?: number
+  entryCount?: number
+  createdAt: string
+  startedAt?: string
+  finishedAt?: string
+  error?: string
+}
+
+export interface ExtractionList {
+  version: 1
+  tasks: ExtractionTask[]
+}
+
+export interface ExtractionBatchResponse {
+  version: 1
+  tasks: ExtractionTask[]
+}
+
+export interface ExtractionResponse {
+  version: 1
+  task: ExtractionTask
+}
+
 interface ErrorBody {
   error?: { message?: string }
 }
@@ -131,6 +163,26 @@ export function retryDownload(id: string): Promise<DownloadResponse> {
 
 export async function clearDownloads(): Promise<void> {
   await apiJson<void>('/api/downloads?terminal=1', { method: 'DELETE' })
+}
+
+export function createExtractions(paths: string[]): Promise<ExtractionBatchResponse> {
+  return apiJson<ExtractionBatchResponse>('/api/extractions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ paths }),
+  })
+}
+
+export function cancelExtraction(id: string): Promise<ExtractionResponse> {
+  return apiJson<ExtractionResponse>(`/api/extractions/${encodeURIComponent(id)}/cancel`, { method: 'POST' })
+}
+
+export function retryExtraction(id: string): Promise<ExtractionResponse> {
+  return apiJson<ExtractionResponse>(`/api/extractions/${encodeURIComponent(id)}/retry`, { method: 'POST' })
+}
+
+export async function clearExtractions(): Promise<void> {
+  await apiJson<void>('/api/extractions?terminal=1', { method: 'DELETE' })
 }
 
 export function uploadFile(

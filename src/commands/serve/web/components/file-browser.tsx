@@ -3,6 +3,7 @@ import type { SortDirection, SortKey, ViewMode } from '../types'
 import * as ContextMenu from '@radix-ui/react-context-menu'
 import { useVirtualizer } from '@tanstack/react-virtual'
 import {
+  ArchiveRestore,
   ArrowDown,
   ArrowUp,
   ClipboardPaste,
@@ -130,6 +131,7 @@ interface FileBrowserProps {
   onPaste: (destinationPath?: string) => void
   onStartRename: (entry: DirectoryEntry) => void
   onDelete: (entry?: DirectoryEntry) => void
+  onExtract: (entry?: DirectoryEntry) => void
   onNewFolder: () => void
   onRefresh: () => void
 }
@@ -362,6 +364,7 @@ function EntryContextMenu({ entry, props, children }: { entry: DirectoryEntry, p
         <ContextMenu.Content className="menu-content" aria-label={`Actions for ${entry.name}`}>
           {entry.kind !== 'unavailable' && <MenuItem icon={<Eye />} label="Open" onSelect={() => props.onOpen(entry)} />}
           {entry.kind === 'file' && entry.downloadUrl && <MenuItem icon={<Download />} label="Download" onSelect={() => window.location.assign(entry.downloadUrl!)} />}
+          {props.managementEnabled && entry.extractable && <MenuItem icon={<ArchiveRestore />} label="Extract" onSelect={() => props.onExtract(entry)} />}
           {props.managementEnabled && <ContextMenu.Separator className="menu-separator" />}
           {props.managementEnabled && <MenuItem icon={<Scissors />} label="Cut" onSelect={() => props.onCut(entry)} />}
           {props.managementEnabled && <MenuItem icon={<Copy />} label="Copy" onSelect={() => props.onCopy(entry)} />}

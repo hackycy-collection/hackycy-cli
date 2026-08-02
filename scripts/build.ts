@@ -1,6 +1,7 @@
 import path from 'node:path'
 import process from 'node:process'
 import tailwind from 'bun-plugin-tailwind'
+import { prepareSevenZipRuntime } from './prepare-seven-zip'
 
 interface BuildArguments {
   outfile: string
@@ -23,10 +24,12 @@ function parseArguments(): BuildArguments {
 }
 
 const options = parseArguments()
+const sevenZipEntrypoints = await prepareSevenZipRuntime(options.target)
 const result = await Bun.build({
   entrypoints: [
     path.resolve('src/cli.ts'),
     path.resolve('src/commands/serve/thumbnail-worker.ts'),
+    ...sevenZipEntrypoints,
   ],
   minify: true,
   plugins: [tailwind],

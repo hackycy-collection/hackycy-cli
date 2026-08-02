@@ -1,4 +1,5 @@
 import type { Stats } from 'node:fs'
+import type { ArchiveExtractor } from './archive-extractor'
 import type {
   ServeDirectoryEntry,
   ServeDirectoryListing,
@@ -14,6 +15,8 @@ import type {
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { getFiletypeFromFileName } from '@pierre/diffs'
+import { createSevenZipArchiveExtractor } from './archive-extractor'
+import { archiveDestinationName, isExtractableArchiveName } from './archive-support'
 import { ServeWorkspaceError } from './types'
 
 const IMAGE_MIME_TYPES = new Map([
@@ -28,6 +31,8 @@ const IMAGE_MIME_TYPES = new Map([
 
 const THUMBNAIL_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.webp'])
 const DOWNLOAD_TEMPORARY_NAME = /^\.download-[0-9a-f-]{36}\.tmp$/i
+const EXTRACTION_TEMPORARY_NAME = /^\.extract-[0-9a-f-]{36}\.tmp(?:\.outer)?$/i
+const EXTRACTION_TEMPORARY_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
 export const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
@@ -130,6 +135,22 @@ async function collisionDestination(directory: string, filename: string): Promis
     }
   }
   throw new ServeWorkspaceError('NAME_EXHAUSTED', 'Too many entries have the same name')
+}
+
+async function collisionDirectoryDestination(directory: string, name: string): Promise<{ name: string, resolved: string }> {
+  for (let index = 0; index <= 9999; index++) {
+    const candidateName = index === 0 ? name : `${name} (${index})`
+    const resolved = path.join(directory, candidateName)
+    try {
+      await fs.lstat(resolved)
+    }
+    catch (cause) {
+      if ((cause as NodeJS.ErrnoException).code === 'ENOENT')
+        return { name: candidateName, resolved }
+      throw cause
+    }
+  }
+  throw new ServeWorkspaceError('NAME_EXHAUSTED', 'Too many directories have the same name')
 }
 
 function collisionFilename(filename: string, index: number): string {
@@ -239,7 +260,7 @@ async function browserEntry(root: string, directoryPath: string, name: string): 
     linkStat = await fs.lstat(candidate)
   }
   catch {
-    return { name, path: relativePath, kind: 'unavailable', isSymlink: false, previewKind: 'none' }
+    return { name, path: relativePath, kind: 'unavailable', isSymlink: false, previewKind: 'none', extractable: false }
   }
 
   const isSymlink = linkStat.isSymbolicLink()
@@ -257,6 +278,7 @@ async function browserEntry(root: string, directoryPath: string, name: string): 
       isSymlink,
       modifiedAt: linkStat.mtime.toISOString(),
       previewKind: 'none',
+      extractable: false,
     }
   }
 
@@ -269,6 +291,7 @@ async function browserEntry(root: string, directoryPath: string, name: string): 
       modifiedAt: stat.mtime.toISOString(),
       previewKind: 'none',
       browseUrl: `/browse/${encodedPath(relativePath)}`,
+      extractable: false,
     }
   }
 
@@ -280,6 +303,7 @@ async function browserEntry(root: string, directoryPath: string, name: string): 
       isSymlink,
       modifiedAt: stat.mtime.toISOString(),
       previewKind: 'none',
+      extractable: false,
     }
   }
 
@@ -303,10 +327,68 @@ async function browserEntry(root: string, directoryPath: string, name: string): 
     fileUrl: urlPath,
     thumbnailUrl,
     downloadUrl: `${urlPath}?download=1`,
+    extractable: isExtractableArchiveName(name),
   }
 }
 
-export async function createServeWorkspace(directory: string): Promise<ServeWorkspace> {
+async function cleanupStaleExtractionDirectories(directory: string): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await fs.readdir(directory)
+  }
+  catch {
+    return
+  }
+  const threshold = Date.now() - EXTRACTION_TEMPORARY_MAX_AGE_MS
+  await Promise.all(entries.filter(name => EXTRACTION_TEMPORARY_NAME.test(name)).map(async (name) => {
+    const target = path.join(directory, name)
+    try {
+      const stat = await fs.lstat(target)
+      if (stat.isDirectory() && stat.mtimeMs < threshold)
+        await fs.rm(target, { recursive: true, force: true })
+    }
+    catch {}
+  }))
+}
+
+async function validateExtractedTree(root: string): Promise<void> {
+  const walk = async (directory: string): Promise<void> => {
+    for (const name of await fs.readdir(directory)) {
+      const candidate = path.join(directory, name)
+      const stat = await fs.lstat(candidate)
+      if (stat.isDirectory()) {
+        await walk(candidate)
+        continue
+      }
+      if (stat.isFile())
+        continue
+      if (!stat.isSymbolicLink())
+        throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive contains an unsupported special filesystem entry')
+      const target = await fs.readlink(candidate)
+      if (path.isAbsolute(target))
+        throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive contains an unsafe symbolic link')
+      const resolved = path.resolve(path.dirname(candidate), target)
+      if (!isWithinRoot(root, resolved))
+        throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive contains a symbolic link that escapes its destination')
+      try {
+        if (!isWithinRoot(root, await fs.realpath(candidate)))
+          throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive contains a symbolic link that escapes its destination')
+      }
+      catch (cause) {
+        if (cause instanceof ServeWorkspaceError)
+          throw cause
+        throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive contains a broken symbolic link')
+      }
+    }
+  }
+  await walk(root)
+}
+
+export interface ServeWorkspaceOptions {
+  archiveExtractor?: ArchiveExtractor
+}
+
+export async function createServeWorkspace(directory: string, options: ServeWorkspaceOptions = {}): Promise<ServeWorkspace> {
   let root: string
   try {
     root = await fs.realpath(path.resolve(directory))
@@ -317,6 +399,7 @@ export async function createServeWorkspace(directory: string): Promise<ServeWork
   const rootStat = await fs.stat(root)
   if (!rootStat.isDirectory())
     throw new ServeWorkspaceError('NOT_DIRECTORY', `Path is not a directory: ${root}`)
+  const archiveExtractor = options.archiveExtractor ?? createSevenZipArchiveExtractor()
 
   return {
     async listDirectory(requestedPath): Promise<ServeDirectoryListing> {
@@ -328,7 +411,7 @@ export async function createServeWorkspace(directory: string): Promise<ServeWork
 
       let names: string[]
       try {
-        names = (await fs.readdir(resolved)).filter(name => !DOWNLOAD_TEMPORARY_NAME.test(name))
+        names = (await fs.readdir(resolved)).filter(name => !DOWNLOAD_TEMPORARY_NAME.test(name) && !EXTRACTION_TEMPORARY_NAME.test(name))
       }
       catch {
         throw new ServeWorkspaceError('UNAVAILABLE', 'Directory cannot be read')
@@ -478,6 +561,39 @@ export async function createServeWorkspace(directory: string): Promise<ServeWork
       finally {
         options.signal?.removeEventListener('abort', onAbort)
         reader.releaseLock()
+      }
+    },
+    async extractArchive(requestedPath, extractOptions = {}) {
+      const source = await operationEntry(root, requestedPath)
+      if (!isExtractableArchiveName(source.name))
+        throw new ServeWorkspaceError('UNSUPPORTED_ARCHIVE', 'File type is not supported for extraction')
+      const sourceResolved = await resolvedInsideRoot(root, source.resolved)
+      if (!(await fs.stat(sourceResolved)).isFile())
+        throw new ServeWorkspaceError('NOT_FILE', 'Archive path is not a file')
+
+      const parentRelativePath = source.relativePath.split('/').slice(0, -1).join('/')
+      const parent = await operationDirectory(root, parentRelativePath)
+      await cleanupStaleExtractionDirectories(parent.resolved)
+      const temporary = path.join(parent.resolved, `.extract-${crypto.randomUUID()}.tmp`)
+      await fs.mkdir(temporary)
+      try {
+        const inspection = await archiveExtractor.extract(sourceResolved, temporary, extractOptions)
+        extractOptions.signal?.throwIfAborted()
+        await validateExtractedTree(temporary)
+        extractOptions.signal?.throwIfAborted()
+        const destination = await collisionDirectoryDestination(parent.resolved, archiveDestinationName(source.name))
+        await fs.rename(temporary, destination.resolved)
+        return {
+          archivePath: source.relativePath,
+          destinationPath: [parent.relativePath, destination.name].filter(Boolean).join('/'),
+          ...inspection,
+        }
+      }
+      catch (cause) {
+        await fs.rm(temporary, { recursive: true, force: true }).catch(() => {})
+        if (cause instanceof ServeWorkspaceError || extractOptions.signal?.aborted)
+          throw cause
+        throw new ServeWorkspaceError('UNAVAILABLE', 'Archive extraction failed')
       }
     },
     async applyOperation(operation: ServeOperation) {

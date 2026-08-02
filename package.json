@@ -39,7 +39,8 @@
     "test:tunnel:acceptance": "bun test ./src/commands/tunnel/acceptance.ts",
     "test:tunnel:idle": "bun test ./src/commands/tunnel/idle-resource.test.ts",
     "typecheck": "tsc",
-    "prepare": "simple-git-hooks"
+    "prepare": "simple-git-hooks",
+    "prepare:7zip": "bun scripts/prepare-seven-zip.ts"
   },
   "dependencies": {
     "@clack/prompts": "^1.0.1",

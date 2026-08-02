@@ -1,9 +1,11 @@
 import type { ServeAuthentication } from './authentication'
 import type { DownloadErrorCode } from './download-service'
-import type { ServeDownloadManager, ServeErrorCode, ServeWorkspace } from './types'
+import type { ExtractionErrorCode } from './extraction-service'
+import type { ServeDownloadManager, ServeErrorCode, ServeExtractionManager, ServeWorkspace } from './types'
 import { isIP } from 'node:net'
 import { z } from 'zod'
 import { createRemoteDownloadManager, DownloadError } from './download-service'
+import { createExtractionManager, ExtractionError } from './extraction-service'
 import { ThumbnailError, ThumbnailService } from './thumbnail-service'
 import { ServeWorkspaceError } from './types'
 import serveWebApp from './web/index.html'
@@ -43,6 +45,10 @@ const downloadRequestSchema = z.object({
   filename: z.string().max(4096).optional(),
 }).strict()
 
+const extractionRequestSchema = z.object({
+  paths: z.array(operationPathSchema).min(1).max(100),
+}).strict()
+
 const sessionSchema = z.object({
   username: z.string().max(64),
   password: z.string().max(256),
@@ -76,6 +82,10 @@ const ERROR_STATUS: Record<ServeErrorCode, number> = {
   ALREADY_EXISTS: 409,
   ROOT_IMMUTABLE: 409,
   UNAVAILABLE: 500,
+  UNSUPPORTED_ARCHIVE: 409,
+  INVALID_ARCHIVE: 409,
+  ENCRYPTED_ARCHIVE: 409,
+  INSUFFICIENT_SPACE: 507,
 }
 
 function json(data: unknown, status = 200, headers?: HeadersInit): Response {
@@ -106,6 +116,20 @@ function downloadError(cause: unknown): Response {
   if (cause instanceof DownloadError)
     return error(cause.code, cause.message, DOWNLOAD_ERROR_STATUS[cause.code])
   return error('DOWNLOAD_UNAVAILABLE', cause instanceof Error ? cause.message : String(cause), 502)
+}
+
+const EXTRACTION_ERROR_STATUS: Record<ExtractionErrorCode, number> = {
+  INVALID_EXTRACTION: 400,
+  EXTRACTION_NOT_FOUND: 404,
+  EXTRACTION_ACTIVE: 409,
+  EXTRACTION_QUEUE_FULL: 429,
+  EXTRACTION_SERVICE_STOPPED: 503,
+}
+
+function extractionError(cause: unknown): Response {
+  if (cause instanceof ExtractionError)
+    return error(cause.code, cause.message, EXTRACTION_ERROR_STATUS[cause.code])
+  return error('EXTRACTION_UNAVAILABLE', cause instanceof Error ? cause.message : String(cause), 500)
 }
 
 function requireMethod(request: Request, method: string): Response | undefined {
@@ -368,10 +392,12 @@ export function startServeHttpServer(options: {
   authentication?: ServeAuthentication
   thumbnailService?: ThumbnailService
   downloadManager?: ServeDownloadManager
+  extractionManager?: ServeExtractionManager
 }): RunningServeServer {
   configureWebBundleHeaders(serveWebApp)
   const thumbnails = options.thumbnailService ?? new ThumbnailService(options.workspace)
   const downloads = options.downloadManager ?? createRemoteDownloadManager(options.workspace)
+  const extractions = options.extractionManager ?? createExtractionManager(options.workspace)
   // Bun accepts an HTMLBundle for a method route, though its ambient type only lists it for whole-route values.
   const appRoute = {
     GET: serveWebApp as unknown as Response,
@@ -668,6 +694,127 @@ export function startServeHttpServer(options: {
           return downloadError(cause)
         }
       }
+      if (url.pathname === '/api/extractions/events') {
+        const invalidMethod = requireMethod(request, 'GET')
+        if (invalidMethod)
+          return invalidMethod
+        if (!options.managementEnabled)
+          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable archive extraction', 403)
+        bunServer.timeout(request, 0)
+        const encoder = new TextEncoder()
+        let unsubscribe: (() => void) | undefined
+        let stopObservingSession: (() => void) | undefined
+        let closed = false
+        const dispose = (): void => {
+          unsubscribe?.()
+          stopObservingSession?.()
+          unsubscribe = undefined
+          stopObservingSession = undefined
+        }
+        const stream = new ReadableStream<Uint8Array>({
+          start(controller) {
+            unsubscribe = extractions.subscribe((tasks) => {
+              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ version: 1, tasks })}\n\n`))
+            })
+            if (options.authentication && token) {
+              stopObservingSession = options.authentication.observe(token, () => {
+                if (closed)
+                  return
+                closed = true
+                dispose()
+                controller.close()
+              })
+            }
+          },
+          cancel() {
+            closed = true
+            dispose()
+          },
+        })
+        return new Response(stream, {
+          headers: {
+            ...API_HEADERS,
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+            'Content-Type': 'text/event-stream; charset=utf-8',
+            'X-Accel-Buffering': 'no',
+          },
+        })
+      }
+      if (url.pathname === '/api/extractions') {
+        if (request.method === 'GET') {
+          if (!options.managementEnabled)
+            return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable archive extraction', 403)
+          return json({ version: 1, tasks: extractions.list() })
+        }
+        if (request.method === 'DELETE') {
+          if (!options.managementEnabled)
+            return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable archive extraction', 403)
+          const invalidOrigin = validateMutationOrigin(request, options.address)
+          if (invalidOrigin)
+            return invalidOrigin
+          if (url.searchParams.get('terminal') !== '1')
+            return error('INVALID_EXTRACTION', 'Use terminal=1 to clear completed extractions', 400)
+          extractions.clearTerminal()
+          return new Response(null, { status: 204, headers: API_HEADERS })
+        }
+        const invalidMethod = requireMethod(request, 'POST')
+        if (invalidMethod)
+          return invalidMethod
+        if (!options.managementEnabled)
+          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable archive extraction', 403)
+        const invalidOrigin = validateMutationOrigin(request, options.address)
+        if (invalidOrigin)
+          return invalidOrigin
+        if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
+          return error('UNSUPPORTED_MEDIA_TYPE', 'Extraction requests must use JSON', 415)
+        let body: unknown
+        try {
+          body = await request.json()
+        }
+        catch {
+          return error('INVALID_EXTRACTION', 'Extraction request must be valid JSON', 400)
+        }
+        const parsed = extractionRequestSchema.safeParse(body)
+        if (!parsed.success)
+          return error('INVALID_EXTRACTION', 'Extraction request is invalid', 400)
+        try {
+          const tasks = await extractions.enqueue(parsed.data.paths)
+          return json({ version: 1, tasks }, 202)
+        }
+        catch (cause) {
+          return extractionError(cause)
+        }
+      }
+      const extractionAction = /^\/api\/extractions\/([^/]+)\/(cancel|retry)$/.exec(url.pathname)
+      if (extractionAction) {
+        const invalidMethod = requireMethod(request, 'POST')
+        if (invalidMethod)
+          return invalidMethod
+        if (!options.managementEnabled)
+          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable archive extraction', 403)
+        const invalidOrigin = validateMutationOrigin(request, options.address)
+        if (invalidOrigin)
+          return invalidOrigin
+        let taskId: string
+        try {
+          taskId = decodeURIComponent(extractionAction[1]!)
+        }
+        catch {
+          return error('INVALID_EXTRACTION', 'Extraction task ID is invalid', 400)
+        }
+        try {
+          const task = extractionAction[2] === 'cancel'
+            ? extractions.cancel(taskId)
+            : await extractions.retry(taskId)
+          if (!task)
+            return extractionError(new ExtractionError('EXTRACTION_NOT_FOUND', 'Extraction task was not found'))
+          return json({ version: 1, task }, extractionAction[2] === 'retry' ? 202 : 200)
+        }
+        catch (cause) {
+          return extractionError(cause)
+        }
+      }
       if (url.pathname === '/files' || url.pathname.startsWith('/files/'))
         return serveOriginalFile(request, options.workspace, !options.authentication)
       if (url.pathname.startsWith('/thumbnails/'))
@@ -682,6 +829,7 @@ export function startServeHttpServer(options: {
     async stop() {
       options.authentication?.close()
       await downloads.close()
+      await extractions.close()
       thumbnails.close()
       await server.stop(true)
       finish?.()

@@ -1,6 +1,6 @@
 import type { RunningServeServer } from './server'
 import type { ThumbnailWorkerRequest } from './thumbnail-worker'
-import type { ServeDownloadManager } from './types'
+import type { ServeDownloadManager, ServeExtractionManager } from './types'
 import { Buffer } from 'node:buffer'
 import { mkdtemp, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -8,6 +8,7 @@ import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createServeAuthentication } from './authentication'
 import { createRemoteDownloadManager } from './download-service'
+import { createExtractionManager } from './extraction-service'
 import { startServeHttpServer } from './server'
 import { THUMBNAIL_MAX_INPUT_BYTES, ThumbnailService } from './thumbnail-service'
 import { createServeWorkspace, MAX_UPLOAD_BYTES } from './workspace'
@@ -41,6 +42,7 @@ async function startFixtureServer(
   createThumbnailService?: (workspace: Awaited<ReturnType<typeof createServeWorkspace>>) => ThumbnailService,
   createDownloadManager?: (workspace: Awaited<ReturnType<typeof createServeWorkspace>>) => ServeDownloadManager,
   authentication?: Awaited<ReturnType<typeof createServeAuthentication>>,
+  createArchiveExtractionManager?: (workspace: Awaited<ReturnType<typeof createServeWorkspace>>) => ServeExtractionManager,
 ): Promise<{ server: RunningServeServer, root: string }> {
   const root = await mkdtemp(path.join(tmpdir(), 'ycy-serve-http-'))
   temporaryDirectories.push(root)
@@ -54,6 +56,7 @@ async function startFixtureServer(
     authentication,
     thumbnailService: createThumbnailService?.(workspace),
     downloadManager: createDownloadManager?.(workspace),
+    extractionManager: createArchiveExtractionManager?.(workspace),
   })
   servers.push(server)
   return { server, root }
@@ -89,6 +92,8 @@ describe('ServeHttpServer', () => {
       fetch(new URL('/api/operations', server.url), { method: 'POST' }),
       fetch(new URL('/api/downloads', server.url)),
       fetch(new URL('/api/downloads/events', server.url)),
+      fetch(new URL('/api/extractions', server.url)),
+      fetch(new URL('/api/extractions/events', server.url)),
       fetch(new URL('/files/hello.txt', server.url)),
       fetch(new URL('/thumbnails/hello.txt', server.url)),
     ]
@@ -597,6 +602,83 @@ describe('ServeHttpServer', () => {
     })
     expect(cleared.status).toBe(204)
     expect((await fetch(new URL('/api/downloads', fixture.server.url)).then(response => response.json()) as { tasks: unknown[] }).tasks).toHaveLength(0)
+  })
+
+  test('validates, observes, retries, and clears archive extraction tasks', async () => {
+    let attempts = 0
+    const fixture = await startFixtureServer(true, undefined, undefined, undefined, () => createExtractionManager({
+      async extractArchive(archivePath, options = {}) {
+        attempts++
+        options.onInspect?.({ uncompressedBytes: 12, entryCount: 2 })
+        if (attempts === 1)
+          throw new Error('damaged archive')
+        options.onProgress?.(100)
+        return {
+          archivePath,
+          destinationPath: 'backup',
+          uncompressedBytes: 12,
+          entryCount: 2,
+        }
+      },
+    }))
+    const origin = fixture.server.url.origin
+    const endpoint = new URL('/api/extractions', fixture.server.url)
+    const post = (body: unknown, headers: HeadersInit = { 'Content-Type': 'application/json', 'Origin': origin }): Promise<Response> => fetch(endpoint, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+    })
+
+    const disabled = await fetch(new URL('/api/extractions', (await startFixtureServer(false)).server.url))
+    expect(disabled.status).toBe(403)
+    expect((await fetch(endpoint, { method: 'PUT' })).status).toBe(405)
+    expect((await post({ paths: ['backup.zip'] }, { 'Content-Type': 'application/json' })).status).toBe(403)
+    expect((await post({ paths: ['backup.zip'] }, { 'Content-Type': 'text/plain', 'Origin': origin })).status).toBe(415)
+    expect((await post({ paths: [] })).status).toBe(400)
+    expect((await post({ paths: Array.from({ length: 101 }, (_, index) => `${index}.zip`) })).status).toBe(400)
+
+    const created = await post({ paths: ['backup.zip'] })
+    expect(created.status).toBe(202)
+    const createdBody = await created.json() as { tasks: Array<{ id: string }> }
+    const failedId = createdBody.tasks[0]!.id
+    for (let index = 0; index < 100; index++) {
+      const tasks = await fetch(endpoint).then(response => response.json()) as { tasks: Array<{ id: string, status: string }> }
+      if (tasks.tasks.find(task => task.id === failedId)?.status === 'error')
+        break
+      await Bun.sleep(2)
+    }
+
+    const events = await fetch(new URL('/api/extractions/events', fixture.server.url))
+    const eventReader = events.body!.getReader()
+    const event = await eventReader.read()
+    await eventReader.cancel()
+    expect(events.headers.get('content-type')).toContain('text/event-stream')
+    expect(new TextDecoder().decode(event.value)).toContain(failedId)
+
+    const missingCancel = await fetch(new URL('/api/extractions/missing/cancel', fixture.server.url), {
+      method: 'POST',
+      headers: { Origin: origin },
+    })
+    expect(missingCancel.status).toBe(404)
+    const retried = await fetch(new URL(`/api/extractions/${failedId}/retry`, fixture.server.url), {
+      method: 'POST',
+      headers: { Origin: origin },
+    })
+    expect(retried.status).toBe(202)
+    const retriedBody = await retried.json() as { task: { id: string } }
+    for (let index = 0; index < 100; index++) {
+      const tasks = await fetch(endpoint).then(response => response.json()) as { tasks: Array<{ id: string, status: string }> }
+      if (tasks.tasks.find(task => task.id === retriedBody.task.id)?.status === 'done')
+        break
+      await Bun.sleep(2)
+    }
+
+    const cleared = await fetch(new URL('/api/extractions?terminal=1', fixture.server.url), {
+      method: 'DELETE',
+      headers: { Origin: origin },
+    })
+    expect(cleared.status).toBe(204)
+    expect((await fetch(endpoint).then(response => response.json()) as { tasks: unknown[] }).tasks).toHaveLength(0)
   })
 
   test('serves the embedded React shell for root and browser routes only', async () => {
