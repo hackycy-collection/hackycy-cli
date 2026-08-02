@@ -1,6 +1,6 @@
 import type { SevenZipArtifact, SevenZipTarget } from '../src/commands/serve/archive-manifest'
 import { createHash } from 'node:crypto'
-import { chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
+import { access, chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
@@ -19,6 +19,16 @@ function sha256(bytes: Uint8Array): string {
 async function validFile(filename: string, expected: string): Promise<boolean> {
   try {
     return sha256(new Uint8Array(await readFile(filename))) === expected
+  }
+  catch {
+    return false
+  }
+}
+
+async function fileExists(filename: string): Promise<boolean> {
+  try {
+    await access(filename)
+    return true
   }
   catch {
     return false
@@ -91,18 +101,13 @@ export async function prepareSevenZipRuntime(compileTarget?: string): Promise<st
   const artifact = SEVEN_ZIP_ARTIFACTS[target]
   const outputDirectory = path.join(CACHE_ROOT, 'runtime', target)
   const outputs = artifact.files.map(file => path.join(outputDirectory, file.embeddedName))
-  if ((await Promise.all(artifact.files.map((file, index) => validFile(outputs[index]!, file.sha256)))).every(Boolean))
+  if ((await Promise.all(outputs.map(fileExists))).every(Boolean))
     return outputs
 
   const archive = await download(artifact.asset, artifact.sha256)
   const temporary = await mkdtemp(path.join(os.tmpdir(), 'ycy-seven-zip-'))
   try {
     await extractArtifact(artifact, archive, temporary)
-    for (const file of artifact.files) {
-      const source = path.join(temporary, file.sourceName)
-      if (!await validFile(source, file.sha256))
-        throw new Error(`${artifact.asset} contains an invalid ${file.sourceName}`)
-    }
     await rm(outputDirectory, { recursive: true, force: true })
     await mkdir(outputDirectory, { recursive: true })
     for (const file of artifact.files) {

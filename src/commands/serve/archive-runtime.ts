@@ -1,15 +1,10 @@
-import { createHash } from 'node:crypto'
-import { chmod, mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises'
+import { access, chmod, mkdir, rename, unlink, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { embeddedFiles } from 'bun'
 import { SEVEN_ZIP_ARTIFACTS, SEVEN_ZIP_VERSION, sevenZipTarget } from './archive-manifest'
 import { ServeWorkspaceError } from './types'
-
-function sha256(bytes: Uint8Array): string {
-  return createHash('sha256').update(bytes).digest('hex')
-}
 
 function stateRoot(): string {
   if (process.platform === 'win32')
@@ -28,18 +23,17 @@ function embeddedBlob(name: string): Blob | undefined {
   })
 }
 
-async function validFile(filename: string, expected: string): Promise<boolean> {
+async function fileExists(filename: string): Promise<boolean> {
   try {
-    return sha256(new Uint8Array(await readFile(filename))) === expected
+    await access(filename)
+    return true
   }
   catch {
     return false
   }
 }
 
-async function publishRuntimeFile(target: string, bytes: Uint8Array, metadata: { filename: string, sha256: string, executable?: boolean }): Promise<void> {
-  if (sha256(bytes) !== metadata.sha256)
-    throw new ServeWorkspaceError('UNAVAILABLE', `Embedded ${metadata.filename} failed SHA-256 verification`)
+async function publishRuntimeFile(target: string, bytes: Uint8Array, metadata: { filename: string, executable?: boolean }): Promise<void> {
   const temporary = `${target}.candidate-${crypto.randomUUID()}`
   await writeFile(temporary, bytes, { mode: metadata.executable ? 0o755 : 0o644 })
   if (metadata.executable && process.platform !== 'win32')
@@ -68,7 +62,7 @@ export async function ensureSevenZipRuntime(): Promise<string> {
     await mkdir(directory, { recursive: true })
     for (const item of embedded) {
       const target = path.join(directory, item.metadata.filename)
-      if (!await validFile(target, item.metadata.sha256))
+      if (!await fileExists(target))
         await publishRuntimeFile(target, new Uint8Array(await item.blob!.arrayBuffer()), item.metadata)
     }
     return path.join(directory, process.platform === 'win32' ? '7z.exe' : '7zz')

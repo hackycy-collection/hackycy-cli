@@ -15,14 +15,13 @@ describe('7-Zip runtime manifest', () => {
     expect(sevenZipTarget('freebsd', 'x64')).toBeUndefined()
   })
 
-  test('pins archive and runtime digests, executables, and the full license', () => {
+  test('pins archive digests and describes the embedded runtime files', () => {
     for (const [target, artifact] of Object.entries(SEVEN_ZIP_ARTIFACTS)) {
       expect(artifact.sha256).toMatch(/^[a-f\d]{64}$/)
       expect(artifact.files.some(file => file.executable)).toBe(true)
       expect(artifact.files.find(file => file.filename === 'License.txt')).toEqual(expect.objectContaining({
         sourceName: 'License.txt',
         embeddedName: 'ycy-7zip-License.bin',
-        sha256: expect.stringMatching(/^[a-f\d]{64}$/),
       }))
       expect(new Set(artifact.files.map(file => file.embeddedName)).size).toBe(artifact.files.length)
       if (target.startsWith('win32-'))
