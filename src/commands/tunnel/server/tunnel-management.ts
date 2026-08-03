@@ -1,9 +1,10 @@
 import type { FrpSupervisor } from '../frp/supervisor'
-import type { AccountKind, AccountRecord, AccountRole, ClientRecord, ServerTunnelConfig, TunnelDefinition } from '../types'
+import type { AccountKind, AccountRecord, AccountRole, ClientRecord, PublicTunnelDefinition, ServerTunnelConfig, TunnelDefinition } from '../types'
 import type { AgentGateway } from './agent-gateway'
 import type { TunnelControlPlane, TunnelMutationInput, TunnelPatchInput } from './control-plane'
 import type { TunnelDatabase } from './database'
 import { randomBytes, randomUUID } from 'node:crypto'
+import { redactTunnelDefinition } from '../definition'
 import { TunnelError } from '../types'
 import { clientView, tunnelState } from './views'
 
@@ -43,7 +44,7 @@ export interface ManagedClientView extends Omit<ReturnType<typeof clientView>, '
 
 export interface ClientDetailView {
   client: ManagedClientView
-  tunnels: Array<TunnelDefinition & { state: ReturnType<typeof tunnelState> }>
+  tunnels: Array<PublicTunnelDefinition & { state: ReturnType<typeof tunnelState> }>
 }
 
 export type WorkspaceEvent = 'changed' | 'session_revoked'
@@ -354,7 +355,7 @@ export class TunnelWorkspace {
     const runtime = this.options.gateway.state(client.id)
     return {
       client: this.clientView(client),
-      tunnels: this.options.controlPlane.listTunnels(client.id).map(tunnel => ({ ...tunnel, state: tunnelState(tunnel, client, runtime) })),
+      tunnels: this.options.controlPlane.listTunnels(client.id).map(tunnel => ({ ...redactTunnelDefinition(tunnel), state: tunnelState(tunnel, client, runtime) })),
     }
   }
 
@@ -408,9 +409,9 @@ export class TunnelWorkspace {
     this.options.controlPlane.deleteClient(clientId)
   }
 
-  createTunnel(clientId: string, input: TunnelMutationInput): TunnelDefinition {
+  createTunnel(clientId: string, input: TunnelMutationInput): PublicTunnelDefinition {
     this.requireClient(clientId)
-    return this.options.controlPlane.createTunnel(clientId, input)
+    return redactTunnelDefinition(this.options.controlPlane.createTunnel(clientId, input))
   }
 
   private requireTunnel(tunnelId: string): TunnelDefinition & { clientId: string } {
@@ -419,9 +420,9 @@ export class TunnelWorkspace {
       : this.options.controlPlane.getTunnelForOwner(tunnelId, this.account.id)
   }
 
-  updateTunnel(tunnelId: string, patch: TunnelPatchInput): TunnelDefinition {
+  updateTunnel(tunnelId: string, patch: TunnelPatchInput): PublicTunnelDefinition {
     this.requireTunnel(tunnelId)
-    return this.options.controlPlane.updateTunnel(tunnelId, patch)
+    return redactTunnelDefinition(this.options.controlPlane.updateTunnel(tunnelId, patch))
   }
 
   deleteTunnel(tunnelId: string): void {

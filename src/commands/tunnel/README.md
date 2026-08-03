@@ -15,14 +15,14 @@ ycy tunnel connect --server tunnel.example.com --token <client-token>
 - Enroll multiple trusted native clients with one recoverable token per client.
 - Let multiple Control Plane Accounts manage owned resources through fixed Administrator and User roles.
 - Configure each client's tunnels centrally and push complete versioned snapshots.
-- Support HTTP by exact hostname and TCP/UDP by public server port.
+- Support HTTP by exact custom domains and path prefixes, and TCP/UDP by public server port.
 - Keep both server and client supervisors single-instance and foreground.
 - Work as a native command on the CLI's existing platforms and as a server-oriented Docker image.
 - Reuse a pinned, verified official FRP release instead of implementing a forwarding protocol.
 
 ## Non-Goals
 
-- HTTPS tunnel type, wildcard hostnames, URL-path routing, or automatic certificates.
+- HTTPS tunnel type, wildcard hostnames, URL rewriting, or automatic certificates.
 - DNS provider, Nginx Proxy Manager, firewall, or Docker port-management integrations.
 - Untrusted tenants, custom roles, configurable permissions, resource transfer, per-client FRP authorization, or FRP server plugins.
 - Client containers or a separate client Docker image.
@@ -65,12 +65,16 @@ The Control Plane Account that creates a Trusted Tunnel Client. Every Tunnel Def
 _Avoid_: Tunnel creator, mutable assignee
 
 **Tunnel Definition**:
-A desired HTTP or port mapping assigned to one Trusted Tunnel Client by the Tunnel Control Plane.
+A desired, independently enabled HTTP or port proxy assigned to one Trusted Tunnel Client by the Tunnel Control Plane.
 _Avoid_: FRP proxy configuration
 
 **HTTP Tunnel**:
-A mapping from one normalized, globally unique, exact public hostname to a Local Endpoint. The hostname remains reserved while the Tunnel Definition exists, including when disabled.
+A mapping from one or more normalized exact Custom Domain aliases and one optional Location to a Local Endpoint. Every domain-location pair remains reserved while the Tunnel Definition exists, including when disabled.
 _Avoid_: Domain tunnel, HTTPS tunnel
+
+**Location**:
+A case-sensitive HTTP path prefix used with each Custom Domain to select a Tunnel Definition. It selects a backend but does not remove or rewrite the request path.
+_Avoid_: Rewrite rule, regular expression
 
 **Port Tunnel**:
 A TCP or UDP mapping from a public server port to a Local Endpoint. The protocol-specific port remains reserved while the Tunnel Definition exists, including when disabled.
@@ -242,14 +246,15 @@ An internal database key may maintain references across token rotation, but it i
 ### HTTP Tunnel
 
 ```text
-exactHostname -> localHost:localPort
+customDomains x one optional location -> localHost:localPort
 ```
 
-- One tunnel contains exactly one normalized exact hostname.
-- Schemes, paths, ports, IP addresses, `*`, and other wildcard patterns are rejected.
-- Internationalized hostnames are stored in normalized ASCII form.
-- Hostname uniqueness is global and case-insensitive.
-- Disabled tunnels retain their hostname reservation; deletion releases it.
+- One Tunnel Definition contains 1-32 normalized exact Custom Domains and zero or one Location. A second independently enabled Location is a second Tunnel Definition.
+- Custom Domain schemes, paths, ports, IP addresses, `*`, and other wildcard patterns are rejected.
+- Internationalized Custom Domains are stored in normalized ASCII form and de-duplicated case-insensitively.
+- A Location starts with `/` and is matched as a case-sensitive literal prefix. Query strings do not participate in routing and the matched prefix remains in the request sent to the Local Endpoint.
+- An omitted Location is an all-path catch-all. It may coexist with more specific Tunnel Definitions on the same Custom Domain; FRP selects the most specific matching prefix.
+- Every `(customDomain, location)` pair is globally unique. Disabled tunnels retain all pair reservations; deletion releases them.
 - Several HTTP tunnels may target the same Local Endpoint.
 
 ### Port Tunnel
@@ -314,19 +319,27 @@ clients
 tunnels
   id
   client_internal_id (foreign key, cascade delete)
+  label
   protocol (http | tcp | udp)
-  hostname (HTTP only)
+  custom_domains (HTTP-only JSON array)
+  location (HTTP only, nullable catch-all)
   server_port (TCP/UDP only)
   local_host
   local_port
   enabled
+  options_json (typed transport, health-check, and HTTP options)
   created_at
   updated_at
+
+tunnel_http_routes
+  tunnel_id (foreign key, cascade delete)
+  hostname
+  location
 ```
 
-SQLite indexes enforce account username and client owner lookups, normalized HTTP hostname uniqueness, and `(protocol, server_port)` uniqueness. Type-specific checks prevent an HTTP row from carrying a server port or a TCP/UDP row from carrying a hostname. Tunnel mutations and revision increments are atomic. Rotation marks revocation pending until an agent authenticates with the replacement token.
+SQLite indexes enforce account username and client owner lookups, normalized HTTP domain-location uniqueness, and `(protocol, server_port)` uniqueness. Type-specific checks prevent an HTTP row from carrying a server port or a TCP/UDP row from carrying Custom Domains. Tunnel mutations, route reservations, and revision increments are atomic. Rotation marks revocation pending until an agent authenticates with the replacement token.
 
-The account schema is a fresh-development contract. There is no compatibility migration from earlier tunnel databases; an incompatible schema fails startup and the development data directory must be recreated.
+Schema 3 databases migrate atomically to schema 5 as one-domain, all-path Tunnel Definitions. Schema 4 databases migrate by splitting every stored Location into its own independently enabled Tunnel Definition while preserving Custom Domain aliases, endpoint, timestamps, and enabled state. Each affected client receives one new Desired Revision.
 
 Connection presence, child-process state, reconnect backoff, and the latest structured runtime error stay in bounded process memory. The server does not store metrics, traffic samples, complete logs, or revision history.
 
@@ -432,9 +445,14 @@ type = "http"
 localIP = "127.0.0.1"
 localPort = 3000
 customDomains = [ "app.example.com" ]
+locations = [ "/service-a" ]
 ```
 
-TCP and UDP proxies replace `customDomains` with `remotePort`. If a snapshot has no enabled tunnels, the agent acknowledges it without keeping a frpc child in memory.
+`customDomains` remains an array of aliases. A non-catch-all Tunnel Definition emits a one-element `locations` array, so every Tunnel Definition maps to one independently enabled FRP proxy. TCP and UDP proxies replace those fields with `remotePort`. If a snapshot has no enabled tunnels, the agent acknowledges it without keeping a frpc child in memory.
+
+Typed advanced options render per-proxy encryption, compression, bandwidth limits, Proxy Protocol, TCP/HTTP health checks, HTTP Basic Auth, Host Header Rewrite, and request/response header sets. Basic Auth passwords remain recoverable for agent snapshots and generated client configuration, but browser responses expose only the username and a configured marker. The server data directory, backups, and client state directory must therefore be protected as sensitive data.
+
+The typed capability scope and the reasons for deferring advanced FRP features are recorded in [FRP-CAPABILITIES.md](./FRP-CAPABILITIES.md). Raw FRP configuration is not accepted because it would bypass route ownership, collision checks, snapshot compatibility, and rollback.
 
 ## Process Supervision
 
@@ -490,9 +508,11 @@ The UI is deliberately limited to:
 - Account login and local-account password change.
 - A scoped Overview for every account; only Administrators see global frps state and deployment settings.
 - Client list with Client Remarks, create/edit, token reveal/copy/rotate, delete, connection state, revision state, and an Administrator-only owner column.
-- Client detail with HTTP/TCP/UDP tunnel CRUD, Enabled controls, last structured error, and frpc restart.
+- Client detail with HTTP/TCP/UDP tunnel CRUD, one row per independently enabled proxy, expandable typed FRP options, last structured error, and frpc restart.
 - Administrator Accounts view with create, role change, password reset, and empty-account deletion.
 - Administrator Server view with frps controls and read-only deployment settings.
+
+Structured collections such as Custom Domains and HTTP headers use repeatable input rows rather than multiline text. Binary settings use accessible Switch controls. Initial loads, background refreshes, and every explicit mutation expose local pending and error state; successful explicit mutations use bounded notifications, while passive event refreshes remain silent.
 
 Do not add traffic charts, endpoint status, log viewers, onboarding marketing content, nested dashboard cards, or background polling for FRP state. Push client state changes over the existing server-to-browser event mechanism selected during implementation, and keep retained state bounded.
 
@@ -560,7 +580,7 @@ src/commands/tunnel/
     supervisor.ts          Serialized zero-or-one child state machine
   server/
     run.ts                 Server composition and signal handling
-    database.ts            Fresh SQLite schema and transactions
+    database.ts            SQLite schema, schema-3/4 migrations, and transactions
     control-plane.ts       Client/tunnel operations and revision truth
     agent-gateway.ts       WebSocket sessions and snapshot delivery
     tunnel-management.ts   Account sessions, authorization, ownership, projections, and administration
@@ -585,7 +605,7 @@ TunnelManagement is the only browser-facing owner of account authentication, aut
 
 ## Implementation Layers
 
-1. Foundation: domain types, environment parsing, fixed paths, lock ownership, fresh SQLite schema, FRP manifest/downloader, TOML rendering, and child supervision.
+1. Foundation: domain types, environment parsing, fixed paths, lock ownership, SQLite schema, FRP manifest/downloader, TOML rendering, and child supervision.
 2. Server core: control-plane transactions, TunnelManagement accounts/authorization, frps composition, and the agent WebSocket handshake.
 3. Native client: authentication-first startup, binary resolution, full-snapshot reconciliation, rollback, reconnect, cooperative revocation, and status acknowledgements.
 4. UI: the accepted operational views, responsive layouts, visible mutation failures, and bounded state.
@@ -598,8 +618,8 @@ Foundation, server, native client, UI, and distribution remain independently tes
 
 Required automated coverage:
 
-- Configuration precedence, secret files, hostname normalization, port ranges, and platform paths.
-- Fresh SQLite account/ownership constraints, incompatible-schema rejection, cascade deletion, token rotation, resource reservation, automatic port allocation, and atomic revision increments.
+- Configuration precedence, secret files, Custom Domain and Location normalization, port ranges, and platform paths.
+- SQLite account/ownership constraints, schema-3/4 migration, incompatible-schema rejection, cascade deletion, token rotation, resource reservation, automatic port allocation, and atomic revision increments.
 - Single-instance acquisition, stale-lock handling, one-child ownership, manual stop, backoff, and deterministic-error suppression.
 - Binary artifact selection, SHA-256 rejection, atomic installation, manual-download diagnostics, and reported-version validation.
 - Exact generated TOML for HTTP/TCP/UDP, disabled tunnels, stable names, and server port ranges.
@@ -613,7 +633,7 @@ Acceptance scenarios:
 
 1. A second server or client instance cannot start against the same state directory.
 2. Two trusted clients connect with distinct tokens and receive only their own snapshots.
-3. HTTP domains and protocol-specific public ports cannot be double-reserved, including by disabled tunnels.
+3. Exact HTTP domain-location pairs and protocol-specific public ports cannot be double-reserved, including by disabled tunnels; different Locations on one domain can coexist.
 4. A valid UI mutation automatically becomes Applied; an invalid snapshot leaves the previous revision running.
 5. An ordinary management-link outage leaves existing forwarding active, but a cold-starting client does not use cache.
 6. Token rotation preserves tunnels and invalidates the old agent cooperatively; deletion cascades tunnels and frees resources.

@@ -7,7 +7,7 @@ import { readRememberedTunnelConnection } from '../../config/tunnel'
 import { clientStateDirectory, defaultServerDataDirectory } from './paths'
 import { TunnelError } from './types'
 
-export const DEFAULT_TUNNEL_SERVER = 'tunnel.sooosin.com'
+export const DEFAULT_TUNNEL_SERVER = ''
 
 export interface ServerOptionInput {
   address?: string

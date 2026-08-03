@@ -150,11 +150,12 @@ describe('Tunnel HTTP control plane', () => {
     const tunnelResponse = await request(value.server, `/api/clients/${client.id}/tunnels`, cookie, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ protocol: 'http', hostname: 'App.Example.com', localPort: 3000 }),
+      body: JSON.stringify({ protocol: 'http', customDomains: ['App.Example.com', 'Alias.Example.com'], location: '/service-a', localPort: 3000 }),
     })
     const tunnel = (await tunnelResponse.json()).tunnel
     expect(tunnelResponse.status).toBe(201)
-    expect(tunnel.hostname).toBe('app.example.com')
+    expect(tunnel.customDomains).toEqual(['app.example.com', 'alias.example.com'])
+    expect(tunnel.location).toBe('/service-a')
     const detail = await request(value.server, `/api/clients/${client.id}`, cookie).then(response => response.json())
     expect(detail.client.desiredRevision).toBe(1)
     expect(detail.tunnels[0].state).toBe('Pending')
@@ -174,6 +175,33 @@ describe('Tunnel HTTP control plane', () => {
     expect((await request(value.server, '/api/clients', cookie).then(response => response.json())).clients).toEqual([])
     expect((await request(value.server, '/api/session', cookie, { method: 'DELETE' })).status).toBe(204)
     expect((await request(value.server, '/api/state', cookie)).status).toBe(401)
+  })
+
+  test('keeps HTTP Basic Auth recoverable for agents without returning its password to browsers', async () => {
+    const value = await fixture()
+    const cookie = await login(value.server)
+    const client = value.controlPlane.createClient('environment-admin', 'Credential fixture')
+    const created = await request(value.server, `/api/clients/${client.id}/tunnels`, cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        label: 'Protected app',
+        protocol: 'http',
+        customDomains: ['protected.example.com'],
+        location: '/app',
+        localPort: 3000,
+        options: { http: { basicAuth: { username: 'operator', password: 'secret-value' } } },
+      }),
+    })
+    expect(created.status).toBe(201)
+    const publicTunnel = (await created.json()).tunnel
+    expect(publicTunnel.options.http.basicAuth).toEqual({ username: 'operator', passwordConfigured: true })
+    expect(JSON.stringify(publicTunnel)).not.toContain('secret-value')
+
+    const detail = await request(value.server, `/api/clients/${client.id}`, cookie).then(response => response.json())
+    expect(detail.tunnels[0].options.http.basicAuth).toEqual({ username: 'operator', passwordConfigured: true })
+    expect(JSON.stringify(detail)).not.toContain('secret-value')
+    expect(value.controlPlane.snapshot(client.id).tunnels[0]?.options.http?.basicAuth).toEqual({ username: 'operator', password: 'secret-value' })
   })
 
   test('authenticates one agent, pushes snapshots, records acknowledgements, and revokes rotation', async () => {

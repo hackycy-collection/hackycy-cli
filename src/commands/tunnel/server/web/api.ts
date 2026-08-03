@@ -1,4 +1,4 @@
-import type { AccountKind, AccountRole, ClientRecord, ClientRuntimeState, TunnelDefinition, TunnelPresentationState } from '../../types'
+import type { AccountKind, AccountRole, ClientRecord, ClientRuntimeState, PublicTunnelDefinition, TunnelPresentationState } from '../../types'
 
 export interface CurrentAccount {
   id: string
@@ -20,7 +20,7 @@ export interface ClientView extends Omit<ClientRecord, 'ownerAccountId'> {
   tunnelCounts: { total: number, enabled: number, applied: number, pending: number, error: number }
 }
 
-export type TunnelView = TunnelDefinition & { state: TunnelPresentationState }
+export type TunnelView = PublicTunnelDefinition & { state: TunnelPresentationState }
 
 export class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
@@ -29,8 +29,25 @@ export class ApiError extends Error {
 }
 
 export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(url, init)
-  const body = response.status === 204 ? undefined : await response.json()
+  let response: Response
+  try {
+    response = await fetch(url, init)
+  }
+  catch (cause) {
+    if (cause instanceof DOMException && cause.name === 'AbortError')
+      throw cause
+    throw new ApiError(0, 'Unable to reach the Tunnel Control Plane')
+  }
+  let body: any
+  if (response.status !== 204) {
+    const text = await response.text()
+    try {
+      body = text ? JSON.parse(text) : undefined
+    }
+    catch {
+      body = undefined
+    }
+  }
   if (!response.ok && response.status === 401)
     window.dispatchEvent(new Event('tunnel-authentication-required'))
   if (!response.ok)

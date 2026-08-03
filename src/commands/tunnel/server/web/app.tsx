@@ -1,11 +1,11 @@
 import type { FormEvent, ReactNode } from 'react'
 import type { CurrentAccount } from './api'
-import { Activity, Gauge, KeyRound, LogOut, Network, Play, RefreshCw, Server, Shield, Square, Users, X } from 'lucide-react'
+import { Gauge, KeyRound, LogOut, Network, Play, RefreshCw, Server, Shield, Square, Users, X } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { AccountsPage } from './account-pages'
 import { ApiError, apiJson, jsonRequest } from './api'
 import { ClientDetailPage, ClientsPage } from './client-pages'
-import { IconButton, navigate, PageHeader, Status } from './ui'
+import { ErrorState, IconButton, navigate, PageHeader, Spinner, Status, useFeedback } from './ui'
 
 interface ServerProjection {
   frps: { state: string, pid?: number, error?: { message: string } }
@@ -44,34 +44,45 @@ function currentPage(): Page {
 
 function Login({ onLogin }: { onLogin: () => void }): React.JSX.Element {
   const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const { notify } = useFeedback()
   const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
+    setError('')
+    setSubmitting(true)
     try {
       await apiJson('/api/session', jsonRequest('POST', { username: form.get('username'), password: form.get('password') }))
+      notify('Signed in')
       onLogin()
     }
     catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     }
+    finally {
+      setSubmitting(false)
+    }
   }
   return (
     <main className="login-shell">
-      <form className="login-panel" onSubmit={event => void submit(event)}>
+      <form className="login-panel" aria-busy={submitting} onSubmit={event => void submit(event)}>
         <div className="brand">
           <Network size={18} />
           <span>HACKYCY TUNNEL</span>
         </div>
         <label>
           Username
-          <input name="username" autoComplete="username" required autoFocus />
+          <input name="username" autoComplete="username" required autoFocus disabled={submitting} />
         </label>
         <label>
           Password
-          <input name="password" type="password" autoComplete="current-password" required />
+          <input name="password" type="password" autoComplete="current-password" required disabled={submitting} />
         </label>
-        {error && <p className="form-error">{error}</p>}
-        <button className="primary" type="submit">Sign in</button>
+        {error && <p className="form-error" role="alert">{error}</p>}
+        <button className="primary" type="submit" disabled={submitting}>
+          {submitting && <Spinner />}
+          {submitting ? 'Signing in...' : 'Sign in'}
+        </button>
       </form>
     </main>
   )
@@ -80,6 +91,7 @@ function Login({ onLogin }: { onLogin: () => void }): React.JSX.Element {
 function PasswordEditor({ onClose, onChanged }: { onClose: () => void, onChanged: () => void }): React.JSX.Element {
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const { notify } = useFeedback()
   const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
     event.preventDefault()
     const form = new FormData(event.currentTarget)
@@ -91,6 +103,7 @@ function PasswordEditor({ onClose, onChanged }: { onClose: () => void, onChanged
     setSaving(true)
     try {
       await apiJson('/api/session/password', jsonRequest('PUT', { currentPassword: form.get('currentPassword'), newPassword }))
+      notify('Password changed')
       onChanged()
     }
     catch (cause) {
@@ -119,17 +132,20 @@ function PasswordEditor({ onClose, onChanged }: { onClose: () => void, onChanged
           Confirm password
           <input name="confirmation" type="password" minLength={8} maxLength={256} autoComplete="new-password" required />
         </label>
-        {error && <p className="form-error">{error}</p>}
+        {error && <p className="form-error" role="alert">{error}</p>}
         <div className="modal-actions">
           <button type="button" onClick={onClose}>Cancel</button>
-          <button className="primary" type="submit" disabled={saving}>{saving ? 'Saving...' : 'Change'}</button>
+          <button className="primary" type="submit" disabled={saving}>
+            {saving && <Spinner />}
+            {saving ? 'Saving...' : 'Change'}
+          </button>
         </div>
       </form>
     </div>
   )
 }
 
-function Layout({ page, account, children, onLogout, onChangePassword }: { page: Page, account: CurrentAccount, children: ReactNode, onLogout: () => void, onChangePassword: () => void }): React.JSX.Element {
+function Layout({ page, account, children, loggingOut, onLogout, onChangePassword }: { page: Page, account: CurrentAccount, children: ReactNode, loggingOut: boolean, onLogout: () => void, onChangePassword: () => void }): React.JSX.Element {
   const item = (name: Page['name'], path: string, icon: ReactNode, label: string): React.JSX.Element => (
     <button
       type="button"
@@ -162,7 +178,7 @@ function Layout({ page, account, children, onLogout, onChangePassword }: { page:
             <span>{account.role}</span>
           </div>
           {!account.managedByEnvironment && <IconButton label="Change password" onClick={onChangePassword}><KeyRound size={15} /></IconButton>}
-          <IconButton label="Sign out" onClick={onLogout}><LogOut size={15} /></IconButton>
+          <IconButton label="Sign out" loading={loggingOut} onClick={onLogout}><LogOut size={15} /></IconButton>
         </div>
       </aside>
       <div className="content-shell">{children}</div>
@@ -170,11 +186,11 @@ function Layout({ page, account, children, onLogout, onChangePassword }: { page:
   )
 }
 
-function Overview({ state }: { state: StateView }): React.JSX.Element {
+function Overview({ state, refreshing, reload }: { state: StateView, refreshing: boolean, reload: () => void }): React.JSX.Element {
   const metrics = [['Trusted clients', state.counts.clients], ['Connected', state.counts.connected], ['Tunnel definitions', state.counts.tunnels], ['Pending', state.counts.pending], ['Errors', state.counts.errors]] as const
   return (
     <>
-      <PageHeader title="Overview" />
+      <PageHeader title="Overview" actions={<IconButton label="Refresh overview" loading={refreshing} onClick={reload}><RefreshCw size={15} /></IconButton>} />
       <section className="metric-grid">
         {metrics.map(([label, value]) => (
           <div className="metric" key={label}>
@@ -218,16 +234,23 @@ function Overview({ state }: { state: StateView }): React.JSX.Element {
   )
 }
 
-function ServerView({ server, reload }: { server: ServerProjection, reload: () => void }): React.JSX.Element {
+function ServerView({ server, reload }: { server: ServerProjection, reload: () => Promise<void> }): React.JSX.Element {
   const [error, setError] = useState('')
+  const [pending, setPending] = useState<'start' | 'stop' | 'restart'>()
+  const { notify } = useFeedback()
   const action = async (value: 'start' | 'stop' | 'restart'): Promise<void> => {
+    setPending(value)
     try {
       await apiJson(`/api/server/frp/${value}`, { method: 'POST' })
       setError('')
-      reload()
+      notify(`frps ${value} completed`)
+      await reload()
     }
     catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
+    }
+    finally {
+      setPending(undefined)
     }
   }
   return (
@@ -236,13 +259,13 @@ function ServerView({ server, reload }: { server: ServerProjection, reload: () =
         title="Tunnel Server"
         actions={(
           <>
-            <IconButton label="Start frps" onClick={() => void action('start')}><Play size={15} /></IconButton>
-            <IconButton label="Stop frps" onClick={() => void action('stop')}><Square size={14} /></IconButton>
-            <IconButton label="Restart frps" onClick={() => void action('restart')}><RefreshCw size={15} /></IconButton>
+            <IconButton label="Start frps" loading={pending === 'start'} disabled={Boolean(pending)} onClick={() => void action('start')}><Play size={15} /></IconButton>
+            <IconButton label="Stop frps" loading={pending === 'stop'} disabled={Boolean(pending)} onClick={() => void action('stop')}><Square size={14} /></IconButton>
+            <IconButton label="Restart frps" loading={pending === 'restart'} disabled={Boolean(pending)} onClick={() => void action('restart')}><RefreshCw size={15} /></IconButton>
           </>
         )}
       />
-      {error && <p className="runtime-error">{error}</p>}
+      {error && <p className="runtime-error" role="alert">{error}</p>}
       <section className="section-band">
         <div className="section-title">
           <h2>frps</h2>
@@ -300,19 +323,33 @@ export function App(): React.JSX.Element {
   const [state, setState] = useState<StateView>()
   const [refreshSequence, setRefreshSequence] = useState(0)
   const [changingPassword, setChangingPassword] = useState(false)
+  const [stateLoading, setStateLoading] = useState(true)
+  const [stateError, setStateError] = useState('')
+  const [eventsConnected, setEventsConnected] = useState<boolean>()
+  const [loggingOut, setLoggingOut] = useState(false)
+  const { notify } = useFeedback()
   const sessionEnded = useCallback(() => {
     setAuthenticated(false)
     setState(undefined)
     setChangingPassword(false)
+    setStateError('')
+    setEventsConnected(undefined)
   }, [])
   const load = useCallback(async () => {
+    setStateLoading(true)
     try {
       setState(await apiJson<StateView>('/api/state'))
       setAuthenticated(true)
+      setStateError('')
     }
     catch (cause) {
       if (cause instanceof ApiError && cause.status === 401)
         sessionEnded()
+      else
+        setStateError(cause instanceof Error ? cause.message : String(cause))
+    }
+    finally {
+      setStateLoading(false)
     }
   }, [sessionEnded])
   useEffect(() => {
@@ -333,6 +370,8 @@ export function App(): React.JSX.Element {
     if (!authenticated)
       return
     const events = new EventSource('/api/events')
+    events.onopen = () => setEventsConnected(true)
+    events.onerror = () => setEventsConnected(false)
     events.onmessage = (message) => {
       const event = JSON.parse(message.data) as { event: 'changed' | 'session_revoked' }
       if (event.event === 'session_revoked') {
@@ -345,14 +384,30 @@ export function App(): React.JSX.Element {
     return () => events.close()
   }, [authenticated, load, sessionEnded])
   const logout = async (): Promise<void> => {
-    await apiJson('/api/session', { method: 'DELETE' })
-    sessionEnded()
+    setLoggingOut(true)
+    try {
+      await apiJson('/api/session', { method: 'DELETE' })
+      sessionEnded()
+    }
+    catch (cause) {
+      notify(cause instanceof Error ? cause.message : String(cause), 'error')
+    }
+    finally {
+      setLoggingOut(false)
+    }
   }
   if (authenticated === undefined) {
+    if (stateError) {
+      return (
+        <div className="boot boot-error">
+          <ErrorState message={stateError} retrying={stateLoading} onRetry={() => void load()} />
+        </div>
+      )
+    }
     return (
       <div className="boot">
-        <Activity size={18} />
-        Loading
+        <Spinner size={18} />
+        Loading session
       </div>
     )
   }
@@ -361,18 +416,25 @@ export function App(): React.JSX.Element {
   if (!state) {
     return (
       <div className="boot">
-        <Activity size={18} />
-        Loading
+        <Spinner size={18} />
+        Loading workspace
       </div>
     )
   }
   return (
-    <Layout page={page} account={state.account} onLogout={() => void logout()} onChangePassword={() => setChangingPassword(true)}>
-      {page.name === 'overview' && <Overview state={state} />}
+    <Layout page={page} account={state.account} loggingOut={loggingOut} onLogout={() => void logout()} onChangePassword={() => setChangingPassword(true)}>
+      {eventsConnected === false && (
+        <div className="sync-banner" role="status">
+          <Spinner />
+          Live updates disconnected. Reconnecting...
+        </div>
+      )}
+      {stateError && <ErrorState message={stateError} retrying={stateLoading} onRetry={() => void load()} />}
+      {page.name === 'overview' && <Overview state={state} refreshing={stateLoading} reload={() => void load()} />}
       {page.name === 'clients' && <ClientsPage refreshSequence={refreshSequence} showOwner={state.account.role === 'admin'} />}
       {page.name === 'client' && <ClientDetailPage id={page.id} refreshSequence={refreshSequence} showOwner={state.account.role === 'admin'} />}
       {page.name === 'accounts' && state.account.role === 'admin' && <AccountsPage currentAccountId={state.account.id} refreshSequence={refreshSequence} onSessionEnded={sessionEnded} />}
-      {page.name === 'server' && state.server && <ServerView server={state.server} reload={() => void load()} />}
+      {page.name === 'server' && state.server && <ServerView server={state.server} reload={load} />}
       {changingPassword && <PasswordEditor onClose={() => setChangingPassword(false)} onChanged={sessionEnded} />}
     </Layout>
   )

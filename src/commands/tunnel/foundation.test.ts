@@ -189,13 +189,47 @@ describe('FRP foundation', () => {
         clientKey: 'client-key',
         revision: 2,
         tunnels: [
-          { id: 'http-id', protocol: 'http', hostname: 'app.example.com', serverPort: null, localHost: '127.0.0.1', localPort: 3000, enabled: true, createdAt: '', updatedAt: '' },
-          { id: 'tcp-id', protocol: 'tcp', hostname: null, serverPort: 21000, localHost: 'db', localPort: 5432, enabled: true, createdAt: '', updatedAt: '' },
-          { id: 'off-id', protocol: 'udp', hostname: null, serverPort: 21001, localHost: 'dns', localPort: 53, enabled: false, createdAt: '', updatedAt: '' },
+          {
+            id: 'http-id',
+            label: 'Ticket H5',
+            protocol: 'http',
+            customDomains: ['app.example.com', 'app-alt.example.com'],
+            location: '/service-a',
+            serverPort: null,
+            localHost: '127.0.0.1',
+            localPort: 3000,
+            enabled: true,
+            options: {
+              transport: { useEncryption: true, useCompression: true, bandwidthLimit: { value: 2, unit: 'MB', mode: 'server' }, proxyProtocolVersion: 'v2' },
+              healthCheck: { type: 'http', path: '/health', intervalSeconds: 10, timeoutSeconds: 3, maxFailed: 2, headers: [{ name: 'X-Probe', value: 'ycy' }] },
+              http: {
+                basicAuth: { username: 'operator', password: 'secret-value' },
+                hostHeaderRewrite: 'internal.example.com',
+                requestHeaders: [{ name: 'X-Forwarded-By', value: 'ycy' }],
+                responseHeaders: [{ name: 'X-Tunnel', value: 'ticket' }],
+              },
+            },
+            createdAt: '',
+            updatedAt: '',
+          },
+          { id: 'tcp-id', label: '', protocol: 'tcp', serverPort: 21000, localHost: 'db', localPort: 5432, enabled: true, options: { transport: { useEncryption: false, useCompression: false, bandwidthLimit: null, proxyProtocolVersion: null }, healthCheck: null, http: null }, createdAt: '', updatedAt: '' },
+          { id: 'off-id', label: '', protocol: 'udp', serverPort: 21001, localHost: 'dns', localPort: 53, enabled: false, options: { transport: { useEncryption: false, useCompression: false, bandwidthLimit: null, proxyProtocolVersion: null }, healthCheck: null, http: null }, createdAt: '', updatedAt: '' },
         ],
       },
     })
-    expect(client).toContain('customDomains = ["app.example.com"]')
+    expect(client).toContain('customDomains = ["app.example.com", "app-alt.example.com"]')
+    expect(client).toContain('locations = ["/service-a"]')
+    expect(client).toContain('transport.bandwidthLimit = "2MB"')
+    expect(client).toContain('transport.bandwidthLimitMode = "server"')
+    expect(client).toContain('transport.useEncryption = true')
+    expect(client).toContain('transport.useCompression = true')
+    expect(client).toContain('transport.proxyProtocolVersion = "v2"')
+    expect(client).toContain('httpUser = "operator"')
+    expect(client).toContain('httpPassword = "secret-value"')
+    expect(client).toContain('hostHeaderRewrite = "internal.example.com"')
+    expect(client).toContain('requestHeaders.set."X-Forwarded-By" = "ycy"')
+    expect(client).toContain('responseHeaders.set."X-Tunnel" = "ticket"')
+    expect(client).toContain('healthCheck.httpHeaders = [{ name = "X-Probe", value = "ycy" }]')
     expect(client).toContain('remotePort = 21000')
     expect(client).not.toContain('off-id')
     expect(client).not.toContain('21001')

@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { TunnelError } from '../types'
-import { normalizeExactHostname, TunnelControlPlane } from './control-plane'
+import { normalizeCustomDomains, normalizeExactHostname, normalizeHttpLocation, TunnelControlPlane } from './control-plane'
 import { TunnelDatabase } from './database'
 
 function fixture(range = { start: 20000, end: 20002 }): { database: TunnelDatabase, controlPlane: TunnelControlPlane, ownerId: string } {
@@ -19,6 +19,20 @@ describe('TunnelControlPlane', () => {
     expect(normalizeExactHostname('例子.测试')).toBe('xn--fsqu00a.xn--0zwm56d')
     for (const invalid of ['https://example.com', '*.example.com', 'example.com/path', '127.0.0.1', 'localhost', 'example.com:80'])
       expect(() => normalizeExactHostname(invalid)).toThrow(TunnelError)
+  })
+
+  test('normalizes one HTTP location and rejects values FRP cannot route safely', () => {
+    expect(normalizeHttpLocation(undefined)).toBeNull()
+    expect(normalizeHttpLocation(null)).toBeNull()
+    expect(normalizeHttpLocation(' /service-a ')).toBe('/service-a')
+    for (const invalid of ['service-a', '/with space', '/path?query=1', '/path#fragment', ''])
+      expect(() => normalizeHttpLocation(invalid)).toThrow(TunnelError)
+  })
+
+  test('normalizes and de-duplicates HTTP custom domains', () => {
+    expect(normalizeCustomDomains(['App.Example.com', 'app.example.com', '例子.测试'])).toEqual(['app.example.com', 'xn--fsqu00a.xn--0zwm56d'])
+    expect(normalizeCustomDomains(undefined, 'Legacy.Example.com')).toEqual(['legacy.example.com'])
+    expect(() => normalizeCustomDomains([])).toThrow('at least one custom domain')
   })
 
   test('keeps Client Tokens recoverable and preserves tunnels across rotation', () => {
@@ -43,14 +57,106 @@ describe('TunnelControlPlane', () => {
     database.close()
   })
 
-  test('reserves hostnames globally even when disabled and releases them on deletion', () => {
+  test('stores one independently enabled HTTP location per Tunnel Definition', () => {
     const { database, controlPlane, ownerId } = fixture()
     const first = controlPlane.createClient(ownerId, 'First client')
     const second = controlPlane.createClient(ownerId, 'Second client')
-    const tunnel = controlPlane.createTunnel(first.id, { protocol: 'http', hostname: 'APP.example.com', localPort: 3000, enabled: false })
-    expect(() => controlPlane.createTunnel(second.id, { protocol: 'http', hostname: 'app.example.com', localPort: 3001 })).toThrow('already reserved')
+    const tunnel = controlPlane.createTunnel(first.id, { protocol: 'http', customDomains: ['APP.example.com', 'alias.example.com'], location: '/service-a', localPort: 3000, enabled: false })
+    if (tunnel.protocol !== 'http')
+      throw new Error('Expected an HTTP Tunnel Definition')
+    expect(tunnel).toMatchObject({ customDomains: ['app.example.com', 'alias.example.com'], location: '/service-a', enabled: false })
+    expect(() => controlPlane.createTunnel(second.id, { protocol: 'http', customDomains: ['alias.example.com'], location: '/service-a', localPort: 3001 })).toThrow('custom domain and location are already reserved')
+    const sibling = controlPlane.createTunnel(second.id, { protocol: 'http', customDomains: ['app.example.com'], location: '/service-b', localPort: 3002 })
+    if (sibling.protocol !== 'http')
+      throw new Error('Expected an HTTP Tunnel Definition')
+    expect(sibling.location).toBe('/service-b')
+    const catchAll = controlPlane.createTunnel(second.id, { protocol: 'http', customDomains: ['app.example.com'], localPort: 3003 })
+    expect(catchAll.protocol === 'http' && catchAll.location).toBeNull()
+    controlPlane.updateTunnel(sibling.id, { enabled: false })
+    expect(controlPlane.getTunnel(tunnel.id).enabled).toBe(false)
+    expect(controlPlane.getTunnel(sibling.id).enabled).toBe(false)
     controlPlane.deleteTunnel(tunnel.id)
-    expect(controlPlane.createTunnel(second.id, { protocol: 'http', hostname: 'app.example.com', localPort: 3001 }).hostname).toBe('app.example.com')
+    const replacement = controlPlane.createTunnel(second.id, { protocol: 'http', customDomains: ['app.example.com'], location: '/service-a', localPort: 3001 })
+    expect(replacement.protocol === 'http' && replacement.customDomains).toEqual(['app.example.com'])
+    database.close()
+  })
+
+  test('rolls back an HTTP route edit when its new reservation conflicts', () => {
+    const { database, controlPlane, ownerId } = fixture()
+    const first = controlPlane.createClient(ownerId, 'First client')
+    const second = controlPlane.createClient(ownerId, 'Second client')
+    const firstTunnel = controlPlane.createTunnel(first.id, { protocol: 'http', customDomains: ['app.example.com'], location: '/first', localPort: 3000 })
+    const secondTunnel = controlPlane.createTunnel(second.id, { protocol: 'http', customDomains: ['app.example.com'], location: '/second', localPort: 3001 })
+
+    expect(() => controlPlane.updateTunnel(secondTunnel.id, { location: '/first' })).toThrow('already reserved')
+    const unchanged = controlPlane.getTunnel(secondTunnel.id)
+    expect(unchanged.protocol === 'http' && unchanged.location).toBe('/second')
+    controlPlane.updateTunnel(firstTunnel.id, { location: '/moved' })
+    const moved = controlPlane.updateTunnel(secondTunnel.id, { location: '/first' })
+    expect(moved.protocol === 'http' && moved.location).toBe('/first')
+    database.close()
+  })
+
+  test('normalizes typed FRP options and preserves write-only Basic Auth passwords on patch', () => {
+    const { database, controlPlane, ownerId } = fixture()
+    const client = controlPlane.createClient(ownerId, 'Advanced HTTP')
+    const tunnel = controlPlane.createTunnel(client.id, {
+      label: ' Ticket H5 ',
+      protocol: 'http',
+      customDomains: ['routes.example.com'],
+      location: '/service-a',
+      localPort: 9001,
+      options: {
+        transport: {
+          useEncryption: true,
+          useCompression: true,
+          bandwidthLimit: { value: 2, unit: 'MB', mode: 'server' },
+          proxyProtocolVersion: 'v2',
+        },
+        healthCheck: {
+          type: 'http',
+          path: '/health',
+          intervalSeconds: 10,
+          timeoutSeconds: 3,
+          maxFailed: 2,
+          headers: [{ name: 'X-Probe', value: 'ycy' }],
+        },
+        http: {
+          basicAuth: { username: 'operator', password: 'secret-value' },
+          hostHeaderRewrite: 'internal.example.com',
+          requestHeaders: [{ name: 'X-Forwarded-By', value: 'ycy' }],
+          responseHeaders: [{ name: 'X-Tunnel', value: 'ticket' }],
+        },
+      },
+    })
+
+    expect(tunnel.label).toBe('Ticket H5')
+    expect(tunnel.options).toEqual({
+      transport: {
+        useEncryption: true,
+        useCompression: true,
+        bandwidthLimit: { value: 2, unit: 'MB', mode: 'server' },
+        proxyProtocolVersion: 'v2',
+      },
+      healthCheck: {
+        type: 'http',
+        path: '/health',
+        intervalSeconds: 10,
+        timeoutSeconds: 3,
+        maxFailed: 2,
+        headers: [{ name: 'X-Probe', value: 'ycy' }],
+      },
+      http: {
+        basicAuth: { username: 'operator', password: 'secret-value' },
+        hostHeaderRewrite: 'internal.example.com',
+        requestHeaders: [{ name: 'X-Forwarded-By', value: 'ycy' }],
+        responseHeaders: [{ name: 'X-Tunnel', value: 'ticket' }],
+      },
+    })
+
+    const changed = controlPlane.updateTunnel(tunnel.id, { options: { http: { basicAuth: { username: 'renamed' } } } })
+    expect(changed.options.http?.basicAuth).toEqual({ username: 'renamed', password: 'secret-value' })
+    expect(controlPlane.updateTunnel(tunnel.id, { options: { http: { basicAuth: null } } }).options.http?.basicAuth).toBeNull()
     database.close()
   })
 

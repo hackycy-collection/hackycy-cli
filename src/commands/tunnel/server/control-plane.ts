@@ -1,8 +1,10 @@
-import type { ClientRecord, TunnelDefinition, TunnelProtocol, TunnelSnapshot } from '../types'
+import type { TunnelOptionsInput } from '../definition'
+import type { ClientRecord, HttpTunnelDefinition, PortTunnelDefinition, TunnelDefinition, TunnelOptions, TunnelProtocol, TunnelSnapshot } from '../types'
 import type { TunnelDatabase } from './database'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { isIP } from 'node:net'
 import { domainToASCII } from 'node:url'
+import { normalizeTunnelLabel, normalizeTunnelOptions } from '../definition'
 import { TunnelError } from '../types'
 
 interface ClientRow {
@@ -20,12 +22,15 @@ interface ClientRow {
 interface TunnelRow {
   id: string
   client_internal_id: string
+  label: string
   protocol: TunnelProtocol
-  hostname: string | null
+  custom_domains: string | null
+  location: string | null
   server_port: number | null
   local_host: string
   local_port: number
   enabled: number
+  options_json: string
   created_at: string
   updated_at: string
 }
@@ -39,20 +44,28 @@ export type ControlPlaneEvent
 
 export interface TunnelMutationInput {
   protocol: TunnelProtocol
+  customDomains?: string[]
   hostname?: string | null
+  location?: string | null
   serverPort?: number | null
   localHost?: string
   localPort: number
   enabled?: boolean
+  label?: string
+  options?: TunnelOptionsInput
 }
 
 export interface TunnelPatchInput {
   protocol?: TunnelProtocol
+  customDomains?: string[]
   hostname?: string | null
+  location?: string | null
   serverPort?: number | null
   localHost?: string
   localPort?: number
   enabled?: boolean
+  label?: string
+  options?: TunnelOptionsInput
 }
 
 function clientRecord(row: ClientRow): ClientRecord {
@@ -70,18 +83,32 @@ function clientRecord(row: ClientRow): ClientRecord {
 }
 
 function tunnelDefinition(row: TunnelRow): TunnelDefinition {
-  return {
+  const options = normalizeTunnelOptions(row.protocol, JSON.parse(row.options_json) as TunnelOptionsInput)
+  const base = {
     id: row.id,
-    protocol: row.protocol,
-    hostname: row.hostname,
-    serverPort: row.server_port,
+    label: row.label,
     localHost: row.local_host,
     localPort: row.local_port,
     enabled: row.enabled === 1,
+    options,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }
+  if (row.protocol === 'http') {
+    return {
+      ...base,
+      protocol: 'http',
+      customDomains: JSON.parse(row.custom_domains!) as string[],
+      location: row.location,
+      serverPort: null,
+    }
+  }
+  return { ...base, protocol: row.protocol, serverPort: row.server_port! }
 }
+
+type TunnelValues
+  = | Omit<HttpTunnelDefinition, 'id' | 'createdAt' | 'updatedAt'>
+    | Omit<PortTunnelDefinition, 'id' | 'createdAt' | 'updatedAt'>
 
 export function normalizeExactHostname(input: string): string {
   const candidate = input.trim().replace(/\.$/, '')
@@ -95,6 +122,30 @@ export function normalizeExactHostname(input: string): string {
   if (labels.length < 2 || labels.some(label => !label || label.length > 63 || !/^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?$/.test(label)))
     throw new TunnelError('INVALID_HOSTNAME', 'HTTP Tunnel hostname must contain valid DNS labels and a suffix')
   return ascii
+}
+
+export function normalizeCustomDomains(input: string[] | undefined, legacyHostname?: string | null): string[] {
+  if (input !== undefined && legacyHostname != null)
+    throw new TunnelError('INVALID_TUNNEL', 'Use customDomains instead of combining it with the legacy hostname field')
+  const values = input ?? (legacyHostname ? [legacyHostname] : [])
+  if (!values.length)
+    throw new TunnelError('INVALID_HOSTNAME', 'HTTP Tunnel requires at least one custom domain')
+  if (values.length > 32)
+    throw new TunnelError('INVALID_HOSTNAME', 'HTTP Tunnel accepts at most 32 custom domains')
+  return [...new Set(values.map(normalizeExactHostname))]
+}
+
+export function normalizeHttpLocation(input: string | null | undefined): string | null {
+  if (input == null)
+    return null
+  const location = input.trim()
+  const containsControlCharacter = [...location].some((character) => {
+    const code = character.charCodeAt(0)
+    return code < 0x20 || code === 0x7F
+  })
+  if (!location.startsWith('/') || location.length > 2048 || containsControlCharacter || /[\s\\?#]/.test(location))
+    throw new TunnelError('INVALID_HTTP_ROUTE', 'HTTP Tunnel location must be a URL path beginning with / and must not contain spaces, query strings, or fragments')
+  return location
 }
 
 function localEndpoint(localHost: string | undefined, localPort: number): { localHost: string, localPort: number } {
@@ -129,8 +180,8 @@ function now(): string {
 
 function constraintError(cause: unknown): never {
   const message = cause instanceof Error ? cause.message : String(cause)
-  if (/UNIQUE constraint failed.*hostname|tunnels_unique_http_hostname/i.test(message))
-    throw new TunnelError('RESOURCE_RESERVED', 'HTTP Tunnel hostname is already reserved')
+  if (/UNIQUE constraint failed.*tunnel_http_routes/i.test(message))
+    throw new TunnelError('RESOURCE_RESERVED', 'HTTP Tunnel custom domain and location are already reserved')
   if (/UNIQUE constraint failed.*(?:protocol|server_port)|tunnels_unique_transport_port/i.test(message))
     throw new TunnelError('RESOURCE_RESERVED', 'Port Tunnel protocol and server port are already reserved')
   throw cause
@@ -278,18 +329,33 @@ export class TunnelControlPlane {
     throw new TunnelError('PORT_POOL_EXHAUSTED', `No ${tunnelProtocol.toUpperCase()} server port is available in ${this.portPool.start}-${this.portPool.end}`)
   }
 
-  private values(input: TunnelMutationInput): Omit<TunnelDefinition, 'id' | 'createdAt' | 'updatedAt'> {
+  private reserveHttpRoutes(tunnelId: string, customDomains: string[], location: string | null): void {
+    for (const hostname of customDomains)
+      this.database.sqlite.query('INSERT INTO tunnel_http_routes(tunnel_id, hostname, location) VALUES(?, ?, ?)').run(tunnelId, hostname, location ?? '')
+  }
+
+  private values(input: TunnelMutationInput, currentOptions?: TunnelOptions): TunnelValues {
     const tunnelProtocol = protocol(input.protocol)
     const endpoint = localEndpoint(input.localHost, input.localPort)
+    const common = {
+      label: normalizeTunnelLabel(input.label),
+      ...endpoint,
+      enabled: input.enabled ?? true,
+      options: normalizeTunnelOptions(tunnelProtocol, input.options, currentOptions),
+    }
     if (tunnelProtocol === 'http') {
-      if (!input.hostname)
-        throw new TunnelError('INVALID_HOSTNAME', 'HTTP Tunnel hostname is required')
-      return { protocol: tunnelProtocol, hostname: normalizeExactHostname(input.hostname), serverPort: null, ...endpoint, enabled: input.enabled ?? true }
+      return {
+        protocol: tunnelProtocol,
+        customDomains: normalizeCustomDomains(input.customDomains, input.hostname),
+        location: normalizeHttpLocation(input.location),
+        serverPort: null,
+        ...common,
+      }
     }
     const selectedPort = input.serverPort == null ? this.availablePort(tunnelProtocol) : input.serverPort
     if (!Number.isSafeInteger(selectedPort) || selectedPort < this.portPool.start || selectedPort > this.portPool.end)
       throw new TunnelError('PORT_OUTSIDE_POOL', `Server port must be inside ${this.portPool.start}-${this.portPool.end}`)
-    return { protocol: tunnelProtocol, hostname: null, serverPort: selectedPort, ...endpoint, enabled: input.enabled ?? true }
+    return { protocol: tunnelProtocol, serverPort: selectedPort, ...common }
   }
 
   createTunnel(clientId: string, input: TunnelMutationInput): TunnelDefinition {
@@ -300,9 +366,11 @@ export class TunnelControlPlane {
       const value = this.values(input)
       try {
         this.database.sqlite.query(`
-          INSERT INTO tunnels(id, client_internal_id, protocol, hostname, server_port, local_host, local_port, enabled, created_at, updated_at)
-          VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(id, clientId, value.protocol, value.hostname, value.serverPort, value.localHost, value.localPort, value.enabled ? 1 : 0, timestamp, timestamp)
+          INSERT INTO tunnels(id, client_internal_id, label, protocol, custom_domains, location, server_port, local_host, local_port, enabled, options_json, created_at, updated_at)
+          VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        `).run(id, clientId, value.label, value.protocol, value.protocol === 'http' ? JSON.stringify(value.customDomains) : null, value.protocol === 'http' ? value.location : null, value.serverPort, value.localHost, value.localPort, value.enabled ? 1 : 0, JSON.stringify(value.options), timestamp, timestamp)
+        if (value.protocol === 'http')
+          this.reserveHttpRoutes(id, value.customDomains, value.location)
       }
       catch (cause) {
         constraintError(cause)
@@ -323,17 +391,24 @@ export class TunnelControlPlane {
       clientId = current.clientId
       const value = this.values({
         protocol: patch.protocol ?? current.protocol,
-        hostname: patch.hostname === undefined ? current.hostname : patch.hostname,
+        customDomains: patch.customDomains ?? (patch.hostname === undefined && current.protocol === 'http' ? current.customDomains : undefined),
+        hostname: patch.hostname,
+        location: patch.location === undefined && current.protocol === 'http' ? current.location : patch.location,
         serverPort: patch.serverPort === undefined ? current.serverPort : patch.serverPort,
         localHost: patch.localHost ?? current.localHost,
         localPort: patch.localPort ?? current.localPort,
         enabled: patch.enabled ?? current.enabled,
-      })
+        label: patch.label ?? current.label,
+        options: patch.options,
+      }, current.options)
       try {
         this.database.sqlite.query(`
-          UPDATE tunnels SET protocol = ?, hostname = ?, server_port = ?, local_host = ?, local_port = ?, enabled = ?, updated_at = ?
+          UPDATE tunnels SET label = ?, protocol = ?, custom_domains = ?, location = ?, server_port = ?, local_host = ?, local_port = ?, enabled = ?, options_json = ?, updated_at = ?
           WHERE id = ?
-        `).run(value.protocol, value.hostname, value.serverPort, value.localHost, value.localPort, value.enabled ? 1 : 0, now(), id)
+        `).run(value.label, value.protocol, value.protocol === 'http' ? JSON.stringify(value.customDomains) : null, value.protocol === 'http' ? value.location : null, value.serverPort, value.localHost, value.localPort, value.enabled ? 1 : 0, JSON.stringify(value.options), now(), id)
+        this.database.sqlite.query('DELETE FROM tunnel_http_routes WHERE tunnel_id = ?').run(id)
+        if (value.protocol === 'http')
+          this.reserveHttpRoutes(id, value.customDomains, value.location)
       }
       catch (cause) {
         constraintError(cause)

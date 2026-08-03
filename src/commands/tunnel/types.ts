@@ -1,4 +1,4 @@
-export const TUNNEL_PROTOCOL_VERSION = 1 as const
+export const TUNNEL_PROTOCOL_VERSION = 3 as const
 
 export type TunnelProtocol = 'http' | 'tcp' | 'udp'
 export type AccountRole = 'admin' | 'user'
@@ -28,6 +28,7 @@ export type TunnelErrorCode
     | 'INVALID_FRP_BINARY'
     | 'INVALID_FRP_VERSION'
     | 'INVALID_HOSTNAME'
+    | 'INVALID_HTTP_ROUTE'
     | 'INVALID_LOCAL_ENDPOINT'
     | 'INVALID_PROTOCOL'
     | 'INVALID_REVISION'
@@ -41,17 +42,91 @@ export type TunnelErrorCode
     | 'UNSUPPORTED_PLATFORM'
     | 'USERNAME_TAKEN'
 
-export interface TunnelDefinition {
+export interface TunnelHeader {
+  name: string
+  value: string
+}
+
+export interface TunnelBandwidthLimit {
+  value: number
+  unit: 'KB' | 'MB'
+  mode: 'client' | 'server'
+}
+
+export interface TunnelTransportOptions {
+  useEncryption: boolean
+  useCompression: boolean
+  bandwidthLimit: TunnelBandwidthLimit | null
+  proxyProtocolVersion: 'v1' | 'v2' | null
+}
+
+export interface TunnelTcpHealthCheck {
+  type: 'tcp'
+  intervalSeconds: number
+  timeoutSeconds: number
+  maxFailed: number
+}
+
+export interface TunnelHttpHealthCheck {
+  type: 'http'
+  path: string
+  intervalSeconds: number
+  timeoutSeconds: number
+  maxFailed: number
+  headers: TunnelHeader[]
+}
+
+export type TunnelHealthCheck = TunnelTcpHealthCheck | TunnelHttpHealthCheck
+
+export interface TunnelHttpOptions {
+  basicAuth: { username: string, password: string } | null
+  hostHeaderRewrite: string | null
+  requestHeaders: TunnelHeader[]
+  responseHeaders: TunnelHeader[]
+}
+
+export interface TunnelOptions {
+  transport: TunnelTransportOptions
+  healthCheck: TunnelHealthCheck | null
+  http: TunnelHttpOptions | null
+}
+
+interface TunnelDefinitionBase {
   id: string
+  label: string
   protocol: TunnelProtocol
-  hostname: string | null
-  serverPort: number | null
   localHost: string
   localPort: number
   enabled: boolean
+  options: TunnelOptions
   createdAt: string
   updatedAt: string
 }
+
+export interface HttpTunnelDefinition extends TunnelDefinitionBase {
+  protocol: 'http'
+  customDomains: string[]
+  location: string | null
+  serverPort: null
+}
+
+export interface PortTunnelDefinition extends TunnelDefinitionBase {
+  protocol: 'tcp' | 'udp'
+  serverPort: number
+}
+
+export type TunnelDefinition = HttpTunnelDefinition | PortTunnelDefinition
+
+export interface PublicTunnelHttpOptions extends Omit<TunnelHttpOptions, 'basicAuth'> {
+  basicAuth: { username: string, passwordConfigured: true } | null
+}
+
+export interface PublicTunnelOptions extends Omit<TunnelOptions, 'http'> {
+  http: PublicTunnelHttpOptions | null
+}
+
+type RedactedTunnel<T> = T extends TunnelDefinition ? Omit<T, 'options'> & { options: PublicTunnelOptions } : never
+export type PublicTunnelDefinition = RedactedTunnel<TunnelDefinition>
 
 export interface TunnelSnapshot {
   clientKey: string

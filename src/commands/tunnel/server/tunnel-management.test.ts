@@ -147,7 +147,7 @@ describe('TunnelManagement ownership', () => {
     catch (cause) {
       expect(cause).toBeInstanceOf(TunnelError)
       expect((cause as TunnelError).code).toBe('RESOURCE_RESERVED')
-      expect((cause as Error).message).toBe('HTTP Tunnel hostname is already reserved')
+      expect((cause as Error).message).toBe('HTTP Tunnel custom domain and location are already reserved')
       expect((cause as Error).message).not.toContain('alice')
     }
   })

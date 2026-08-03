@@ -103,9 +103,9 @@ async function waitFor(description: string, condition: () => Promise<boolean>, t
   throw new Error(`Timed out waiting for ${description}${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
 }
 
-async function readHttpTunnel(port: number, hostname: string): Promise<string> {
+async function readHttpTunnel(port: number, hostname: string, requestPath = '/'): Promise<string> {
   return await new Promise<string>((resolve, reject) => {
-    const request = httpRequest({ hostname: '127.0.0.1', port, path: '/', headers: { Host: hostname } }, (response) => {
+    const request = httpRequest({ hostname: '127.0.0.1', port, path: requestPath, headers: { Host: hostname } }, (response) => {
       const chunks: Uint8Array[] = []
       response.on('data', chunk => chunks.push(chunk))
       response.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
@@ -186,6 +186,8 @@ test('two trusted clients forward HTTP, TCP, and UDP through real pinned FRP pro
   const transportPort = await reserveTransportPort()
   const httpOne = createHttpServer((_request, response) => response.end('client-one'))
   const httpTwo = createHttpServer((_request, response) => response.end('client-two'))
+  const httpThree = createHttpServer((_request, response) => response.end('client-three'))
+  const httpFour = createHttpServer((_request, response) => response.end('client-four'))
   const tcpEndpoint = createTcpServer(socket => socket.on('data', data => socket.write(`tcp:${data.toString('utf8')}`)))
   const udpEndpoint = createSocket('udp4')
   const serverAbort = new AbortController()
@@ -194,7 +196,7 @@ test('two trusted clients forward HTTP, TCP, and UDP through real pinned FRP pro
   let agentFailure: unknown
 
   try {
-    await Promise.all([listen(httpOne), listen(httpTwo), listen(tcpEndpoint)])
+    await Promise.all([listen(httpOne), listen(httpTwo), listen(httpThree), listen(httpFour), listen(tcpEndpoint)])
     await new Promise<void>((resolve, reject) => udpEndpoint.once('error', reject).bind(0, '127.0.0.1', resolve))
     udpEndpoint.on('message', (message, remote) => udpEndpoint.send(Buffer.from(`udp:${message.toString('utf8')}`), remote.port, remote.address))
 
@@ -240,9 +242,11 @@ test('two trusted clients forward HTTP, TCP, and UDP through real pinned FRP pro
     const clientOne = (await api<{ client: ClientRecord }>('/api/clients', { method: 'POST', body: JSON.stringify({ remark: 'Acceptance client one' }) })).client
     const clientTwo = (await api<{ client: ClientRecord }>('/api/clients', { method: 'POST', body: JSON.stringify({ remark: 'Acceptance client two' }) })).client
 
-    await api(`/api/clients/${clientOne.id}/tunnels`, { method: 'POST', body: JSON.stringify({ protocol: 'http', hostname: 'one.acceptance.test', localPort: listeningPort(httpOne) }) })
+    await api(`/api/clients/${clientOne.id}/tunnels`, { method: 'POST', body: JSON.stringify({ label: 'service-a', protocol: 'http', customDomains: ['routes.acceptance.test', 'one.acceptance.test'], location: '/service-a', localPort: listeningPort(httpOne), options: { transport: { useEncryption: true, useCompression: true }, healthCheck: { type: 'http', path: '/health', intervalSeconds: 10, timeoutSeconds: 3, maxFailed: 3 }, http: { hostHeaderRewrite: 'internal.acceptance.test', requestHeaders: [{ name: 'X-Tunnel', value: 'acceptance' }], responseHeaders: [{ name: 'X-Verified', value: 'true' }] } } }) })
     await api(`/api/clients/${clientOne.id}/tunnels`, { method: 'POST', body: JSON.stringify({ protocol: 'tcp', serverPort: transportPort, localPort: listeningPort(tcpEndpoint) }) })
-    await api(`/api/clients/${clientTwo.id}/tunnels`, { method: 'POST', body: JSON.stringify({ protocol: 'http', hostname: 'two.acceptance.test', localPort: listeningPort(httpTwo) }) })
+    const serviceB = await api<{ tunnel: TunnelDefinition }>(`/api/clients/${clientTwo.id}/tunnels`, { method: 'POST', body: JSON.stringify({ label: 'service-b', protocol: 'http', customDomains: ['routes.acceptance.test'], location: '/service-b', localPort: listeningPort(httpTwo) }) })
+    await api(`/api/clients/${clientTwo.id}/tunnels`, { method: 'POST', body: JSON.stringify({ label: 'service-c', protocol: 'http', customDomains: ['routes.acceptance.test'], location: '/service-c', localPort: listeningPort(httpThree) }) })
+    await api(`/api/clients/${clientTwo.id}/tunnels`, { method: 'POST', body: JSON.stringify({ label: 'service-d', protocol: 'http', customDomains: ['routes.acceptance.test'], location: '/service-d', localPort: listeningPort(httpFour) }) })
     await api(`/api/clients/${clientTwo.id}/tunnels`, { method: 'POST', body: JSON.stringify({ protocol: 'udp', serverPort: transportPort, localPort: (udpEndpoint.address() as AddressInfo).port }) })
 
     agents.push(
@@ -257,17 +261,25 @@ test('two trusted clients forward HTTP, TCP, and UDP through real pinned FRP pro
       return [one, two].every(detail => detail.client.runtime.processState === 'running' && detail.tunnels.every(tunnel => tunnel.state === 'Applied'))
     })
 
-    await waitFor('the first HTTP Tunnel', async () => await readHttpTunnel(httpPort, 'one.acceptance.test') === 'client-one')
-    await waitFor('the second HTTP Tunnel', async () => await readHttpTunnel(httpPort, 'two.acceptance.test') === 'client-two')
+    await waitFor('the first HTTP Tunnel', async () => await readHttpTunnel(httpPort, 'routes.acceptance.test', '/service-a/status') === 'client-one')
+    await waitFor('the second HTTP Tunnel', async () => await readHttpTunnel(httpPort, 'routes.acceptance.test', '/service-b/status') === 'client-two')
+    await waitFor('the third HTTP Tunnel', async () => await readHttpTunnel(httpPort, 'routes.acceptance.test', '/service-c/status') === 'client-three')
+    await waitFor('the fourth HTTP Tunnel', async () => await readHttpTunnel(httpPort, 'routes.acceptance.test', '/service-d/status') === 'client-four')
+    await waitFor('the HTTP custom-domain alias', async () => await readHttpTunnel(httpPort, 'one.acceptance.test', '/service-a/status') === 'client-one')
     await waitFor('the TCP Tunnel', async () => await readTcpTunnel(transportPort, 'payload') === 'tcp:payload')
     await waitFor('the UDP Tunnel', async () => await readUdpTunnel(transportPort, 'payload') === 'udp:payload')
+
+    await api(`/api/tunnels/${serviceB.tunnel.id}`, { method: 'PATCH', body: JSON.stringify({ enabled: false }) })
+    await waitFor('the independently disabled second route', async () => await readHttpTunnel(httpPort, 'routes.acceptance.test', '/service-b/status') !== 'client-two')
+    await waitFor('the third route after the second is disabled', async () => await readHttpTunnel(httpPort, 'routes.acceptance.test', '/service-c/status') === 'client-three')
+    await waitFor('the fourth route after the second is disabled', async () => await readHttpTunnel(httpPort, 'routes.acceptance.test', '/service-d/status') === 'client-four')
   }
   finally {
     await Promise.allSettled(agents.map(({ agent }) => agent.stop()))
     const agentResults = await Promise.all(agents.map(agent => agent.finished))
     serverAbort.abort()
     await serverFinished?.catch(() => {})
-    await Promise.allSettled([close(httpOne), close(httpTwo), close(tcpEndpoint)])
+    await Promise.allSettled([close(httpOne), close(httpTwo), close(httpThree), close(httpFour), close(tcpEndpoint)])
     await closeUdp(udpEndpoint)
     await rm(root, { recursive: true, force: true })
     agentFailure = agentResults.find(result => result.error)?.error

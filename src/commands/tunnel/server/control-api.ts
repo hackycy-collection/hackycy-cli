@@ -21,13 +21,39 @@ const accountRoleSchema = z.object({ role: z.enum(['admin', 'user']) }).strict()
 const accountPasswordSchema = z.object({ password: z.string() }).strict()
 const clientCreateSchema = z.object({ remark: z.string().optional() }).strict()
 const clientRemarkSchema = z.object({ remark: z.string() }).strict()
+const tunnelHeaderSchema = z.object({ name: z.string(), value: z.string() }).strict()
+const tunnelTransportSchema = z.object({
+  useEncryption: z.boolean().optional(),
+  useCompression: z.boolean().optional(),
+  bandwidthLimit: z.object({ value: z.number(), unit: z.enum(['KB', 'MB']), mode: z.enum(['client', 'server']) }).strict().nullable().optional(),
+  proxyProtocolVersion: z.enum(['v1', 'v2']).nullable().optional(),
+}).strict()
+const tunnelHealthCheckSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('tcp'), intervalSeconds: z.number().int(), timeoutSeconds: z.number().int(), maxFailed: z.number().int() }).strict(),
+  z.object({ type: z.literal('http'), path: z.string(), intervalSeconds: z.number().int(), timeoutSeconds: z.number().int(), maxFailed: z.number().int(), headers: z.array(tunnelHeaderSchema).optional() }).strict(),
+])
+const tunnelHttpOptionsSchema = z.object({
+  basicAuth: z.object({ username: z.string(), password: z.string().optional() }).strict().nullable().optional(),
+  hostHeaderRewrite: z.string().nullable().optional(),
+  requestHeaders: z.array(tunnelHeaderSchema).optional(),
+  responseHeaders: z.array(tunnelHeaderSchema).optional(),
+}).strict()
+const tunnelOptionsSchema = z.object({
+  transport: tunnelTransportSchema.optional(),
+  healthCheck: tunnelHealthCheckSchema.nullable().optional(),
+  http: tunnelHttpOptionsSchema.nullable().optional(),
+}).strict()
 const tunnelSchema = z.object({
+  label: z.string().optional(),
   protocol: z.enum(['http', 'tcp', 'udp']),
+  customDomains: z.array(z.string()).optional(),
   hostname: z.string().nullable().optional(),
+  location: z.string().nullable().optional(),
   serverPort: z.number().int().nullable().optional(),
   localHost: z.string().optional(),
   localPort: z.number().int(),
   enabled: z.boolean().optional(),
+  options: tunnelOptionsSchema.optional(),
 }).strict()
 const tunnelPatchSchema = tunnelSchema.partial()
 
@@ -53,6 +79,7 @@ const TUNNEL_ERROR_STATUS = {
   INVALID_FRP_BINARY: 500,
   INVALID_FRP_VERSION: 500,
   INVALID_HOSTNAME: 400,
+  INVALID_HTTP_ROUTE: 400,
   INVALID_LOCAL_ENDPOINT: 400,
   INVALID_PROTOCOL: 400,
   INVALID_REVISION: 400,

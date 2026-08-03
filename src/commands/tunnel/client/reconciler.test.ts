@@ -17,7 +17,7 @@ function snapshot(revision: number, localPort: number, enabled = true): TunnelSn
   return {
     clientKey: 'client',
     revision,
-    tunnels: [{ id: 'tunnel', protocol: 'http', hostname: 'app.example.com', serverPort: null, localHost: '127.0.0.1', localPort, enabled, createdAt: '', updatedAt: '' }],
+    tunnels: [{ id: 'tunnel', label: '', protocol: 'http', customDomains: ['app.example.com'], location: '/app', serverPort: null, localHost: '127.0.0.1', localPort, enabled, options: { transport: { useEncryption: false, useCompression: false, bandwidthLimit: null, proxyProtocolVersion: null }, healthCheck: null, http: { basicAuth: null, hostHeaderRewrite: null, requestHeaders: [], responseHeaders: [] } }, createdAt: '', updatedAt: '' }],
   }
 }
 
