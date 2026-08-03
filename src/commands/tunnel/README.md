@@ -183,7 +183,7 @@ The Deployment Administrator is a stable account configured through environment 
 | Username | `YCY_TUNNEL_ADMIN_USER` | `admin` |
 | Password | `YCY_TUNNEL_ADMIN_PASSWORD` | required |
 
-Account usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens and compare case-insensitively. Passwords contain 8-256 characters. The UI displays deployment settings but cannot mutate them. Changing a listener, port pool, Deployment Administrator credential, data directory, or advertised endpoint requires restarting the ycy supervisor through Docker or the host service manager.
+Account usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens and compare case-insensitively. Passwords contain 5-256 characters. The UI displays deployment settings but cannot mutate them. Changing a listener, port pool, Deployment Administrator credential, data directory, or advertised endpoint requires restarting the ycy supervisor through Docker or the host service manager.
 
 ### Client
 

@@ -126,11 +126,11 @@ function PasswordEditor({ onClose, onChanged }: { onClose: () => void, onChanged
         </label>
         <label>
           New password
-          <input name="newPassword" type="password" minLength={8} maxLength={256} autoComplete="new-password" required />
+          <input name="newPassword" type="password" minLength={5} maxLength={256} autoComplete="new-password" required />
         </label>
         <label>
           Confirm password
-          <input name="confirmation" type="password" minLength={8} maxLength={256} autoComplete="new-password" required />
+          <input name="confirmation" type="password" minLength={5} maxLength={256} autoComplete="new-password" required />
         </label>
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="modal-actions">

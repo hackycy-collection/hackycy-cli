@@ -59,7 +59,7 @@ function AccountEditor({ account, onClose, onSaved }: { account?: AccountView, o
             </label>
             <label>
               Password
-              <input value={password} type="password" minLength={8} maxLength={256} autoComplete="new-password" required onChange={event => setPassword(event.target.value)} />
+              <input value={password} type="password" minLength={5} maxLength={256} autoComplete="new-password" required onChange={event => setPassword(event.target.value)} />
             </label>
           </>
         )}
@@ -109,7 +109,7 @@ function PasswordReset({ account, onClose, onSaved }: { account: AccountView, on
         </div>
         <label>
           New password
-          <input value={password} type="password" minLength={8} maxLength={256} autoComplete="new-password" required autoFocus onChange={event => setPassword(event.target.value)} />
+          <input value={password} type="password" minLength={5} maxLength={256} autoComplete="new-password" required autoFocus onChange={event => setPassword(event.target.value)} />
         </label>
         {error && <p className="form-error" role="alert">{error}</p>}
         <div className="modal-actions">

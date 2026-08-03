@@ -39,7 +39,7 @@ afterEach(async () => {
   }
 })
 
-async function fixture(options: { sessionLifetimeMs?: number } = {}): Promise<Fixture> {
+async function fixture(options: { sessionLifetimeMs?: number, adminPassword?: string } = {}): Promise<Fixture> {
   const database = new TunnelDatabase(':memory:')
   const controlPlane = new TunnelControlPlane(database, { start: 20000, end: 20002 })
   const gateway = new AgentGateway(controlPlane, 7000)
@@ -59,7 +59,7 @@ async function fixture(options: { sessionLifetimeMs?: number } = {}): Promise<Fi
       portRange: { start: 20000, end: 20002 },
       dataDir: '/data',
       adminUser: 'admin',
-      adminPassword: 'environment-secret',
+      adminPassword: options.adminPassword ?? 'environment-secret',
     },
   })
   const value = { database, gateway, frps, management }
@@ -154,6 +154,12 @@ describe('TunnelManagement ownership', () => {
 })
 
 describe('TunnelManagement accounts and sessions', () => {
+  test('accepts a five-character environment administrator password', async () => {
+    const { management } = await fixture({ adminPassword: '12345' })
+
+    expect((await management.signIn({ username: 'admin', password: '12345' })).account.username).toBe('admin')
+  })
+
   test('actively expires an idle session and its event stream', async () => {
     const { management } = await fixture({ sessionLifetimeMs: 50 })
     const grant = await management.signIn({ username: 'admin', password: 'environment-secret' })
@@ -181,6 +187,8 @@ describe('TunnelManagement accounts and sessions', () => {
 
     expect(() => alice.administration()).toThrow('Administrator role is required')
     expect((await administration.createAccount({ username: '-operator', password: 'operator-secret' })).username).toBe('-operator')
+    await expect(administration.createAccount({ username: 'short-password', password: 'tiny' })).rejects.toThrow('Password must contain 5-256 characters')
+    expect((await administration.createAccount({ username: 'minimum-password', password: '12345' })).username).toBe('minimum-password')
     await expect(administration.createAccount({ username: ' alice ', password: 'another-secret' })).rejects.toThrow('Username must contain')
     await expect(administration.createAccount({ username: 'Alice', password: 'another-secret' })).rejects.toThrow('already in use')
     expect(() => administration.changeAccountRole(environment.account.id, 'user')).toThrow('managed by environment')
@@ -201,17 +209,19 @@ describe('TunnelManagement accounts and sessions', () => {
 
     const bobGrant = await management.signIn({ username: 'bob', password: 'bob-secret' })
     const currentBob = management.resume(bobGrant.token)!
+    await expect(currentBob.changePassword({ currentPassword: 'bob-secret', newPassword: 'tiny' })).rejects.toThrow('Password must contain 5-256 characters')
     await expect(currentBob.changePassword({ currentPassword: 'wrong-secret', newPassword: 'bob-replacement' })).rejects.toThrow('Current password is invalid')
-    await currentBob.changePassword({ currentPassword: 'bob-secret', newPassword: 'bob-replacement' })
+    await currentBob.changePassword({ currentPassword: 'bob-secret', newPassword: '12345' })
     expect(management.resume(bobGrant.token)).toBeUndefined()
     await expect(management.signIn({ username: 'bob', password: 'bob-secret' })).rejects.toThrow('credentials are invalid')
-    expect((await management.signIn({ username: 'bob', password: 'bob-replacement' })).account.username).toBe('bob')
-    const resetGrant = await management.signIn({ username: 'bob', password: 'bob-replacement' })
+    expect((await management.signIn({ username: 'bob', password: '12345' })).account.username).toBe('bob')
+    const resetGrant = await management.signIn({ username: 'bob', password: '12345' })
     const resetBob = management.resume(resetGrant.token)!
-    await administration.resetAccountPassword(resetBob.account.id, 'bob-reset-secret')
+    await expect(administration.resetAccountPassword(resetBob.account.id, 'tiny')).rejects.toThrow('Password must contain 5-256 characters')
+    await administration.resetAccountPassword(resetBob.account.id, 'abcde')
     expect(management.resume(resetGrant.token)).toBeUndefined()
-    await expect(management.signIn({ username: 'bob', password: 'bob-replacement' })).rejects.toThrow('credentials are invalid')
-    expect((await management.signIn({ username: 'bob', password: 'bob-reset-secret' })).account.username).toBe('bob')
+    await expect(management.signIn({ username: 'bob', password: '12345' })).rejects.toThrow('credentials are invalid')
+    expect((await management.signIn({ username: 'bob', password: 'abcde' })).account.username).toBe('bob')
 
     administration.deleteAccount(aliceAccount.id)
     expect(management.resume(promotedGrant.token)).toBeUndefined()

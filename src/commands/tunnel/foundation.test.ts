@@ -45,7 +45,8 @@ describe('tunnel configuration', () => {
     expect(() => normalizeControlPlaneUrl('ftp://example.com')).toThrow('HTTP or HTTPS')
     const environment = { YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret' }
     expect(() => resolveServerConfig({}, {})).toThrow('YCY_TUNNEL_ADMIN_PASSWORD')
-    expect(() => resolveServerConfig({}, { YCY_TUNNEL_ADMIN_PASSWORD: 'short' })).toThrow('8-256')
+    expect(() => resolveServerConfig({}, { YCY_TUNNEL_ADMIN_PASSWORD: 'tiny' })).toThrow('5-256')
+    expect(resolveServerConfig({}, { YCY_TUNNEL_ADMIN_PASSWORD: '12345' }).adminPassword).toBe('12345')
     expect(() => resolveServerConfig({}, { YCY_TUNNEL_ADMIN_USER: ' admin ', YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret' })).toThrow('1-64')
     expect(() => resolveServerConfig({ controlPort: 7000, frpPort: 7000 }, environment)).toThrow('must be distinct')
     expect(() => resolveServerConfig({ controlPort: 20000 }, environment)).toThrow('must not include')

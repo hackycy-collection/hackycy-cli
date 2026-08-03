@@ -78,8 +78,8 @@ function username(value: string): { display: string, key: string } {
 }
 
 function validPassword(value: string): void {
-  if (value.length < 8 || value.length > 256)
-    throw new TunnelError('INVALID_ACCOUNT', 'Password must contain 8-256 characters')
+  if (value.length < 5 || value.length > 256)
+    throw new TunnelError('INVALID_ACCOUNT', 'Password must contain 5-256 characters')
 }
 
 function accountRecord(row: AccountRow): CurrentAccount {

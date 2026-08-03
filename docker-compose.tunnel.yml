@@ -25,7 +25,7 @@ services:
       # Usernames accept 1-64 ASCII letters, numbers, dots, underscores, or hyphens.
       YCY_TUNNEL_ADMIN_USER: admin
 
-      # Required Deployment Administrator password (8-256 characters). Compose
+      # Required Deployment Administrator password (5-256 characters). Compose
       # refuses to start when YCY_TUNNEL_ADMIN_PASSWORD is unset; keep its value
       # in an untracked .env file or the invoking shell, never in this file.
       YCY_TUNNEL_ADMIN_PASSWORD: '${YCY_TUNNEL_ADMIN_PASSWORD:?required}'

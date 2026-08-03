@@ -88,8 +88,8 @@ export function resolveServerConfig(input: ServerOptionInput, env: NodeJS.Proces
   if (!/^[\w.-]{1,64}$/.test(adminUser))
     throw new TunnelError('INVALID_CONFIG', 'Environment administrator username must contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens')
   const adminPassword = env.YCY_TUNNEL_ADMIN_PASSWORD
-  if (!adminPassword || adminPassword.length < 8 || adminPassword.length > 256)
-    throw new TunnelError('INVALID_CONFIG', 'YCY_TUNNEL_ADMIN_PASSWORD must contain 8-256 characters')
+  if (!adminPassword || adminPassword.length < 5 || adminPassword.length > 256)
+    throw new TunnelError('INVALID_CONFIG', 'YCY_TUNNEL_ADMIN_PASSWORD must contain 5-256 characters')
   const config: ServerTunnelConfig = {
     address,
     controlPort: port(option(input.controlPort, env, 'YCY_TUNNEL_CONTROL_PORT', 7500), 'Control port'),

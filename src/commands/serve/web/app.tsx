@@ -171,7 +171,7 @@ function Login({ onLogin }: { onLogin: (session: Extract<SessionState, { authent
           </label>
           <label className="login-field">
             <span>Password</span>
-            <input name="password" type="password" autoComplete="current-password" minLength={8} maxLength={256} required />
+            <input name="password" type="password" autoComplete="current-password" minLength={5} maxLength={256} required />
           </label>
           {error && <p role="alert" className="login-error">{error}</p>}
           <Button className="login-submit" type="submit" disabled={submitting}>

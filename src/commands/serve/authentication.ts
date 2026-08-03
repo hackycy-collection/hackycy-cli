@@ -41,8 +41,8 @@ function parseAccount(specification: string): { username: string, key: string, p
     throw new Error('Username must contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens')
 
   const password = specification.slice(separator + 1)
-  if (password.length < 8 || password.length > 256)
-    throw new Error('Password must contain 8-256 characters')
+  if (password.length < 5 || password.length > 256)
+    throw new Error('Password must contain 5-256 characters')
 
   return { username, key: username.toLowerCase(), password }
 }

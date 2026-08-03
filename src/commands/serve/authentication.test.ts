@@ -12,10 +12,17 @@ describe('ServeAuthentication', () => {
     authentication.close()
   })
 
+  test('accepts a five-character account password', async () => {
+    const authentication = (await createServeAuthentication(['alice:12345']))!
+
+    expect((await authentication.signIn({ username: 'alice', password: '12345' }))?.account).toEqual({ username: 'alice' })
+    authentication.close()
+  })
+
   test('rejects invalid or duplicate account specifications before startup', async () => {
     await expect(createServeAuthentication(['alice-password123'])).rejects.toThrow('must use')
     await expect(createServeAuthentication(['bad name:password123'])).rejects.toThrow('Username must contain')
-    await expect(createServeAuthentication(['alice:short'])).rejects.toThrow('Password must contain')
+    await expect(createServeAuthentication(['alice:tiny'])).rejects.toThrow('Password must contain 5-256 characters')
     await expect(createServeAuthentication(['Alice:password123', 'alice:password456'])).rejects.toThrow('specified more than once')
   })
 

@@ -25,7 +25,7 @@ Passing one or more accounts enables login mode:
 ycy serve --account 'alice:password123' --account 'bob:another-password' ./shared
 ```
 
-The first colon separates the username from the password, so the password may contain additional colons. Usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens and are matched without case sensitivity. Passwords contain 8-256 characters. Duplicate usernames stop startup. Account specifications are process arguments and may be visible in shell history and process inspection tools.
+The first colon separates the username from the password, so the password may contain additional colons. Usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens and are matched without case sensitivity. Passwords contain 5-256 characters. Duplicate usernames stop startup. Account specifications are process arguments and may be visible in shell history and process inspection tools.
 
 ## Architecture
 
