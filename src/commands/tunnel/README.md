@@ -339,8 +339,6 @@ tunnel_http_routes
 
 SQLite indexes enforce account username and client owner lookups, normalized HTTP domain-location uniqueness, and `(protocol, server_port)` uniqueness. Type-specific checks prevent an HTTP row from carrying a server port or a TCP/UDP row from carrying Custom Domains. Tunnel mutations, route reservations, and revision increments are atomic. Rotation marks revocation pending until an agent authenticates with the replacement token.
 
-Schema 3 databases migrate atomically to schema 5 as one-domain, all-path Tunnel Definitions. Schema 4 databases migrate by splitting every stored Location into its own independently enabled Tunnel Definition while preserving Custom Domain aliases, endpoint, timestamps, and enabled state. Each affected client receives one new Desired Revision.
-
 Connection presence, child-process state, reconnect backoff, and the latest structured runtime error stay in bounded process memory. The server does not store metrics, traffic samples, complete logs, or revision history.
 
 The client state directory may contain a last-applied snapshot and generated FRP configuration for rollback, but neither file authorizes a cold start. Every new ycy client process must authenticate and receive the current Desired Revision before starting frpc.
@@ -580,7 +578,7 @@ src/commands/tunnel/
     supervisor.ts          Serialized zero-or-one child state machine
   server/
     run.ts                 Server composition and signal handling
-    database.ts            SQLite schema, schema-3/4 migrations, and transactions
+    database.ts            SQLite schema and transactions
     control-plane.ts       Client/tunnel operations and revision truth
     agent-gateway.ts       WebSocket sessions and snapshot delivery
     tunnel-management.ts   Account sessions, authorization, ownership, projections, and administration
@@ -619,7 +617,7 @@ Foundation, server, native client, UI, and distribution remain independently tes
 Required automated coverage:
 
 - Configuration precedence, secret files, Custom Domain and Location normalization, port ranges, and platform paths.
-- SQLite account/ownership constraints, schema-3/4 migration, incompatible-schema rejection, cascade deletion, token rotation, resource reservation, automatic port allocation, and atomic revision increments.
+- SQLite account/ownership constraints, cascade deletion, token rotation, resource reservation, automatic port allocation, and atomic revision increments.
 - Single-instance acquisition, stale-lock handling, one-child ownership, manual stop, backoff, and deterministic-error suppression.
 - Binary artifact selection, SHA-256 rejection, atomic installation, manual-download diagnostics, and reported-version validation.
 - Exact generated TOML for HTTP/TCP/UDP, disabled tunnels, stable names, and server port ranges.
