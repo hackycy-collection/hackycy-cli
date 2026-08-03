@@ -22,6 +22,15 @@ describe('serve command registration', () => {
     expect(command.getOptionValue('manage')).toBe(false)
   })
 
+  test('keeps executable HTML opt-in', () => {
+    const program = new Command()
+    register(program)
+
+    const command = program.commands[0]!
+    expect(command.options.map(option => option.long)).toContain('--unsafe-html')
+    expect(command.getOptionValue('unsafeHtml')).toBe(false)
+  })
+
   test('collects repeated accounts without enabling authentication by default', () => {
     const program = new Command()
     register(program)

@@ -203,14 +203,17 @@ function inlineMimeType(mimeType: string): boolean {
   return type === 'application' && ['pdf', 'json', 'xml', 'javascript', 'xhtml+xml', 'ld+json'].includes(subtype)
 }
 
-function requiresDocumentSandbox(mimeType: string): boolean {
+function requiresDocumentSandbox(mimeType: string, unsafeHtml: boolean): boolean {
+  const baseMimeType = mimeType.split(';')[0]!.trim().toLowerCase()
+  if (unsafeHtml && ['application/xhtml+xml', 'text/html'].includes(baseMimeType))
+    return false
   return [
     'application/xhtml+xml',
     'application/xml',
     'image/svg+xml',
     'text/html',
     'text/xml',
-  ].includes(mimeType.split(';')[0]!.trim().toLowerCase())
+  ].includes(baseMimeType)
 }
 
 function contentDisposition(filename: string, inline: boolean): string {
@@ -262,7 +265,7 @@ function rangeAllowed(request: Request, etag: string, modifiedAt: Date): boolean
   return Number.isFinite(timestamp) && modifiedAt.getTime() < timestamp + 1000
 }
 
-async function serveOriginalFile(request: Request, workspace: ServeWorkspace, corsEnabled: boolean): Promise<Response> {
+async function serveOriginalFile(request: Request, workspace: ServeWorkspace, corsEnabled: boolean, unsafeHtml: boolean): Promise<Response> {
   if (request.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
@@ -304,7 +307,7 @@ async function serveOriginalFile(request: Request, workspace: ServeWorkspace, co
     })
     if (corsEnabled)
       headers.set('Access-Control-Allow-Origin', '*')
-    if (requiresDocumentSandbox(file.mimeType))
+    if (requiresDocumentSandbox(file.mimeType, unsafeHtml))
       headers.set('Content-Security-Policy', ACTIVE_FILE_CONTENT_SECURITY_POLICY)
 
     if (isNotModified(request, etag, file.modifiedAt)) {
@@ -389,6 +392,7 @@ export function startServeHttpServer(options: {
   address: string
   port: number
   managementEnabled: boolean
+  unsafeHtml?: boolean
   authentication?: ServeAuthentication
   thumbnailService?: ThumbnailService
   downloadManager?: ServeDownloadManager
@@ -816,7 +820,7 @@ export function startServeHttpServer(options: {
         }
       }
       if (url.pathname === '/files' || url.pathname.startsWith('/files/'))
-        return serveOriginalFile(request, options.workspace, !options.authentication)
+        return serveOriginalFile(request, options.workspace, !options.authentication, options.unsafeHtml === true)
       if (url.pathname.startsWith('/thumbnails/'))
         return serveThumbnail(request, thumbnails)
       return error('NOT_FOUND', 'Route not found', 404)

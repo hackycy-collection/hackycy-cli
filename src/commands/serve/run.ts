@@ -61,6 +61,7 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
       address: options.address,
       port: options.port,
       managementEnabled: options.manage,
+      unsafeHtml: options.unsafeHtml,
       authentication,
     })
   }
@@ -75,15 +76,9 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
   messages.push(`  ${ansis.dim('Directory'.padEnd(9))} ${ansis.dim(path.resolve(options.directory))}`)
   messages.push(`  ${ansis.dim('Bind'.padEnd(9))} ${ansis.dim(`${options.address}:${server.url.port}`)}`)
   messages.push(`  ${ansis.dim('Management'.padEnd(11))} ${options.manage ? ansis.green('enabled') : ansis.dim('disabled')}`)
+  messages.push(`  ${ansis.dim('HTML execution'.padEnd(15))} ${options.unsafeHtml ? ansis.yellow('enabled') : ansis.dim('disabled')}`)
   messages.push(`  ${ansis.dim('Authentication'.padEnd(15))} ${authentication ? ansis.green(`enabled (${authentication.accountCount} ${authentication.accountCount === 1 ? 'account' : 'accounts'})`) : ansis.dim('disabled')}`)
   note(messages.join('\n'), 'Server running')
-
-  if (options.manage && !authentication && !['127.0.0.1', '::1', 'localhost'].includes(options.address)) {
-    note(
-      ansis.yellow('Anyone who can reach this server can upload, remotely download, extract archives, move, and permanently delete files in the served directory.'),
-      'Trusted networks only',
-    )
-  }
 
   let stopping = false
   const stop = async (): Promise<void> => {

@@ -43,6 +43,7 @@ async function startFixtureServer(
   createDownloadManager?: (workspace: Awaited<ReturnType<typeof createServeWorkspace>>) => ServeDownloadManager,
   authentication?: Awaited<ReturnType<typeof createServeAuthentication>>,
   createArchiveExtractionManager?: (workspace: Awaited<ReturnType<typeof createServeWorkspace>>) => ServeExtractionManager,
+  unsafeHtml = false,
 ): Promise<{ server: RunningServeServer, root: string }> {
   const root = await mkdtemp(path.join(tmpdir(), 'ycy-serve-http-'))
   temporaryDirectories.push(root)
@@ -53,6 +54,7 @@ async function startFixtureServer(
     address: '127.0.0.1',
     port: 0,
     managementEnabled,
+    unsafeHtml,
     authentication,
     thumbnailService: createThumbnailService?.(workspace),
     downloadManager: createDownloadManager?.(workspace),
@@ -367,6 +369,30 @@ describe('ServeHttpServer', () => {
     expect(directory.headers.get('location')).toBe('/')
     expect(html.headers.get('content-security-policy')).toContain('sandbox')
     expect(svg.headers.get('content-security-policy')).toContain('sandbox')
+  })
+
+  test('allows executable HTML only when unsafe mode is enabled', async () => {
+    const { server, root } = await startFixtureServer(false, undefined, undefined, undefined, undefined, true)
+    await Promise.all([
+      writeFile(path.join(root, 'page.html'), '<script>window.ready = true</script>'),
+      writeFile(path.join(root, 'page.xhtml'), '<html xmlns="http://www.w3.org/1999/xhtml"><script>window.ready = true</script></html>'),
+      writeFile(path.join(root, 'vector.svg'), '<svg xmlns="http://www.w3.org/2000/svg"><script>window.ready = true</script></svg>'),
+      writeFile(path.join(root, 'document.xml'), '<document><script>window.ready = true</script></document>'),
+    ])
+
+    const html = await fetch(new URL('/files/page.html', server.url))
+    const xhtml = await fetch(new URL('/files/page.xhtml', server.url))
+    const svg = await fetch(new URL('/files/vector.svg', server.url))
+    const xml = await fetch(new URL('/files/document.xml', server.url))
+
+    expect(html.status).toBe(200)
+    expect(xhtml.status).toBe(200)
+    expect(await html.text()).toContain('window.ready')
+    expect(await xhtml.text()).toContain('window.ready')
+    expect(html.headers.get('content-security-policy')).toBeNull()
+    expect(xhtml.headers.get('content-security-policy')).toBeNull()
+    expect(svg.headers.get('content-security-policy')).toContain('sandbox')
+    expect(xml.headers.get('content-security-policy')).toContain('sandbox')
   })
 
   test('supports conditional requests and one byte range', async () => {
