@@ -26,21 +26,28 @@ export interface SevenZipArchiveExtractorOptions {
   statfs?: (target: string) => Promise<StatsFs>
 }
 
-function archiveFailure(output: string): ServeWorkspaceError {
+function archiveFailure(exitCode: number, output: string): ServeWorkspaceError {
   const normalized = output.toLowerCase()
+  const options = { cause: new Error(`7-Zip exited with code ${exitCode}${output ? `\n${output}` : ''}`) }
   if (normalized.includes('wrong password') || normalized.includes('enter password') || normalized.includes('encrypted'))
-    return new ServeWorkspaceError('ENCRYPTED_ARCHIVE', 'Encrypted archives are not supported')
-  return new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive is invalid, damaged, or unsupported')
-}
-
-function validEntryPath(entryPath: string): boolean {
-  const containsControlCharacter = [...entryPath].some((character) => {
-    const code = character.charCodeAt(0)
-    return code <= 0x1F || code === 0x7F
-  })
-  if (!entryPath || containsControlCharacter || entryPath.includes('\\') || entryPath.startsWith('/') || /^[a-z]:/i.test(entryPath))
-    return false
-  return !entryPath.split('/').some(segment => segment === '.' || segment === '..')
+    return new ServeWorkspaceError('ENCRYPTED_ARCHIVE', 'Encrypted archives are not supported', options)
+  if (/no space left|not enough space on the disk|disk full/.test(normalized))
+    return new ServeWorkspaceError('INSUFFICIENT_SPACE', 'Archive extraction ran out of disk space', options)
+  if (/dangerous link|incorrect link path|empty link/.test(normalized))
+    return new ServeWorkspaceError('UNAVAILABLE', '7-Zip rejected an unsafe symbolic link', options)
+  if (/crc failed|data error|headers error|unexpected end|is not archive|can not open .* as \[.*\] archive|unsupported method/.test(normalized))
+    return new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive is invalid, damaged, or unsupported', options)
+  if (/system error|i\/o error|input\/output error|permission denied|access is denied/.test(normalized))
+    return new ServeWorkspaceError('UNAVAILABLE', '7-Zip could not access the archive or destination', options)
+  if (exitCode === 1)
+    return new ServeWorkspaceError('UNAVAILABLE', '7-Zip reported warnings; extracted output was not published', options)
+  if (exitCode === 7)
+    return new ServeWorkspaceError('UNAVAILABLE', '7-Zip command invocation failed', options)
+  if (exitCode === 8)
+    return new ServeWorkspaceError('UNAVAILABLE', '7-Zip ran out of memory', options)
+  if (exitCode === 255)
+    return new ServeWorkspaceError('UNAVAILABLE', '7-Zip was interrupted', options)
+  return new ServeWorkspaceError('UNAVAILABLE', '7-Zip could not process the archive', options)
 }
 
 async function readError(stream: ReadableStream<Uint8Array>): Promise<string> {
@@ -67,10 +74,6 @@ async function inspectArchive(executable: string, source: string, signal?: Abort
     if (!current.Path) {
       current = {}
       return
-    }
-    if (!validEntryPath(current.Path)) {
-      child.kill()
-      throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive contains an unsafe entry path')
     }
     if (current.Encrypted === '+') {
       child.kill()
@@ -138,7 +141,7 @@ async function inspectArchive(executable: string, source: string, signal?: Abort
     const [exitCode, errorOutput] = await Promise.all([child.exited, stderr, stdout]).then(values => [values[0], values[1]] as const)
     signal?.throwIfAborted()
     if (exitCode !== 0)
-      throw archiveFailure(errorOutput)
+      throw archiveFailure(exitCode, errorOutput)
     return { uncompressedBytes, entryCount }
   }
   finally {
@@ -173,7 +176,6 @@ async function extractWithProgress(
     executable,
     'x',
     '-y',
-    '-snld0',
     '-sccUTF-8',
     '-bso0',
     '-bse2',
@@ -215,7 +217,7 @@ async function extractWithProgress(
     const [exitCode, errorOutput] = await Promise.all([child.exited, stderr, progress]).then(values => [values[0], values[1]] as const)
     signal?.throwIfAborted()
     if (exitCode !== 0)
-      throw archiveFailure(errorOutput)
+      throw archiveFailure(exitCode, errorOutput)
     onProgress?.(Math.round(start + span))
   }
   finally {

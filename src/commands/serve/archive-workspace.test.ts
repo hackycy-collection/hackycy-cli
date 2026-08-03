@@ -83,6 +83,18 @@ describe('ServeWorkspace archive publication', () => {
     expect((await readdir(root)).sort()).toEqual(['backup.tar.gz'])
   })
 
+  test('rejects broken symbolic links before publication', async () => {
+    const { root, workspace } = await fixture({
+      async extract(_source, destination) {
+        await symlink('missing.txt', path.join(destination, 'broken'))
+        return { uncompressedBytes: 0, entryCount: 1 }
+      },
+    })
+
+    await expect(workspace.extractArchive('backup.tar.gz')).rejects.toMatchObject({ code: 'INVALID_ARCHIVE' })
+    expect((await readdir(root)).sort()).toEqual(['backup.tar.gz'])
+  })
+
   test('rejects special filesystem entries before publication', async () => {
     if (process.platform === 'win32')
       return

@@ -189,8 +189,9 @@ export class ServeWorkspaceError extends Error {
   constructor(
     readonly code: ServeErrorCode,
     message: string,
+    options?: ErrorOptions,
   ) {
-    super(message)
+    super(message, options)
     this.name = 'ServeWorkspaceError'
   }
 }

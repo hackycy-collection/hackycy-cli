@@ -37,6 +37,21 @@ async function runSevenZip(arguments_: string[], cwd: string): Promise<void> {
     throw new Error(error || `7-Zip exited with ${exitCode}`)
 }
 
+async function fakeSevenZip(root: string, exitCode: number, stderr: string): Promise<string> {
+  const executable = path.join(root, 'fake-7z')
+  await writeFile(executable, [
+    '#!/usr/bin/env bun',
+    'if (Bun.argv[2] === "l") {',
+    '  console.log("Path = archive.zip\\nType = zip\\n\\n----------\\nPath = safe.txt\\nSize = 1\\nEncrypted = -\\n")',
+    '  process.exit(0)',
+    '}',
+    `console.error(${JSON.stringify(stderr)})`,
+    `process.exit(${exitCode})`,
+  ].join('\n'))
+  await chmod(executable, 0o755)
+  return executable
+}
+
 async function createPayload(root: string): Promise<void> {
   await mkdir(path.join(root, 'payload', 'nested'), { recursive: true })
   await mkdir(path.join(root, 'payload', 'empty'))
@@ -106,26 +121,57 @@ describe('SevenZipArchiveExtractor', () => {
     expect(await readFile(path.join(root, rar.destinationPath, 'testdir', 'test.txt'), 'utf8')).toBe('test text document\r\n')
   }, 30_000)
 
-  test('rejects damaged, encrypted, traversal, absolute, and drive-letter entries before publication', async () => {
+  test('lets 7-Zip handle archive entries that use backslash separators', async () => {
+    const root = await temporaryRoot()
+    await writeFile(path.join(root, 'backslash.zip'), zipSync({ 'nested\\file.txt': strToU8('backslash') }))
+    const workspace = await createServeWorkspace(root, {
+      archiveExtractor: createSevenZipArchiveExtractor({ executable: async () => sevenZip }),
+    })
+
+    const result = await workspace.extractArchive('backslash.zip')
+    const entries = await readdir(path.join(root, result.destinationPath), { recursive: true, withFileTypes: true })
+    const files = entries.filter(entry => entry.isFile())
+
+    expect(files).toHaveLength(1)
+    expect(await readFile(path.join(files[0]!.parentPath, files[0]!.name), 'utf8')).toBe('backslash')
+  })
+
+  test('rejects damaged and encrypted archives before publication', async () => {
     const root = await temporaryRoot()
     await writeFile(path.join(root, 'secret.txt'), 'secret')
     await runSevenZip(['a', '-tzip', '-psecret', '-mem=AES256', 'encrypted.zip', '--', 'secret.txt'], root)
-    await Promise.all([
-      writeFile(path.join(root, 'damaged.zip'), 'not an archive'),
-      writeFile(path.join(root, 'traversal.zip'), zipSync({ '../escape.txt': strToU8('escape') })),
-      writeFile(path.join(root, 'absolute.zip'), zipSync({ '/absolute.txt': strToU8('absolute') })),
-      writeFile(path.join(root, 'drive.zip'), zipSync({ 'C:/escape.txt': strToU8('drive') })),
-    ])
+    await writeFile(path.join(root, 'damaged.zip'), 'not an archive')
     const workspace = await createServeWorkspace(root, {
       archiveExtractor: createSevenZipArchiveExtractor({ executable: async () => sevenZip }),
     })
 
     await expect(workspace.extractArchive('damaged.zip')).rejects.toMatchObject({ code: 'INVALID_ARCHIVE' })
     await expect(workspace.extractArchive('encrypted.zip')).rejects.toMatchObject({ code: 'ENCRYPTED_ARCHIVE' })
-    for (const archive of ['traversal.zip', 'absolute.zip', 'drive.zip'])
-      await expect(workspace.extractArchive(archive)).rejects.toMatchObject({ code: 'INVALID_ARCHIVE' })
     expect((await readdirNames(root)).some(name => name.startsWith('.extract-'))).toBe(false)
   }, 20_000)
+
+  test('keeps 7-Zip-sanitized paths within the published extraction directory', async () => {
+    const root = await temporaryRoot()
+    await writeFile(path.join(root, 'paths.zip'), zipSync({
+      '../escape.txt': strToU8('escape'),
+      '/absolute.txt': strToU8('absolute'),
+      'C:/drive.txt': strToU8('drive'),
+    }))
+    const workspace = await createServeWorkspace(root, {
+      archiveExtractor: createSevenZipArchiveExtractor({ executable: async () => sevenZip }),
+    })
+
+    const result = await workspace.extractArchive('paths.zip')
+    const entries = await readdir(path.join(root, result.destinationPath), { recursive: true, withFileTypes: true })
+    const contents = await Promise.all(entries
+      .filter(entry => entry.isFile())
+      .map(entry => readFile(path.join(entry.parentPath, entry.name), 'utf8')))
+
+    expect(contents.sort()).toEqual(['absolute', 'drive', 'escape'])
+    expect(await Bun.file(path.join(root, 'escape.txt')).exists()).toBe(false)
+    expect(await Bun.file(path.join(root, 'absolute.txt')).exists()).toBe(false)
+    expect(await Bun.file(path.join(root, 'drive.txt')).exists()).toBe(false)
+  })
 
   test('rejects multi-volume metadata before invoking extraction', async () => {
     if (process.platform === 'win32')
@@ -149,6 +195,59 @@ describe('SevenZipArchiveExtractor', () => {
     })
     expect(await readdirNames(destination)).toEqual([])
   })
+
+  test('reports an unknown 7-Zip failure as unavailable with internal diagnostics', async () => {
+    if (process.platform === 'win32')
+      return
+    const root = await temporaryRoot()
+    const executable = await fakeSevenZip(root, 2, 'ERROR: unexpected extractor failure')
+    const archive = path.join(root, 'archive.zip')
+    const destination = path.join(root, 'destination')
+    await writeFile(archive, 'fixture')
+    await mkdir(destination)
+    const extractor = createSevenZipArchiveExtractor({ executable: async () => executable })
+
+    try {
+      await extractor.extract(archive, destination)
+      throw new Error('Expected extraction to fail')
+    }
+    catch (cause) {
+      expect(cause).toMatchObject({
+        code: 'UNAVAILABLE',
+        message: '7-Zip could not process the archive',
+        cause: expect.objectContaining({ message: expect.stringContaining('unexpected extractor failure') }),
+      })
+    }
+  })
+
+  const sevenZipFailures = [
+    { name: 'disk exhaustion', exitCode: 2, stderr: 'ERROR: No space left on device', code: 'INSUFFICIENT_SPACE', message: 'Archive extraction ran out of disk space' },
+    { name: 'dangerous links', exitCode: 2, stderr: 'ERROR: Dangerous link via another link was ignored', code: 'UNAVAILABLE', message: '7-Zip rejected an unsafe symbolic link' },
+    { name: 'system errors', exitCode: 2, stderr: 'System ERROR: Input/output error', code: 'UNAVAILABLE', message: '7-Zip could not access the archive or destination' },
+    { name: 'warnings', exitCode: 1, stderr: 'WARNING: one or more files could not be extracted', code: 'UNAVAILABLE', message: '7-Zip reported warnings; extracted output was not published' },
+    { name: 'command errors', exitCode: 7, stderr: 'Command Line Error', code: 'UNAVAILABLE', message: '7-Zip command invocation failed' },
+    { name: 'memory exhaustion', exitCode: 8, stderr: 'Not enough memory', code: 'UNAVAILABLE', message: '7-Zip ran out of memory' },
+    { name: 'interruptions', exitCode: 255, stderr: 'Break signaled', code: 'UNAVAILABLE', message: '7-Zip was interrupted' },
+  ] as const
+
+  for (const failure of sevenZipFailures) {
+    test(`classifies ${failure.name} without exposing raw stderr`, async () => {
+      if (process.platform === 'win32')
+        return
+      const root = await temporaryRoot()
+      const executable = await fakeSevenZip(root, failure.exitCode, failure.stderr)
+      const archive = path.join(root, 'archive.zip')
+      const destination = path.join(root, 'destination')
+      await writeFile(archive, 'fixture')
+      await mkdir(destination)
+      const extractor = createSevenZipArchiveExtractor({ executable: async () => executable })
+
+      await expect(extractor.extract(archive, destination)).rejects.toMatchObject({
+        code: failure.code,
+        message: failure.message,
+      })
+    })
+  }
 
   test('checks available bytes and inodes using the reported archive totals', async () => {
     const root = await temporaryRoot()
