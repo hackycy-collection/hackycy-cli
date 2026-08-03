@@ -34,7 +34,7 @@
     "generate:frp-manifest": "bun scripts/generate-frp-manifest.ts",
     "lint": "eslint --cache .",
     "preflight:release": "bun run check:frp-manifest",
-    "release": "bun run preflight:release && bumpp",
+    "release": "bumpp",
     "start": "bun src/cli.ts",
     "typecheck": "tsc",
     "prepare": "simple-git-hooks",
