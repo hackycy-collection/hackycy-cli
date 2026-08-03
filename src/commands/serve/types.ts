@@ -3,7 +3,7 @@ export interface ServeOptions {
   port: number
   address: string
   manage: boolean
-  unsafeHtml: boolean
+  safeHtml: boolean
   accounts: string[]
 }
 

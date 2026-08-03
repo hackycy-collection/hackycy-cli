@@ -203,9 +203,13 @@ function inlineMimeType(mimeType: string): boolean {
   return type === 'application' && ['pdf', 'json', 'xml', 'javascript', 'xhtml+xml', 'ld+json'].includes(subtype)
 }
 
-function requiresDocumentSandbox(mimeType: string, unsafeHtml: boolean): boolean {
+function htmlMimeType(mimeType: string): boolean {
+  return ['application/xhtml+xml', 'text/html'].includes(mimeType.split(';')[0]!.trim().toLowerCase())
+}
+
+function requiresDocumentSandbox(mimeType: string, safeHtml: boolean): boolean {
   const baseMimeType = mimeType.split(';')[0]!.trim().toLowerCase()
-  if (unsafeHtml && ['application/xhtml+xml', 'text/html'].includes(baseMimeType))
+  if (!safeHtml && htmlMimeType(mimeType))
     return false
   return [
     'application/xhtml+xml',
@@ -265,7 +269,7 @@ function rangeAllowed(request: Request, etag: string, modifiedAt: Date): boolean
   return Number.isFinite(timestamp) && modifiedAt.getTime() < timestamp + 1000
 }
 
-async function serveOriginalFile(request: Request, workspace: ServeWorkspace, corsEnabled: boolean, unsafeHtml: boolean): Promise<Response> {
+async function serveOriginalFile(request: Request, workspace: ServeWorkspace, corsEnabled: boolean, safeHtml: boolean): Promise<Response> {
   if (request.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
@@ -292,7 +296,7 @@ async function serveOriginalFile(request: Request, workspace: ServeWorkspace, co
 
   try {
     const file = await workspace.openFile(relativePath)
-    const forceDownload = url.searchParams.get('download') === '1'
+    const forceDownload = url.searchParams.get('download') === '1' || (safeHtml && htmlMimeType(file.mimeType))
     const etag = `W/"${file.size}-${file.modifiedAt.getTime()}"`
     const headers = new Headers({
       'Accept-Ranges': 'bytes',
@@ -307,7 +311,7 @@ async function serveOriginalFile(request: Request, workspace: ServeWorkspace, co
     })
     if (corsEnabled)
       headers.set('Access-Control-Allow-Origin', '*')
-    if (requiresDocumentSandbox(file.mimeType, unsafeHtml))
+    if (requiresDocumentSandbox(file.mimeType, safeHtml))
       headers.set('Content-Security-Policy', ACTIVE_FILE_CONTENT_SECURITY_POLICY)
 
     if (isNotModified(request, etag, file.modifiedAt)) {
@@ -392,7 +396,7 @@ export function startServeHttpServer(options: {
   address: string
   port: number
   managementEnabled: boolean
-  unsafeHtml?: boolean
+  safeHtml?: boolean
   authentication?: ServeAuthentication
   thumbnailService?: ThumbnailService
   downloadManager?: ServeDownloadManager
@@ -820,7 +824,7 @@ export function startServeHttpServer(options: {
         }
       }
       if (url.pathname === '/files' || url.pathname.startsWith('/files/'))
-        return serveOriginalFile(request, options.workspace, !options.authentication, options.unsafeHtml === true)
+        return serveOriginalFile(request, options.workspace, !options.authentication, options.safeHtml === true)
       if (url.pathname.startsWith('/thumbnails/'))
         return serveThumbnail(request, thumbnails)
       return error('NOT_FOUND', 'Route not found', 404)

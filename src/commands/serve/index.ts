@@ -10,7 +10,7 @@ export function register(program: Command): void {
     .option('-p, --port <number>', 'Port to serve on', parseIntArg, 1204)
     .option('-a, --address <string>', 'Address to bind to', '0.0.0.0')
     .option('-m, --manage', 'Enable uploads, downloads, extraction, and filesystem management', false)
-    .option('--unsafe-html', 'Allow HTML and XHTML files to execute scripts in the same origin', false)
+    .option('--safe-html', 'Disable HTML and XHTML execution and force downloads', false)
     .option('--account <username:password>', 'Require login with an account (repeatable)', (value, values: string[]) => [...values, value], [])
     .action(async (directory: string | undefined, options: Omit<ServeOptions, 'directory' | 'accounts'> & { account: string[] }) => {
       const { runServeCommand } = await import('./run')

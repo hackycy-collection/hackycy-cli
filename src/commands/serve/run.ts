@@ -61,7 +61,7 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
       address: options.address,
       port: options.port,
       managementEnabled: options.manage,
-      unsafeHtml: options.unsafeHtml,
+      safeHtml: options.safeHtml,
       authentication,
     })
   }
@@ -76,7 +76,7 @@ export async function runServeCommand(options: ServeOptions): Promise<void> {
   messages.push(`  ${ansis.dim('Directory'.padEnd(9))} ${ansis.dim(path.resolve(options.directory))}`)
   messages.push(`  ${ansis.dim('Bind'.padEnd(9))} ${ansis.dim(`${options.address}:${server.url.port}`)}`)
   messages.push(`  ${ansis.dim('Management'.padEnd(11))} ${options.manage ? ansis.green('enabled') : ansis.dim('disabled')}`)
-  messages.push(`  ${ansis.dim('HTML execution'.padEnd(15))} ${options.unsafeHtml ? ansis.yellow('enabled') : ansis.dim('disabled')}`)
+  messages.push(`  ${ansis.dim('HTML execution'.padEnd(15))} ${options.safeHtml ? ansis.dim('disabled (download)') : ansis.green('enabled')}`)
   messages.push(`  ${ansis.dim('Authentication'.padEnd(15))} ${authentication ? ansis.green(`enabled (${authentication.accountCount} ${authentication.accountCount === 1 ? 'account' : 'accounts'})`) : ansis.dim('disabled')}`)
   note(messages.join('\n'), 'Server running')
 

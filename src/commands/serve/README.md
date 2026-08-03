@@ -11,13 +11,13 @@ Options:
   -p, --port <number>       Port to serve on (default: 1204)
   -a, --address <string>    Address to bind to (default: 0.0.0.0)
   -m, --manage              Enable uploads, downloads, extraction, and filesystem management
-      --unsafe-html         Allow HTML and XHTML files to execute scripts in the same origin
+      --safe-html           Disable HTML and XHTML execution and force downloads
       --account <user:pass> Require login with an account (repeatable)
 ```
 
 The directory defaults to the current working directory. The default binding is available to the local network; use `--address 127.0.0.1` for local-only access. Management mode allows upload, remote download, archive extraction, copy, move, rename, and permanent deletion. Without `--account`, use it only with a trusted directory and network.
 
-HTML and XHTML files are sandboxed by default, so their scripts do not execute when opened from `/files/*`. Use `--unsafe-html` to serve those documents as executable same-origin pages, similar to a conventional static file server. In this mode, page scripts can access the file browser's same-origin APIs and session, so serve only trusted files, especially with `--manage`, authentication, or network binding enabled. This option does not remove a sandbox imposed by an outer iframe; the embedding page must grant `allow-scripts`.
+HTML and XHTML files are executable same-origin pages by default, similar to a conventional static file server. Use `--safe-html` to sandbox those documents and force them to download instead. This option does not remove a sandbox imposed by an outer iframe; the embedding page must grant `allow-scripts`.
 
 Passing one or more accounts enables login mode:
 
@@ -118,7 +118,7 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 - Main-list image elements load only `thumbnailUrl`, with lazy asynchronous low-priority decoding. Original `fileUrl` bytes are reserved for preview, opening, and download.
 - Selection follows desktop file-manager conventions: clicking a file selects and previews it, Ctrl/Cmd toggles, Shift selects a range, and modifiers never open a preview. Directories open on double-click or Enter.
 - Cut, copy, and paste use an in-memory browser clipboard. It survives directory navigation but not a page reload and never reads or writes the system clipboard.
-- Source code, configuration files, and dotenv variants use the `@pierre/diffs` Shiki-based read-only file renderer. Plain text remains escaped content; HTML and XML are never executed in the preview. Opening an HTML/XHTML `fileUrl` in a new tab executes scripts only when `--unsafe-html` is enabled.
+- Source code, configuration files, and dotenv variants use the `@pierre/diffs` Shiki-based read-only file renderer. Plain text remains escaped content; HTML and XML are never executed in the preview. Opening an HTML/XHTML `fileUrl` in a new tab executes scripts by default; `--safe-html` downloads it instead.
 - Images retain an inline preview and use `react-photo-view` for a current-image-only full-viewport viewer with pan, zoom, rotate, and reset controls. Audio, video, and PDF keep browser-native presentation.
 - Theme, view mode, sort key, and direction may be stored locally. Paths and file contents are not persisted.
 - Multi-file upload runs at most three requests concurrently and refreshes the current listing when the queue settles.
