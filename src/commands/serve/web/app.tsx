@@ -19,6 +19,7 @@ import {
   Grid2X2,
   HardDrive,
   List,
+  ListChecks,
   LoaderCircle,
   LogIn,
   LogOut,
@@ -683,6 +684,11 @@ function ExplorerApp({
     () => visibleEntries(listing?.entries ?? [], query, sortKey, sortDirection),
     [listing?.entries, query, sortDirection, sortKey],
   )
+
+  const selectAll = (): void => {
+    const paths = entries.map(entry => entry.path)
+    setSelection({ paths, anchorPath: paths.at(-1) })
+  }
   const entryMap = useMemo(() => new Map((listing?.entries ?? []).map(entry => [entry.path, entry])), [listing?.entries])
   const selectedSet = useMemo(() => new Set(selection.paths), [selection.paths])
   const selectedEntries = selection.paths.map(path => entryMap.get(path)).filter((entry): entry is DirectoryEntry => entry !== undefined)
@@ -923,62 +929,6 @@ function ExplorerApp({
     }
   }, [enqueueUploads, listing?.managementEnabled])
 
-  useEffect(() => {
-    const keydown = (event: KeyboardEvent): void => {
-      const target = event.target as HTMLElement | null
-      if (target?.matches('input, textarea, select, [contenteditable="true"]'))
-        return
-      const modifier = event.metaKey || event.ctrlKey
-      if (modifier && event.key.toLowerCase() === 'a') {
-        event.preventDefault()
-        const paths = entries.map(entry => entry.path)
-        setSelection({ paths, anchorPath: paths.at(-1) })
-      }
-      else if (modifier && event.key.toLowerCase() === 'c' && managementEnabled) {
-        event.preventDefault()
-        copySelection('copy')
-      }
-      else if (modifier && event.key.toLowerCase() === 'x' && managementEnabled) {
-        event.preventDefault()
-        copySelection('move')
-      }
-      else if (modifier && event.key.toLowerCase() === 'v' && managementEnabled) {
-        event.preventDefault()
-        void pasteClipboard()
-      }
-      else if (event.key === 'F2' && selectedEntries.length === 1 && managementEnabled) {
-        event.preventDefault()
-        startRename(selectedEntries[0]!)
-      }
-      else if (event.key === 'Delete' && selection.paths.length > 0 && managementEnabled) {
-        event.preventDefault()
-        requestDelete()
-      }
-      else if (event.key === 'Enter' && selectedEntries.length === 1) {
-        event.preventDefault()
-        openEntry(selectedEntries[0]!)
-      }
-      else if (event.key === 'Escape') {
-        if (creatingFolder || renamingPath) {
-          setCreatingFolder(false)
-          setRenamingPath(undefined)
-          setEditingError(undefined)
-        }
-        else if (imageViewerOpen) {
-          setImageViewerOpen(false)
-        }
-        else if (previewPath) {
-          closePreview()
-        }
-        else {
-          setSelection({ paths: [] })
-        }
-      }
-    }
-    window.addEventListener('keydown', keydown)
-    return () => window.removeEventListener('keydown', keydown)
-  }, [clipboard, closePreview, creatingFolder, entries, imageViewerOpen, managementEnabled, openEntry, previewPath, renamingPath, selectedEntries, selection.paths])
-
   const refresh = (): void => setReloadVersion(version => version + 1)
   const cancelEdit = (): void => {
     setCreatingFolder(false)
@@ -1131,6 +1081,7 @@ function ExplorerApp({
           managementEnabled={managementEnabled}
           hasSelection={selection.paths.length > 0}
           oneSelected={selectedEntries.length === 1}
+          canSelectAll={entries.length > 0}
           canPaste={clipboard !== undefined}
           canExtract={canExtractSelection}
           sortKey={sortKey}
@@ -1141,6 +1092,7 @@ function ExplorerApp({
           onExtract={() => void extractSelection()}
           onRename={() => selectedEntries[0] && startRename(selectedEntries[0])}
           onDelete={() => requestDelete()}
+          onSelectAll={selectAll}
           onList={() => setViewMode('list')}
           onGrid={() => setViewMode('grid')}
           onPreview={() => selectedEntries[0] && openPreview(selectedEntries[0])}
@@ -1288,6 +1240,7 @@ function MoreMenu(props: {
   managementEnabled: boolean
   hasSelection: boolean
   oneSelected: boolean
+  canSelectAll: boolean
   canPaste: boolean
   canExtract: boolean
   sortKey: SortKey
@@ -1298,6 +1251,7 @@ function MoreMenu(props: {
   onExtract: () => void
   onRename: () => void
   onDelete: () => void
+  onSelectAll: () => void
   onList: () => void
   onGrid: () => void
   onPreview: () => void
@@ -1312,6 +1266,11 @@ function MoreMenu(props: {
       </Tooltip>
       <DropdownMenu.Portal>
         <DropdownMenu.Content className="menu-content" align="end" sideOffset={4}>
+          <DropdownMenu.Item className="menu-item" disabled={!props.canSelectAll} onSelect={props.onSelectAll}>
+            <ListChecks />
+            <span>Select all</span>
+          </DropdownMenu.Item>
+          <DropdownMenu.Separator className="menu-separator" />
           {props.mobile && props.managementEnabled && (
             <DropdownMenu.Item className="menu-item" disabled={!props.hasSelection} onSelect={props.onCut}>
               <Scissors />

@@ -2,6 +2,7 @@ import * as Dialog from '@radix-ui/react-dialog'
 import { TriangleAlert } from 'lucide-react'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '../../../../shared/web/components/ui/button'
+import { deleteConfirmationTarget, matchesDeleteConfirmation } from '../delete-confirmation'
 
 export function DeleteDialog({
   paths,
@@ -19,16 +20,20 @@ export function DeleteDialog({
   const [confirmation, setConfirmation] = useState('')
   const inputRef = useRef<HTMLInputElement>(null)
   const names = paths.map(path => path.split('/').at(-1) ?? path)
-  const confirmationName = names[0] ?? ''
+  const confirmationTarget = deleteConfirmationTarget(paths)
+  const multiple = paths.length > 1
+  const pathKey = paths.join('\0')
   const title = paths.length === 1
-    ? `Delete "${confirmationName}" permanently?`
+    ? `Delete "${confirmationTarget}" permanently?`
     : `Delete ${paths.length} items permanently?`
-  const matches = confirmationName !== '' && confirmation === confirmationName
+  const matches = matchesDeleteConfirmation(paths, confirmation)
   const mismatch = confirmation !== '' && !matches
+  const inputLabel = multiple ? 'Type confirmation text to confirm' : 'Type item name to confirm'
+  const mismatchMessage = multiple ? 'Confirmation text does not match.' : 'Name does not match.'
 
   useEffect(() => {
     setConfirmation('')
-  }, [confirmationName, open])
+  }, [open, pathKey])
 
   const submit = (): void => {
     if (!busy && matches)
@@ -78,15 +83,15 @@ export function DeleteDialog({
               <span>
                 Type
                 {' '}
-                <strong title={confirmationName}>{confirmationName}</strong>
+                <strong title={confirmationTarget}>{confirmationTarget}</strong>
                 {' '}
                 to confirm
               </span>
               <input
                 ref={inputRef}
                 value={confirmation}
-                placeholder={confirmationName}
-                aria-label="Type item name to confirm"
+                placeholder={confirmationTarget}
+                aria-label={inputLabel}
                 aria-invalid={mismatch}
                 aria-describedby={mismatch ? 'delete-confirmation-error' : undefined}
                 autoComplete="off"
@@ -95,7 +100,7 @@ export function DeleteDialog({
                 onChange={event => setConfirmation(event.target.value)}
               />
             </label>
-            <div id="delete-confirmation-error" role={mismatch ? 'alert' : undefined} className="delete-confirmation-error">{mismatch ? 'Name does not match.' : ''}</div>
+            <div id="delete-confirmation-error" role={mismatch ? 'alert' : undefined} className="delete-confirmation-error">{mismatch ? mismatchMessage : ''}</div>
             <div className="mt-4 flex justify-end gap-2">
               <Dialog.Close asChild><Button disabled={busy}>Cancel</Button></Dialog.Close>
               <Button type="submit" className="delete-button" disabled={busy || !matches}>{busy ? 'Deleting...' : 'Delete permanently'}</Button>
