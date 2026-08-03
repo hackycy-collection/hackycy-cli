@@ -45,12 +45,6 @@ Commands:
   help [command]               display help for command
 ```
 
-## Third-Party
-
-The tunnel runtime redistributes unmodified binaries from the official [fatedier/frp](https://github.com/fatedier/frp) release pinned in ycy's compile-time manifest.
-
-FRP is Copyright 2015 fatedier and contributors and is licensed under the Apache License, Version 2.0. The tunnel container includes the license at `/usr/share/licenses/frp/LICENSE`. Native installations download FRP from the official release URL recorded in the compile-time manifest.
-
 ## License
 
 [MIT](./LICENSE) License © [hackycy](https://github.com/hackycy)
