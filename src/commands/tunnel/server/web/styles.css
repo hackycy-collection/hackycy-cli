@@ -190,7 +190,8 @@ nav {
 
 .account-block {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 32px 0;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-auto-columns: max-content;
   align-items: center;
   gap: 5px;
   margin-top: auto;
