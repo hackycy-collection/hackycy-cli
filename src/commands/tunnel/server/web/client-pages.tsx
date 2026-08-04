@@ -1,75 +1,55 @@
-import type { FormEvent } from 'react'
-import type { TunnelHeader } from '../../types'
+import type { Path, UseFormRegister } from 'react-hook-form'
 import type { ClientView, TunnelView } from './api'
-import type { ConfirmationRequest, KeyValueFieldRow, ValueFieldRow } from './ui'
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Pencil, Plus, RefreshCw, RotateCcw, Trash2, X } from 'lucide-react'
+import type { TunnelEditorStep, TunnelFormValues } from './tunnel-form'
+import type { ConfirmAction } from './ui'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Pencil, Plus, RefreshCw, RotateCcw, Trash2 } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
+import { Controller, useFieldArray, useForm, useWatch } from 'react-hook-form'
+import { z } from 'zod'
 import { apiJson, jsonRequest } from './api'
-import {
-  Confirmation,
-  ErrorState,
-  IconButton,
-  keyValueFieldRow,
-  KeyValueFieldRows,
-  LoadingState,
-  navigate,
-  PageHeader,
-  Spinner,
-  Status,
-  Switch,
-  Token,
-  useFeedback,
-  valueFieldRow,
-  ValueFieldRows,
-} from './ui'
+import { FormError, FormField, FormMessage } from './form'
+import { DialogShell, FormScrollArea, SegmentedControl, Select, Tabs } from './primitives'
+import { buildTunnelPayload, createTunnelSchema, draftToTunnelForm, stepForTunnelField, tunnelStepFields } from './tunnel-form'
+import { ConfirmationDialog, ErrorState, IconButton, LoadingState, navigate, PageHeader, Spinner, Status, Switch, Token, useFeedback } from './ui'
+
+const clientRemarkSchema = z.object({ remark: z.string().max(100, 'Client remark must be 100 characters or fewer') })
+
+type ClientRemarkValues = z.infer<typeof clientRemarkSchema>
 
 function message(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause)
 }
 
 function ClientRemarkEditor({ client, onClose, onSaved }: { client?: ClientView, onClose: () => void, onSaved: () => void }): React.JSX.Element {
-  const [remark, setRemark] = useState(client?.remark ?? '')
-  const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
   const { notify } = useFeedback()
-  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-    event.preventDefault()
-    setError('')
-    setSaving(true)
+  const form = useForm<ClientRemarkValues>({ resolver: zodResolver(clientRemarkSchema), defaultValues: { remark: client?.remark ?? '' } })
+  const saving = form.formState.isSubmitting
+  const submit = form.handleSubmit(async ({ remark }) => {
+    form.clearErrors('root.server')
     try {
       await apiJson(client ? `/api/clients/${encodeURIComponent(client.id)}` : '/api/clients', jsonRequest(client ? 'PATCH' : 'POST', { remark }))
       notify(client ? 'Client remark saved' : 'Trusted client created')
       onSaved()
     }
     catch (cause) {
-      setError(message(cause))
+      form.setError('root.server', { message: message(cause) })
     }
-    finally {
-      setSaving(false)
-    }
-  }
-  const title = client ? 'Edit Client Remark' : 'Create client'
+  })
   return (
-    <div className="modal-backdrop" role="presentation">
-      <form className="modal" role="dialog" aria-modal="true" aria-labelledby="client-editor-title" aria-busy={saving} onSubmit={event => void submit(event)}>
-        <div className="modal-title">
-          <h2 id="client-editor-title">{title}</h2>
-          <IconButton label="Close" disabled={saving} onClick={onClose}><X size={16} /></IconButton>
-        </div>
-        <label>
-          Client Remark
-          <textarea value={remark} maxLength={100} autoFocus rows={4} disabled={saving} onChange={event => setRemark(event.target.value)} />
-        </label>
-        {error && <p className="form-error" role="alert">{error}</p>}
-        <div className="modal-actions">
-          <button type="button" disabled={saving} onClick={onClose}>Cancel</button>
-          <button className="primary" type="submit" disabled={saving}>
-            {saving && <Spinner />}
-            {saving ? 'Saving...' : client ? 'Save' : 'Create'}
-          </button>
-        </div>
-      </form>
-    </div>
+    <DialogShell open title={client ? 'Edit Client Remark' : 'Create client'} busy={saving} onOpenChange={open => !open && onClose()} onSubmit={submit}>
+      <FormField label="Client Remark" error={form.formState.errors.remark}>
+        <textarea {...form.register('remark')} maxLength={100} autoFocus rows={4} disabled={saving} aria-invalid={Boolean(form.formState.errors.remark)} />
+      </FormField>
+      <FormError error={form.formState.errors.root?.server} />
+      <div className="modal-actions">
+        <button type="button" disabled={saving} onClick={onClose}>Cancel</button>
+        <button className="primary" type="submit" disabled={saving}>
+          {saving && <Spinner />}
+          {saving ? 'Saving...' : client ? 'Save' : 'Create'}
+        </button>
+      </div>
+    </DialogShell>
   )
 }
 
@@ -78,7 +58,7 @@ export function ClientsPage({ refreshSequence, showOwner }: { refreshSequence: n
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState('')
-  const [confirmation, setConfirmation] = useState<ConfirmationRequest>()
+  const [confirmation, setConfirmation] = useState<ConfirmAction>()
   const [editing, setEditing] = useState<ClientView | null | undefined>()
   const loaded = useRef(false)
   const requestId = useRef(0)
@@ -183,418 +163,347 @@ export function ClientsPage({ refreshSequence, showOwner }: { refreshSequence: n
               </>
             )}
       {editing !== undefined && <ClientRemarkEditor client={editing ?? undefined} onClose={() => setEditing(undefined)} onSaved={saved} />}
-      {confirmation && <Confirmation request={confirmation} onClose={() => setConfirmation(undefined)} />}
+      {confirmation && <ConfirmationDialog request={confirmation} onClose={() => setConfirmation(undefined)} />}
     </>
   )
 }
 
-interface TunnelDraft {
+function ValueFieldRows({ label, name, fields, placeholder, minimum = 0, register, error, onAdd, onRemove }: {
   label: string
-  protocol: 'http' | 'tcp' | 'udp'
-  customDomains: ValueFieldRow[]
-  location: string
-  serverPort: string
-  localHost: string
-  localPort: string
-  enabled: boolean
-  useEncryption: boolean
-  useCompression: boolean
-  bandwidthEnabled: boolean
-  bandwidthValue: string
-  bandwidthUnit: 'KB' | 'MB'
-  bandwidthMode: 'client' | 'server'
-  proxyProtocolVersion: '' | 'v1' | 'v2'
-  healthEnabled: boolean
-  healthType: 'tcp' | 'http'
-  healthInterval: string
-  healthTimeout: string
-  healthMaxFailed: string
-  healthPath: string
-  healthHeaders: KeyValueFieldRow[]
-  authEnabled: boolean
-  authUsername: string
-  authPassword: string
-  hostHeaderRewrite: string
-  requestHeaders: KeyValueFieldRow[]
-  responseHeaders: KeyValueFieldRow[]
+  name: 'customDomains'
+  fields: Array<{ id: string }>
+  placeholder?: string
+  minimum?: number
+  register: UseFormRegister<TunnelFormValues>
+  error?: { message?: string }
+  onAdd: () => void
+  onRemove: (index: number) => void
+}): React.JSX.Element {
+  return (
+    <fieldset className="structured-field">
+      <legend>{label}</legend>
+      <div className="structured-rows">
+        {fields.map((field, index) => (
+          <div className="value-field-row" key={field.id}>
+            <input {...register(`${name}.${index}.value` as Path<TunnelFormValues>)} aria-label={`${label} ${index + 1}`} placeholder={placeholder} />
+            <IconButton label={`Remove ${label} ${index + 1}`} disabled={fields.length <= minimum} onClick={() => onRemove(index)}><Trash2 size={14} /></IconButton>
+          </div>
+        ))}
+      </div>
+      <FormMessage error={error} />
+      <button className="add-row" type="button" onClick={onAdd}>
+        <Plus size={14} />
+        Add
+        {' '}
+        {label.toLowerCase()}
+      </button>
+    </fieldset>
+  )
 }
 
-function keyValueRows(headers: TunnelHeader[] | undefined): KeyValueFieldRow[] {
-  return (headers ?? []).map(header => keyValueFieldRow(header.name, header.value))
-}
-
-function headerValues(rows: KeyValueFieldRow[]): TunnelHeader[] {
-  return rows.map(row => ({ name: row.name.trim(), value: row.value.trim() })).filter(row => row.name)
-}
-
-function draftFor(initial?: TunnelView): TunnelDraft {
-  const httpTunnel = initial?.protocol === 'http' ? initial : undefined
-  const transport = initial?.options.transport
-  const health = initial?.options.healthCheck
-  const http = httpTunnel?.options.http
-  return {
-    label: initial?.label ?? '',
-    protocol: initial?.protocol ?? 'http',
-    customDomains: httpTunnel ? httpTunnel.customDomains.map(value => valueFieldRow(value)) : [valueFieldRow()],
-    location: httpTunnel?.location ?? '',
-    serverPort: initial?.serverPort?.toString() ?? '',
-    localHost: initial?.localHost ?? '127.0.0.1',
-    localPort: initial?.localPort.toString() ?? '',
-    enabled: initial?.enabled ?? true,
-    useEncryption: transport?.useEncryption ?? false,
-    useCompression: transport?.useCompression ?? false,
-    bandwidthEnabled: Boolean(transport?.bandwidthLimit),
-    bandwidthValue: transport?.bandwidthLimit?.value.toString() ?? '1',
-    bandwidthUnit: transport?.bandwidthLimit?.unit ?? 'MB',
-    bandwidthMode: transport?.bandwidthLimit?.mode ?? 'client',
-    proxyProtocolVersion: transport?.proxyProtocolVersion ?? '',
-    healthEnabled: Boolean(health),
-    healthType: health?.type ?? 'tcp',
-    healthInterval: health?.intervalSeconds.toString() ?? '10',
-    healthTimeout: health?.timeoutSeconds.toString() ?? '3',
-    healthMaxFailed: health?.maxFailed.toString() ?? '3',
-    healthPath: health?.type === 'http' ? health.path : '/health',
-    healthHeaders: health?.type === 'http' ? keyValueRows(health.headers) : [],
-    authEnabled: Boolean(http?.basicAuth),
-    authUsername: http?.basicAuth?.username ?? '',
-    authPassword: '',
-    hostHeaderRewrite: http?.hostHeaderRewrite ?? '',
-    requestHeaders: keyValueRows(http?.requestHeaders),
-    responseHeaders: keyValueRows(http?.responseHeaders),
-  }
-}
-
-type TunnelEditorStep = 'basics' | 'transport' | 'health' | 'http'
-
-function validateTunnelDraft(draft: TunnelDraft, initial?: TunnelView): { message: string, step: TunnelEditorStep } | undefined {
-  const localPort = Number(draft.localPort)
-  if (!draft.localHost.trim())
-    return { message: 'Local host is required', step: 'basics' }
-  if (!Number.isSafeInteger(localPort) || localPort < 1 || localPort > 65535)
-    return { message: 'Local port must be between 1 and 65535', step: 'basics' }
-  if (draft.protocol === 'http') {
-    if (!draft.customDomains.some(row => row.value.trim()))
-      return { message: 'At least one custom domain is required', step: 'basics' }
-    if (draft.location && (!draft.location.startsWith('/') || /\s/.test(draft.location)))
-      return { message: 'Location must begin with / and contain no spaces', step: 'basics' }
-  }
-  else if (draft.serverPort) {
-    const serverPort = Number(draft.serverPort)
-    if (!Number.isSafeInteger(serverPort) || serverPort < 1 || serverPort > 65535)
-      return { message: 'Server port must be between 1 and 65535', step: 'basics' }
-  }
-  if (draft.bandwidthEnabled && (!Number.isFinite(Number(draft.bandwidthValue)) || Number(draft.bandwidthValue) <= 0))
-    return { message: 'Bandwidth limit must be greater than zero', step: 'transport' }
-  if (draft.healthEnabled) {
-    const values = [draft.healthInterval, draft.healthTimeout, draft.healthMaxFailed].map(Number)
-    if (values.some(value => !Number.isSafeInteger(value) || value < 1))
-      return { message: 'Health check timing values must be positive integers', step: 'health' }
-    if (draft.healthType === 'http' && (!draft.healthPath.startsWith('/') || /\s/.test(draft.healthPath)))
-      return { message: 'Health path must begin with / and contain no spaces', step: 'health' }
-  }
-  if (draft.protocol === 'http' && draft.authEnabled) {
-    if (!draft.authUsername.trim())
-      return { message: 'Basic Auth username is required', step: 'http' }
-    if (!draft.authPassword && !initial?.options.http?.basicAuth)
-      return { message: 'Basic Auth password is required', step: 'http' }
-  }
+function KeyValueFieldRows({ label, name, fields, register, error, onAdd, onRemove }: {
+  label: string
+  name: 'healthHeaders' | 'requestHeaders' | 'responseHeaders'
+  fields: Array<{ id: string }>
+  register: UseFormRegister<TunnelFormValues>
+  error?: { message?: string }
+  onAdd: () => void
+  onRemove: (index: number) => void
+}): React.JSX.Element {
+  return (
+    <fieldset className="structured-field">
+      <legend>{label}</legend>
+      <div className="structured-rows">
+        {fields.map((field, index) => (
+          <div className="key-value-field-row" key={field.id}>
+            <input {...register(`${name}.${index}.name` as Path<TunnelFormValues>)} aria-label={`${label} name ${index + 1}`} placeholder="Header name" />
+            <input {...register(`${name}.${index}.value` as Path<TunnelFormValues>)} aria-label={`${label} value ${index + 1}`} placeholder="Value" />
+            <IconButton label={`Remove ${label} ${index + 1}`} onClick={() => onRemove(index)}><Trash2 size={14} /></IconButton>
+          </div>
+        ))}
+      </div>
+      <FormMessage error={error} />
+      <button className="add-row" type="button" onClick={onAdd}>
+        <Plus size={14} />
+        Add header
+      </button>
+    </fieldset>
+  )
 }
 
 function TunnelEditor({ clientId, initial, onClose, onSaved }: { clientId: string, initial?: TunnelView, onClose: () => void, onSaved: () => void }): React.JSX.Element {
-  const [draft, setDraft] = useState<TunnelDraft>(() => draftFor(initial))
+  const form = useForm<TunnelFormValues>({
+    resolver: zodResolver(createTunnelSchema({ hasExistingBasicAuth: Boolean(initial?.options.http?.basicAuth) })),
+    defaultValues: draftToTunnelForm(initial),
+    shouldUnregister: false,
+  })
   const [activeStep, setActiveStep] = useState<TunnelEditorStep>('basics')
-  const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
-  const formRef = useRef<HTMLFormElement>(null)
   const { notify } = useFeedback()
+  const protocol = useWatch({ control: form.control, name: 'protocol' })
+  const customDomains = useFieldArray({ control: form.control, name: 'customDomains' })
+  const healthHeaders = useFieldArray({ control: form.control, name: 'healthHeaders' })
+  const requestHeaders = useFieldArray({ control: form.control, name: 'requestHeaders' })
+  const responseHeaders = useFieldArray({ control: form.control, name: 'responseHeaders' })
+  const saving = form.formState.isSubmitting
   const steps: Array<{ id: TunnelEditorStep, label: string }> = [
     { id: 'basics', label: 'Basics' },
     { id: 'transport', label: 'Transport' },
     { id: 'health', label: 'Health check' },
-    ...(draft.protocol === 'http' ? [{ id: 'http' as const, label: 'HTTP' }] : []),
+    ...(protocol === 'http' ? [{ id: 'http' as const, label: 'HTTP' }] : []),
   ]
   const activeStepIndex = steps.findIndex(step => step.id === activeStep)
   const selectStep = (step: TunnelEditorStep): void => {
-    setError('')
+    form.clearErrors('root.server')
     setActiveStep(step)
   }
-  const nextStep = (): void => {
-    if (!formRef.current?.reportValidity())
+  const nextStep = async (): Promise<void> => {
+    if (!await form.trigger(tunnelStepFields[activeStep]))
       return
     const next = steps[activeStepIndex + 1]
     if (next)
       selectStep(next.id)
   }
-  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-    event.preventDefault()
-    if (activeStepIndex < steps.length - 1) {
-      nextStep()
-      return
-    }
-    const validation = validateTunnelDraft(draft, initial)
-    if (validation) {
-      setError(validation.message)
-      setActiveStep(validation.step)
-      return
-    }
-    setError('')
-    setSaving(true)
-    const healthCheck = draft.healthEnabled
-      ? draft.healthType === 'http'
-        ? { type: 'http' as const, path: draft.healthPath, intervalSeconds: Number(draft.healthInterval), timeoutSeconds: Number(draft.healthTimeout), maxFailed: Number(draft.healthMaxFailed), headers: headerValues(draft.healthHeaders) }
-        : { type: 'tcp' as const, intervalSeconds: Number(draft.healthInterval), timeoutSeconds: Number(draft.healthTimeout), maxFailed: Number(draft.healthMaxFailed) }
-      : null
-    const basicAuth = draft.authEnabled
-      ? { username: draft.authUsername, ...(draft.authPassword ? { password: draft.authPassword } : {}) }
-      : null
-    const body = {
-      label: draft.label,
-      protocol: draft.protocol,
-      customDomains: draft.protocol === 'http' ? draft.customDomains.map(row => row.value.trim()).filter(Boolean) : undefined,
-      location: draft.protocol === 'http' ? draft.location.trim() || null : null,
-      serverPort: draft.protocol === 'http' || !draft.serverPort ? null : Number(draft.serverPort),
-      localHost: draft.localHost,
-      localPort: Number(draft.localPort),
-      enabled: draft.enabled,
-      options: {
-        transport: {
-          useEncryption: draft.useEncryption,
-          useCompression: draft.useCompression,
-          bandwidthLimit: draft.bandwidthEnabled ? { value: Number(draft.bandwidthValue), unit: draft.bandwidthUnit, mode: draft.bandwidthMode } : null,
-          proxyProtocolVersion: draft.proxyProtocolVersion || null,
-        },
-        healthCheck,
-        http: draft.protocol === 'http'
-          ? {
-              basicAuth,
-              hostHeaderRewrite: draft.hostHeaderRewrite.trim() || null,
-              requestHeaders: headerValues(draft.requestHeaders),
-              responseHeaders: headerValues(draft.responseHeaders),
-            }
-          : null,
-      },
-    }
+  const submit = form.handleSubmit(async (values) => {
+    form.clearErrors('root.server')
     try {
-      await apiJson(initial ? `/api/tunnels/${encodeURIComponent(initial.id)}` : `/api/clients/${encodeURIComponent(clientId)}/tunnels`, jsonRequest(initial ? 'PATCH' : 'POST', body))
+      await apiJson(initial ? `/api/tunnels/${encodeURIComponent(initial.id)}` : `/api/clients/${encodeURIComponent(clientId)}/tunnels`, jsonRequest(initial ? 'PATCH' : 'POST', buildTunnelPayload(values)))
       notify(initial ? 'Tunnel Definition saved' : 'Tunnel Definition created')
       onSaved()
     }
     catch (cause) {
-      setError(message(cause))
+      form.setError('root.server', { message: message(cause) })
     }
-    finally {
-      setSaving(false)
-    }
+  }, (errors) => {
+    const field = Object.keys(errors)[0]
+    if (field)
+      setActiveStep(stepForTunnelField(field))
+  })
+  const focusNewField = (name: Path<TunnelFormValues>): void => {
+    requestAnimationFrame(() => form.setFocus(name))
   }
+
   return (
-    <div className="modal-backdrop" role="presentation">
-      <form ref={formRef} className="modal tunnel-modal" role="dialog" aria-modal="true" aria-labelledby="tunnel-editor-title" aria-busy={saving} onSubmit={event => void submit(event)}>
-        <div className="modal-title">
-          <h2 id="tunnel-editor-title">{initial ? 'Edit Tunnel Definition' : 'New Tunnel Definition'}</h2>
-          <IconButton label="Close" disabled={saving} onClick={onClose}><X size={16} /></IconButton>
-        </div>
-        <div className="tunnel-steps" role="tablist" aria-label="Tunnel configuration steps">
+    <DialogShell open title={initial ? 'Edit Tunnel Definition' : 'New Tunnel Definition'} className="tunnel-modal" busy={saving} onOpenChange={open => !open && onClose()} onSubmit={submit}>
+      <Tabs.Root className="tunnel-tabs" value={activeStep} onValueChange={value => selectStep(value as TunnelEditorStep)}>
+        <Tabs.List className="tunnel-steps" aria-label="Tunnel configuration steps">
           {steps.map((step, index) => (
-            <button
-              id={`tunnel-step-${step.id}`}
-              type="button"
-              role="tab"
-              aria-controls={`tunnel-panel-${step.id}`}
-              aria-selected={activeStep === step.id}
-              disabled={saving}
-              className={activeStep === step.id ? 'active' : ''}
-              key={step.id}
-              onClick={() => selectStep(step.id)}
-            >
+            <Tabs.Trigger value={step.id} disabled={saving} key={step.id}>
               <span className="step-number">{index + 1}</span>
               {step.label}
-            </button>
+            </Tabs.Trigger>
           ))}
-        </div>
+        </Tabs.List>
 
-        {error && <p className="form-error tunnel-form-error" role="alert">{error}</p>}
-
-        <div className="tunnel-step-panel" id={`tunnel-panel-${activeStep}`} role="tabpanel" aria-labelledby={`tunnel-step-${activeStep}`}>
-          {activeStep === 'basics' && (
+        <Tabs.Content value="basics" forceMount className="tunnel-step-panel">
+          <FormScrollArea>
             <div className="step-stack">
-              <label>
-                Display name
-                <input value={draft.label} maxLength={100} autoFocus onChange={event => setDraft({ ...draft, label: event.target.value })} />
-              </label>
-              <div className="segmented" aria-label="Tunnel protocol">{(['http', 'tcp', 'udp'] as const).map(value => <button type="button" disabled={saving} className={draft.protocol === value ? 'active' : ''} key={value} onClick={() => setDraft({ ...draft, protocol: value })}>{value.toUpperCase()}</button>)}</div>
-              {draft.protocol === 'http'
+              <FormField label="Display name" error={form.formState.errors.label}>
+                <input {...form.register('label')} maxLength={100} autoFocus aria-invalid={Boolean(form.formState.errors.label)} />
+              </FormField>
+              <Controller name="protocol" control={form.control} render={({ field }) => <SegmentedControl label="Tunnel protocol" value={field.value} disabled={saving} onChange={field.onChange} options={[{ value: 'http', label: 'HTTP' }, { value: 'tcp', label: 'TCP' }, { value: 'udp', label: 'UDP' }]} />} />
+              {protocol === 'http'
                 ? (
                     <>
-                      <ValueFieldRows label="Custom domains" rows={draft.customDomains} minimum={1} placeholder="routes.example.com" onChange={customDomains => setDraft({ ...draft, customDomains })} />
-                      <label>
-                        Location
-                        <input value={draft.location} placeholder="All paths" onChange={event => setDraft({ ...draft, location: event.target.value })} />
-                      </label>
+                      <ValueFieldRows
+                        label="Custom domains"
+                        name="customDomains"
+                        fields={customDomains.fields}
+                        minimum={1}
+                        placeholder="routes.example.com"
+                        register={form.register}
+                        error={form.formState.errors.customDomains}
+                        onAdd={() => {
+                          customDomains.append({ value: '' })
+                          focusNewField(`customDomains.${customDomains.fields.length}.value` as Path<TunnelFormValues>)
+                        }}
+                        onRemove={customDomains.remove}
+                      />
+                      <FormField label="Location" error={form.formState.errors.location}>
+                        <input {...form.register('location')} placeholder="All paths" aria-invalid={Boolean(form.formState.errors.location)} />
+                      </FormField>
                     </>
                   )
                 : (
-                    <label>
-                      Server port
-                      <input type="number" min="1" max="65535" value={draft.serverPort} placeholder="Automatic" onChange={event => setDraft({ ...draft, serverPort: event.target.value })} />
-                    </label>
+                    <FormField label="Server port" error={form.formState.errors.serverPort}>
+                      <input {...form.register('serverPort')} type="number" min="1" max="65535" placeholder="Automatic" aria-invalid={Boolean(form.formState.errors.serverPort)} />
+                    </FormField>
                   )}
               <div className="field-row">
-                <label>
-                  Local host
-                  <input value={draft.localHost} required onChange={event => setDraft({ ...draft, localHost: event.target.value })} />
-                </label>
-                <label>
-                  Local port
-                  <input type="number" min="1" max="65535" value={draft.localPort} required onChange={event => setDraft({ ...draft, localPort: event.target.value })} />
-                </label>
+                <FormField label="Local host" error={form.formState.errors.localHost}>
+                  <input {...form.register('localHost')} aria-invalid={Boolean(form.formState.errors.localHost)} />
+                </FormField>
+                <FormField label="Local port" error={form.formState.errors.localPort}>
+                  <input {...form.register('localPort')} type="number" min="1" max="65535" aria-invalid={Boolean(form.formState.errors.localPort)} />
+                </FormField>
               </div>
               <div className="setting-row">
                 <div><strong>Enabled</strong></div>
-                <Switch label="Enable Tunnel Definition" checked={draft.enabled} onChange={enabled => setDraft({ ...draft, enabled })} />
+                <Controller name="enabled" control={form.control} render={({ field }) => <Switch label="Enable Tunnel Definition" checked={field.value} disabled={saving} onChange={field.onChange} />} />
               </div>
             </div>
-          )}
+          </FormScrollArea>
+        </Tabs.Content>
 
-          {activeStep === 'transport' && (
+        <Tabs.Content value="transport" forceMount className="tunnel-step-panel">
+          <FormScrollArea>
             <section className="form-section">
               <h3>Transport</h3>
               <div className="setting-row">
                 <span>Encryption</span>
-                <Switch label="Use encryption" checked={draft.useEncryption} onChange={useEncryption => setDraft({ ...draft, useEncryption })} />
+                <Controller name="useEncryption" control={form.control} render={({ field }) => <Switch label="Use encryption" checked={field.value} disabled={saving} onChange={field.onChange} />} />
               </div>
               <div className="setting-row">
                 <span>Compression</span>
-                <Switch label="Use compression" checked={draft.useCompression} onChange={useCompression => setDraft({ ...draft, useCompression })} />
+                <Controller name="useCompression" control={form.control} render={({ field }) => <Switch label="Use compression" checked={field.value} disabled={saving} onChange={field.onChange} />} />
               </div>
               <div className="setting-row">
                 <span>Bandwidth limit</span>
-                <Switch label="Limit bandwidth" checked={draft.bandwidthEnabled} onChange={bandwidthEnabled => setDraft({ ...draft, bandwidthEnabled })} />
+                <Controller name="bandwidthEnabled" control={form.control} render={({ field }) => <Switch label="Limit bandwidth" checked={field.value} disabled={saving} onChange={field.onChange} />} />
               </div>
-              {draft.bandwidthEnabled && (
+              {form.watch('bandwidthEnabled') && (
                 <div className="field-row three-fields">
-                  <label>
-                    Limit
-                    <input type="number" min="0.01" step="any" value={draft.bandwidthValue} required onChange={event => setDraft({ ...draft, bandwidthValue: event.target.value })} />
-                  </label>
-                  <label>
-                    Unit
-                    <select value={draft.bandwidthUnit} onChange={event => setDraft({ ...draft, bandwidthUnit: event.target.value as 'KB' | 'MB' })}>
-                      <option>KB</option>
-                      <option>MB</option>
-                    </select>
-                  </label>
-                  <label>
-                    Limit at
-                    <select value={draft.bandwidthMode} onChange={event => setDraft({ ...draft, bandwidthMode: event.target.value as 'client' | 'server' })}>
-                      <option value="client">Client</option>
-                      <option value="server">Server</option>
-                    </select>
-                  </label>
+                  <FormField label="Limit" error={form.formState.errors.bandwidthValue}>
+                    <input {...form.register('bandwidthValue')} type="number" min="0.01" step="any" aria-invalid={Boolean(form.formState.errors.bandwidthValue)} />
+                  </FormField>
+                  <FormField label="Unit" error={form.formState.errors.bandwidthUnit}>
+                    <Controller name="bandwidthUnit" control={form.control} render={({ field }) => <Select label="Bandwidth unit" value={field.value} disabled={saving} onChange={field.onChange} options={[{ value: 'KB', label: 'KB' }, { value: 'MB', label: 'MB' }]} />} />
+                  </FormField>
+                  <FormField label="Limit at" error={form.formState.errors.bandwidthMode}>
+                    <Controller name="bandwidthMode" control={form.control} render={({ field }) => <Select label="Bandwidth limit position" value={field.value} disabled={saving} onChange={field.onChange} options={[{ value: 'client', label: 'Client' }, { value: 'server', label: 'Server' }]} />} />
+                  </FormField>
                 </div>
               )}
-              <label>
-                Proxy Protocol
-                <select value={draft.proxyProtocolVersion} onChange={event => setDraft({ ...draft, proxyProtocolVersion: event.target.value as '' | 'v1' | 'v2' })}>
-                  <option value="">Off</option>
-                  <option value="v1">v1</option>
-                  <option value="v2">v2</option>
-                </select>
-              </label>
+              <FormField label="Proxy Protocol" error={form.formState.errors.proxyProtocolVersion}>
+                <Controller name="proxyProtocolVersion" control={form.control} render={({ field }) => <Select label="Proxy Protocol" value={field.value} disabled={saving} onChange={field.onChange} options={[{ value: '', label: 'Off' }, { value: 'v1', label: 'v1' }, { value: 'v2', label: 'v2' }]} />} />
+              </FormField>
             </section>
-          )}
+          </FormScrollArea>
+        </Tabs.Content>
 
-          {activeStep === 'health' && (
+        <Tabs.Content value="health" forceMount className="tunnel-step-panel">
+          <FormScrollArea>
             <section className="form-section">
               <div className="setting-row">
                 <h3>Health check</h3>
-                <Switch label="Enable health check" checked={draft.healthEnabled} onChange={healthEnabled => setDraft({ ...draft, healthEnabled })} />
+                <Controller name="healthEnabled" control={form.control} render={({ field }) => <Switch label="Enable health check" checked={field.value} disabled={saving} onChange={field.onChange} />} />
               </div>
-              {draft.healthEnabled && (
+              {form.watch('healthEnabled') && (
                 <>
-                  <div className="segmented two-segments">{(['tcp', 'http'] as const).map(value => <button type="button" className={draft.healthType === value ? 'active' : ''} key={value} onClick={() => setDraft({ ...draft, healthType: value })}>{value.toUpperCase()}</button>)}</div>
+                  <Controller name="healthType" control={form.control} render={({ field }) => <SegmentedControl label="Health check type" className="two-segments" value={field.value} disabled={saving} onChange={field.onChange} options={[{ value: 'tcp', label: 'TCP' }, { value: 'http', label: 'HTTP' }]} />} />
                   <div className="field-row three-fields">
-                    <label>
-                      Interval (s)
-                      <input type="number" min="1" value={draft.healthInterval} required onChange={event => setDraft({ ...draft, healthInterval: event.target.value })} />
-                    </label>
-                    <label>
-                      Timeout (s)
-                      <input type="number" min="1" value={draft.healthTimeout} required onChange={event => setDraft({ ...draft, healthTimeout: event.target.value })} />
-                    </label>
-                    <label>
-                      Max failed
-                      <input type="number" min="1" value={draft.healthMaxFailed} required onChange={event => setDraft({ ...draft, healthMaxFailed: event.target.value })} />
-                    </label>
+                    <FormField label="Interval (s)" error={form.formState.errors.healthInterval}>
+                      <input {...form.register('healthInterval')} type="number" min="1" aria-invalid={Boolean(form.formState.errors.healthInterval)} />
+                    </FormField>
+                    <FormField label="Timeout (s)" error={form.formState.errors.healthTimeout}>
+                      <input {...form.register('healthTimeout')} type="number" min="1" aria-invalid={Boolean(form.formState.errors.healthTimeout)} />
+                    </FormField>
+                    <FormField label="Max failed" error={form.formState.errors.healthMaxFailed}>
+                      <input {...form.register('healthMaxFailed')} type="number" min="1" aria-invalid={Boolean(form.formState.errors.healthMaxFailed)} />
+                    </FormField>
                   </div>
-                  {draft.healthType === 'http' && (
+                  {form.watch('healthType') === 'http' && (
                     <>
-                      <label>
-                        Health path
-                        <input value={draft.healthPath} required onChange={event => setDraft({ ...draft, healthPath: event.target.value })} />
-                      </label>
-                      <KeyValueFieldRows label="Health check headers" rows={draft.healthHeaders} onChange={healthHeaders => setDraft({ ...draft, healthHeaders })} />
+                      <FormField label="Health path" error={form.formState.errors.healthPath}>
+                        <input {...form.register('healthPath')} aria-invalid={Boolean(form.formState.errors.healthPath)} />
+                      </FormField>
+                      <KeyValueFieldRows
+                        label="Health check headers"
+                        name="healthHeaders"
+                        fields={healthHeaders.fields}
+                        register={form.register}
+                        error={form.formState.errors.healthHeaders}
+                        onAdd={() => {
+                          healthHeaders.append({ name: '', value: '' })
+                          focusNewField(`healthHeaders.${healthHeaders.fields.length}.name` as Path<TunnelFormValues>)
+                        }}
+                        onRemove={healthHeaders.remove}
+                      />
                     </>
                   )}
                 </>
               )}
             </section>
-          )}
+          </FormScrollArea>
+        </Tabs.Content>
 
-          {activeStep === 'http' && draft.protocol === 'http' && (
-            <section className="form-section">
-              <h3>HTTP</h3>
-              <div className="setting-row">
-                <span>Basic Auth</span>
-                <Switch label="Enable HTTP Basic Auth" checked={draft.authEnabled} onChange={authEnabled => setDraft({ ...draft, authEnabled })} />
-              </div>
-              {draft.authEnabled && (
-                <div className="field-row">
-                  <label>
-                    Username
-                    <input value={draft.authUsername} required onChange={event => setDraft({ ...draft, authUsername: event.target.value })} />
-                  </label>
-                  <label>
-                    Password
-                    <input type="password" value={draft.authPassword} required={!initial?.options.http?.basicAuth} placeholder={initial?.options.http?.basicAuth ? 'Unchanged' : ''} autoComplete="new-password" onChange={event => setDraft({ ...draft, authPassword: event.target.value })} />
-                  </label>
+        {protocol === 'http' && (
+          <Tabs.Content value="http" forceMount className="tunnel-step-panel">
+            <FormScrollArea>
+              <section className="form-section">
+                <h3>HTTP</h3>
+                <div className="setting-row">
+                  <span>Basic Auth</span>
+                  <Controller name="authEnabled" control={form.control} render={({ field }) => <Switch label="Enable HTTP Basic Auth" checked={field.value} disabled={saving} onChange={field.onChange} />} />
                 </div>
-              )}
-              <label>
-                Host Header Rewrite
-                <input value={draft.hostHeaderRewrite} onChange={event => setDraft({ ...draft, hostHeaderRewrite: event.target.value })} />
-              </label>
-              <KeyValueFieldRows label="Request headers" rows={draft.requestHeaders} onChange={requestHeaders => setDraft({ ...draft, requestHeaders })} />
-              <KeyValueFieldRows label="Response headers" rows={draft.responseHeaders} onChange={responseHeaders => setDraft({ ...draft, responseHeaders })} />
-            </section>
-          )}
-        </div>
-
-        <div className="modal-actions">
-          <button type="button" disabled={saving} onClick={onClose}>Cancel</button>
-          <div className="modal-step-actions">
-            {activeStepIndex > 0 && (
-              <button type="button" disabled={saving} onClick={() => selectStep(steps[activeStepIndex - 1]!.id)}>
-                <ArrowLeft size={15} />
-                Back
-              </button>
-            )}
-            {activeStepIndex < steps.length - 1
-              ? (
-                  <button className="primary" type="button" disabled={saving} onClick={nextStep}>
-                    Next
-                    <ArrowRight size={15} />
-                  </button>
-                )
-              : (
-                  <button className="primary" type="submit" disabled={saving}>
-                    {saving && <Spinner />}
-                    {saving ? 'Saving...' : 'Save'}
-                  </button>
+                {form.watch('authEnabled') && (
+                  <div className="field-row">
+                    <FormField label="Username" error={form.formState.errors.authUsername}>
+                      <input {...form.register('authUsername')} aria-invalid={Boolean(form.formState.errors.authUsername)} />
+                    </FormField>
+                    <FormField label="Password" error={form.formState.errors.authPassword}>
+                      <input {...form.register('authPassword')} type="password" placeholder={initial?.options.http?.basicAuth ? 'Unchanged' : ''} autoComplete="new-password" aria-invalid={Boolean(form.formState.errors.authPassword)} />
+                    </FormField>
+                  </div>
                 )}
-          </div>
+                <FormField label="Host Header Rewrite" error={form.formState.errors.hostHeaderRewrite}>
+                  <input {...form.register('hostHeaderRewrite')} aria-invalid={Boolean(form.formState.errors.hostHeaderRewrite)} />
+                </FormField>
+                <KeyValueFieldRows
+                  label="Request headers"
+                  name="requestHeaders"
+                  fields={requestHeaders.fields}
+                  register={form.register}
+                  error={form.formState.errors.requestHeaders}
+                  onAdd={() => {
+                    requestHeaders.append({ name: '', value: '' })
+                    focusNewField(`requestHeaders.${requestHeaders.fields.length}.name` as Path<TunnelFormValues>)
+                  }}
+                  onRemove={requestHeaders.remove}
+                />
+                <KeyValueFieldRows
+                  label="Response headers"
+                  name="responseHeaders"
+                  fields={responseHeaders.fields}
+                  register={form.register}
+                  error={form.formState.errors.responseHeaders}
+                  onAdd={() => {
+                    responseHeaders.append({ name: '', value: '' })
+                    focusNewField(`responseHeaders.${responseHeaders.fields.length}.name` as Path<TunnelFormValues>)
+                  }}
+                  onRemove={responseHeaders.remove}
+                />
+              </section>
+            </FormScrollArea>
+          </Tabs.Content>
+        )}
+      </Tabs.Root>
+
+      <FormError error={form.formState.errors.root?.server} />
+      <div className="modal-actions">
+        <button type="button" disabled={saving} onClick={onClose}>Cancel</button>
+        <div className="modal-step-actions">
+          {activeStepIndex > 0 && (
+            <button type="button" disabled={saving} onClick={() => selectStep(steps[activeStepIndex - 1]!.id)}>
+              <ArrowLeft size={15} />
+              Back
+            </button>
+          )}
+          {activeStepIndex < steps.length - 1
+            ? (
+                <button className="primary" type="button" disabled={saving} onClick={() => void nextStep()}>
+                  Next
+                  <ArrowRight size={15} />
+                </button>
+              )
+            : (
+                <button className="primary" type="submit" disabled={saving}>
+                  {saving && <Spinner />}
+                  {saving ? 'Saving...' : 'Save'}
+                </button>
+              )}
         </div>
-      </form>
-    </div>
+      </div>
+    </DialogShell>
   )
 }
 
@@ -642,7 +551,7 @@ export function ClientDetailPage({ id, refreshSequence, showOwner }: { id: strin
   const [refreshing, setRefreshing] = useState(false)
   const [pending, setPending] = useState<Set<string>>(new Set())
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
-  const [confirmation, setConfirmation] = useState<ConfirmationRequest>()
+  const [confirmation, setConfirmation] = useState<ConfirmAction>()
   const loaded = useRef(false)
   const requestId = useRef(0)
   const { notify } = useFeedback()
@@ -756,7 +665,9 @@ export function ClientDetailPage({ id, refreshSequence, showOwner }: { id: strin
                       {' '}
                       {client.lastAppliedRevision}
                       {' '}
+                      {' '}
                       /
+                      {' '}
                       {' '}
                       {client.desiredRevision}
                     </span>
@@ -779,7 +690,7 @@ export function ClientDetailPage({ id, refreshSequence, showOwner }: { id: strin
                     <tbody>
                       {tunnels.map(tunnel => (
                         <Fragment key={tunnel.id}>
-                          <tr className={`tunnel-row${expanded.has(tunnel.id) ? ' is-expanded' : ''}`} key={tunnel.id}>
+                          <tr className={`tunnel-row${expanded.has(tunnel.id) ? ' is-expanded' : ''}`}>
                             <td data-label="Details"><IconButton label={expanded.has(tunnel.id) ? 'Hide advanced options' : 'Show advanced options'} onClick={() => toggleDetails(tunnel.id)}>{expanded.has(tunnel.id) ? <ChevronDown size={15} /> : <ChevronRight size={15} />}</IconButton></td>
                             <td data-label="Name"><strong>{tunnel.label || 'Unlabeled tunnel'}</strong></td>
                             <td data-label="Public mapping">
@@ -806,7 +717,7 @@ export function ClientDetailPage({ id, refreshSequence, showOwner }: { id: strin
                               </div>
                             </td>
                           </tr>
-                          {expanded.has(tunnel.id) && <tr className="details-row" key={`${tunnel.id}:details`}><td colSpan={7}><TunnelDetails tunnel={tunnel} /></td></tr>}
+                          {expanded.has(tunnel.id) && <tr className="details-row"><td colSpan={7}><TunnelDetails tunnel={tunnel} /></td></tr>}
                         </Fragment>
                       ))}
                     </tbody>
@@ -816,7 +727,7 @@ export function ClientDetailPage({ id, refreshSequence, showOwner }: { id: strin
               </>
             )}
       {editing !== undefined && <TunnelEditor clientId={id} initial={editing ?? undefined} onClose={() => setEditing(undefined)} onSaved={saved} />}
-      {confirmation && <Confirmation request={confirmation} onClose={() => setConfirmation(undefined)} />}
+      {confirmation && <ConfirmationDialog request={confirmation} onClose={() => setConfirmation(undefined)} />}
     </>
   )
 }

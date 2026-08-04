@@ -1,10 +1,15 @@
-import type { FormEvent, ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import type { CurrentAccount } from './api'
-import { Gauge, KeyRound, LogOut, Network, Play, RefreshCw, Server, Shield, Square, Users, X } from 'lucide-react'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { Gauge, KeyRound, LogOut, Network, Play, RefreshCw, Server, Shield, Square, Users } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
+import { useForm } from 'react-hook-form'
+import { z } from 'zod'
 import { AccountsPage } from './account-pages'
 import { ApiError, apiJson, jsonRequest } from './api'
 import { ClientDetailPage, ClientsPage } from './client-pages'
+import { FormError, FormField } from './form'
+import { DialogShell } from './primitives'
 import { ErrorState, IconButton, navigate, PageHeader, Spinner, Status, useFeedback } from './ui'
 
 interface ServerProjection {
@@ -29,6 +34,20 @@ interface StateView {
 
 type Page = { name: 'overview' | 'clients' | 'accounts' | 'server' } | { name: 'client', id: string }
 
+const loginSchema = z.object({
+  username: z.string().min(1, 'Username is required'),
+  password: z.string().min(1, 'Password is required'),
+})
+
+const passwordSchema = z.object({
+  currentPassword: z.string().min(1, 'Current password is required'),
+  newPassword: z.string().min(5, 'New password must be at least 5 characters').max(256),
+  confirmation: z.string(),
+}).refine(values => values.newPassword === values.confirmation, { path: ['confirmation'], message: 'New passwords do not match' })
+
+type LoginValues = z.infer<typeof loginSchema>
+type PasswordValues = z.infer<typeof passwordSchema>
+
 function currentPage(): Page {
   const client = /^\/clients\/([^/]+)$/.exec(location.pathname)?.[1]
   if (client)
@@ -43,42 +62,34 @@ function currentPage(): Page {
 }
 
 function Login({ onLogin }: { onLogin: () => void }): React.JSX.Element {
-  const [error, setError] = useState('')
-  const [submitting, setSubmitting] = useState(false)
   const { notify } = useFeedback()
-  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-    event.preventDefault()
-    const form = new FormData(event.currentTarget)
-    setError('')
-    setSubmitting(true)
+  const form = useForm<LoginValues>({ resolver: zodResolver(loginSchema), defaultValues: { username: '', password: '' } })
+  const submitting = form.formState.isSubmitting
+  const submit = form.handleSubmit(async (values) => {
+    form.clearErrors('root.server')
     try {
-      await apiJson('/api/session', jsonRequest('POST', { username: form.get('username'), password: form.get('password') }))
+      await apiJson('/api/session', jsonRequest('POST', values))
       notify('Signed in')
       onLogin()
     }
     catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      form.setError('root.server', { message: cause instanceof Error ? cause.message : String(cause) })
     }
-    finally {
-      setSubmitting(false)
-    }
-  }
+  })
   return (
     <main className="login-shell">
-      <form className="login-panel" aria-busy={submitting} onSubmit={event => void submit(event)}>
+      <form className="login-panel" aria-busy={submitting} onSubmit={submit}>
         <div className="brand">
           <Network size={18} />
           <span>HACKYCY TUNNEL</span>
         </div>
-        <label>
-          Username
-          <input name="username" autoComplete="username" required autoFocus disabled={submitting} />
-        </label>
-        <label>
-          Password
-          <input name="password" type="password" autoComplete="current-password" required disabled={submitting} />
-        </label>
-        {error && <p className="form-error" role="alert">{error}</p>}
+        <FormField label="Username" error={form.formState.errors.username}>
+          <input {...form.register('username')} autoComplete="username" autoFocus disabled={submitting} aria-invalid={Boolean(form.formState.errors.username)} />
+        </FormField>
+        <FormField label="Password" error={form.formState.errors.password}>
+          <input {...form.register('password')} type="password" autoComplete="current-password" disabled={submitting} aria-invalid={Boolean(form.formState.errors.password)} />
+        </FormField>
+        <FormError error={form.formState.errors.root?.server} />
         <button className="primary" type="submit" disabled={submitting}>
           {submitting && <Spinner />}
           {submitting ? 'Signing in...' : 'Sign in'}
@@ -89,59 +100,40 @@ function Login({ onLogin }: { onLogin: () => void }): React.JSX.Element {
 }
 
 function PasswordEditor({ onClose, onChanged }: { onClose: () => void, onChanged: () => void }): React.JSX.Element {
-  const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
   const { notify } = useFeedback()
-  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-    event.preventDefault()
-    const form = new FormData(event.currentTarget)
-    const newPassword = String(form.get('newPassword'))
-    if (newPassword !== form.get('confirmation')) {
-      setError('New passwords do not match')
-      return
-    }
-    setSaving(true)
+  const form = useForm<PasswordValues>({ resolver: zodResolver(passwordSchema), defaultValues: { currentPassword: '', newPassword: '', confirmation: '' } })
+  const saving = form.formState.isSubmitting
+  const submit = form.handleSubmit(async ({ currentPassword, newPassword }) => {
+    form.clearErrors('root.server')
     try {
-      await apiJson('/api/session/password', jsonRequest('PUT', { currentPassword: form.get('currentPassword'), newPassword }))
+      await apiJson('/api/session/password', jsonRequest('PUT', { currentPassword, newPassword }))
       notify('Password changed')
       onChanged()
     }
     catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      form.setError('root.server', { message: cause instanceof Error ? cause.message : String(cause) })
     }
-    finally {
-      setSaving(false)
-    }
-  }
+  })
   return (
-    <div className="modal-backdrop" role="presentation">
-      <form className="modal" role="dialog" aria-modal="true" aria-labelledby="password-title" onSubmit={event => void submit(event)}>
-        <div className="modal-title">
-          <h2 id="password-title">Change password</h2>
-          <IconButton label="Close" onClick={onClose}><X size={16} /></IconButton>
-        </div>
-        <label>
-          Current password
-          <input name="currentPassword" type="password" autoComplete="current-password" required autoFocus />
-        </label>
-        <label>
-          New password
-          <input name="newPassword" type="password" minLength={5} maxLength={256} autoComplete="new-password" required />
-        </label>
-        <label>
-          Confirm password
-          <input name="confirmation" type="password" minLength={5} maxLength={256} autoComplete="new-password" required />
-        </label>
-        {error && <p className="form-error" role="alert">{error}</p>}
-        <div className="modal-actions">
-          <button type="button" onClick={onClose}>Cancel</button>
-          <button className="primary" type="submit" disabled={saving}>
-            {saving && <Spinner />}
-            {saving ? 'Saving...' : 'Change'}
-          </button>
-        </div>
-      </form>
-    </div>
+    <DialogShell open title="Change password" busy={saving} onOpenChange={open => !open && onClose()} onSubmit={submit}>
+      <FormField label="Current password" error={form.formState.errors.currentPassword}>
+        <input {...form.register('currentPassword')} type="password" autoComplete="current-password" autoFocus aria-invalid={Boolean(form.formState.errors.currentPassword)} />
+      </FormField>
+      <FormField label="New password" error={form.formState.errors.newPassword}>
+        <input {...form.register('newPassword')} type="password" minLength={5} maxLength={256} autoComplete="new-password" aria-invalid={Boolean(form.formState.errors.newPassword)} />
+      </FormField>
+      <FormField label="Confirm password" error={form.formState.errors.confirmation}>
+        <input {...form.register('confirmation')} type="password" minLength={5} maxLength={256} autoComplete="new-password" aria-invalid={Boolean(form.formState.errors.confirmation)} />
+      </FormField>
+      <FormError error={form.formState.errors.root?.server} />
+      <div className="modal-actions">
+        <button type="button" onClick={onClose}>Cancel</button>
+        <button className="primary" type="submit" disabled={saving}>
+          {saving && <Spinner />}
+          {saving ? 'Saving...' : 'Change'}
+        </button>
+      </div>
+    </DialogShell>
   )
 }
 

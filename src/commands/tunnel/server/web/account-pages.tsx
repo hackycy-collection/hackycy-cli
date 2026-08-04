@@ -1,126 +1,110 @@
-import type { FormEvent } from 'react'
 import type { AccountRole } from '../../types'
 import type { AccountView } from './api'
-import type { ConfirmationRequest } from './ui'
-import { KeyRound, Pencil, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import type { ConfirmAction } from './ui'
+import { zodResolver } from '@hookform/resolvers/zod'
+import { KeyRound, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { Controller, useForm } from 'react-hook-form'
+import { z } from 'zod'
 import { apiJson, jsonRequest } from './api'
-import { Confirmation, ErrorState, IconButton, LoadingState, PageHeader, Spinner, Status, useFeedback } from './ui'
+import { FormError, FormField } from './form'
+import { DialogShell, SegmentedControl } from './primitives'
+import { ConfirmationDialog, ErrorState, IconButton, LoadingState, PageHeader, Spinner, Status, useFeedback } from './ui'
 
-function RoleSelector({ value, onChange }: { value: AccountRole, onChange: (role: AccountRole) => void }): React.JSX.Element {
-  return (
-    <div className="segmented roles">
-      {(['user', 'admin'] as const).map(role => (
-        <button type="button" className={value === role ? 'active' : ''} key={role} onClick={() => onChange(role)}>
-          {role === 'admin' ? 'Administrator' : 'User'}
-        </button>
-      ))}
-    </div>
-  )
+function accountSchema(creating: boolean) {
+  return z.object({
+    username: z.string().min(1, 'Username is required').max(64),
+    password: z.string().max(256),
+    role: z.enum(['user', 'admin']),
+  }).superRefine((values, context) => {
+    if (creating && values.password.length < 5)
+      context.addIssue({ code: 'custom', path: ['password'], message: 'Password must be at least 5 characters' })
+  })
 }
 
+const passwordResetSchema = z.object({ password: z.string().min(5, 'Password must be at least 5 characters').max(256) })
+
+type AccountFormValues = z.infer<ReturnType<typeof accountSchema>>
+type PasswordResetValues = z.infer<typeof passwordResetSchema>
+
 function AccountEditor({ account, onClose, onSaved }: { account?: AccountView, onClose: () => void, onSaved: () => void }): React.JSX.Element {
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [role, setRole] = useState<AccountRole>(account?.role ?? 'user')
-  const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
+  const creating = !account
   const { notify } = useFeedback()
-  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-    event.preventDefault()
-    setSaving(true)
+  const form = useForm<AccountFormValues>({
+    resolver: zodResolver(accountSchema(creating)),
+    defaultValues: { username: account?.username ?? '', password: '', role: account?.role ?? 'user' },
+  })
+  const saving = form.formState.isSubmitting
+  const submit = form.handleSubmit(async (values) => {
+    form.clearErrors('root.server')
     try {
       if (account)
-        await apiJson(`/api/accounts/${encodeURIComponent(account.id)}`, jsonRequest('PATCH', { role }))
+        await apiJson(`/api/accounts/${encodeURIComponent(account.id)}`, jsonRequest('PATCH', { role: values.role }))
       else
-        await apiJson('/api/accounts', jsonRequest('POST', { username, password, role }))
+        await apiJson('/api/accounts', jsonRequest('POST', { username: values.username, password: values.password, role: values.role }))
       notify(account ? 'Account role saved' : 'Account created')
       onSaved()
     }
     catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      form.setError('root.server', { message: cause instanceof Error ? cause.message : String(cause) })
     }
-    finally {
-      setSaving(false)
-    }
-  }
+  })
   return (
-    <div className="modal-backdrop" role="presentation">
-      <form className="modal" role="dialog" aria-modal="true" aria-labelledby="account-editor-title" onSubmit={event => void submit(event)}>
-        <div className="modal-title">
-          <h2 id="account-editor-title">{account ? 'Change account role' : 'Create account'}</h2>
-          <IconButton label="Close" onClick={onClose}><X size={16} /></IconButton>
-        </div>
-        {!account && (
-          <>
-            <label>
-              Username
-              <input value={username} maxLength={64} autoComplete="off" required autoFocus onChange={event => setUsername(event.target.value)} />
-            </label>
-            <label>
-              Password
-              <input value={password} type="password" minLength={5} maxLength={256} autoComplete="new-password" required onChange={event => setPassword(event.target.value)} />
-            </label>
-          </>
-        )}
-        <label>
-          Role
-          <RoleSelector value={role} onChange={setRole} />
-        </label>
-        {error && <p className="form-error" role="alert">{error}</p>}
-        <div className="modal-actions">
-          <button type="button" onClick={onClose}>Cancel</button>
-          <button className="primary" type="submit" disabled={saving}>
-            {saving && <Spinner />}
-            {saving ? 'Saving...' : account ? 'Save' : 'Create'}
-          </button>
-        </div>
-      </form>
-    </div>
+    <DialogShell open title={account ? 'Change account role' : 'Create account'} busy={saving} onOpenChange={open => !open && onClose()} onSubmit={submit}>
+      {!account && (
+        <>
+          <FormField label="Username" error={form.formState.errors.username}>
+            <input {...form.register('username')} maxLength={64} autoComplete="off" autoFocus aria-invalid={Boolean(form.formState.errors.username)} />
+          </FormField>
+          <FormField label="Password" error={form.formState.errors.password}>
+            <input {...form.register('password')} type="password" minLength={5} maxLength={256} autoComplete="new-password" aria-invalid={Boolean(form.formState.errors.password)} />
+          </FormField>
+        </>
+      )}
+      <FormField label="Role" error={form.formState.errors.role}>
+        <Controller name="role" control={form.control} render={({ field }) => <SegmentedControl label="Role" className="roles" value={field.value} onChange={value => field.onChange(value as AccountRole)} options={[{ value: 'admin', label: 'Administrator' }, { value: 'user', label: 'User' }]} />} />
+      </FormField>
+      <FormError error={form.formState.errors.root?.server} />
+      <div className="modal-actions">
+        <button type="button" onClick={onClose}>Cancel</button>
+        <button className="primary" type="submit" disabled={saving}>
+          {saving && <Spinner />}
+          {saving ? 'Saving...' : account ? 'Save' : 'Create'}
+        </button>
+      </div>
+    </DialogShell>
   )
 }
 
 function PasswordReset({ account, onClose, onSaved }: { account: AccountView, onClose: () => void, onSaved: () => void }): React.JSX.Element {
-  const [password, setPassword] = useState('')
-  const [error, setError] = useState('')
-  const [saving, setSaving] = useState(false)
+  const form = useForm<PasswordResetValues>({ resolver: zodResolver(passwordResetSchema), defaultValues: { password: '' } })
+  const saving = form.formState.isSubmitting
   const { notify } = useFeedback()
-  const submit = async (event: FormEvent<HTMLFormElement>): Promise<void> => {
-    event.preventDefault()
-    setSaving(true)
+  const submit = form.handleSubmit(async ({ password }) => {
+    form.clearErrors('root.server')
     try {
       await apiJson(`/api/accounts/${encodeURIComponent(account.id)}/password`, jsonRequest('PUT', { password }))
       notify('Account password reset')
       onSaved()
     }
     catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause))
+      form.setError('root.server', { message: cause instanceof Error ? cause.message : String(cause) })
     }
-    finally {
-      setSaving(false)
-    }
-  }
+  })
   return (
-    <div className="modal-backdrop" role="presentation">
-      <form className="modal" role="dialog" aria-modal="true" aria-labelledby="password-reset-title" onSubmit={event => void submit(event)}>
-        <div className="modal-title">
-          <h2 id="password-reset-title">Reset password</h2>
-          <IconButton label="Close" onClick={onClose}><X size={16} /></IconButton>
-        </div>
-        <label>
-          New password
-          <input value={password} type="password" minLength={5} maxLength={256} autoComplete="new-password" required autoFocus onChange={event => setPassword(event.target.value)} />
-        </label>
-        {error && <p className="form-error" role="alert">{error}</p>}
-        <div className="modal-actions">
-          <button type="button" onClick={onClose}>Cancel</button>
-          <button className="primary" type="submit" disabled={saving}>
-            {saving && <Spinner />}
-            {saving ? 'Saving...' : 'Reset'}
-          </button>
-        </div>
-      </form>
-    </div>
+    <DialogShell open title="Reset password" busy={saving} onOpenChange={open => !open && onClose()} onSubmit={submit}>
+      <FormField label="New password" error={form.formState.errors.password}>
+        <input {...form.register('password')} type="password" minLength={5} maxLength={256} autoComplete="new-password" autoFocus aria-invalid={Boolean(form.formState.errors.password)} />
+      </FormField>
+      <FormError error={form.formState.errors.root?.server} />
+      <div className="modal-actions">
+        <button type="button" onClick={onClose}>Cancel</button>
+        <button className="primary" type="submit" disabled={saving}>
+          {saving && <Spinner />}
+          {saving ? 'Saving...' : 'Reset'}
+        </button>
+      </div>
+    </DialogShell>
   )
 }
 
@@ -128,7 +112,7 @@ export function AccountsPage({ currentAccountId, refreshSequence, onSessionEnded
   const [accounts, setAccounts] = useState<AccountView[]>([])
   const [editing, setEditing] = useState<AccountView | null | undefined>()
   const [resetting, setResetting] = useState<AccountView>()
-  const [confirmation, setConfirmation] = useState<ConfirmationRequest>()
+  const [confirmation, setConfirmation] = useState<ConfirmAction>()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -245,7 +229,7 @@ export function AccountsPage({ currentAccountId, refreshSequence, onSessionEnded
           }}
         />
       )}
-      {confirmation && <Confirmation request={confirmation} onClose={() => setConfirmation(undefined)} />}
+      {confirmation && <ConfirmationDialog request={confirmation} onClose={() => setConfirmation(undefined)} />}
     </>
   )
 }
