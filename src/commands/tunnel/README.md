@@ -16,7 +16,7 @@ ycy tunnel connect --server tunnel.example.com --token <client-token>
 - Let multiple Control Plane Accounts manage owned resources through fixed Administrator and User roles.
 - Configure each client's tunnels centrally and push complete versioned snapshots.
 - Support HTTP by exact custom domains and path prefixes, and TCP/UDP by public server port.
-- Keep both server and client supervisors single-instance and foreground.
+- Keep the server supervisor and each Client Connection Instance single-instance and foreground while allowing several client instances on one host.
 - Work as a native command on the CLI's existing platforms and as a server-oriented Docker image.
 - Reuse a pinned, verified official FRP release instead of implementing a forwarding protocol.
 
@@ -39,6 +39,14 @@ _Avoid_: Untrusted client, tenant
 **Client Token**:
 The control-plane-generated, sole user-facing identity credential for one Trusted Tunnel Client. It is recoverable and permits at most one active control session.
 _Avoid_: Client ID, user, shared token
+
+**Client Connection Instance**:
+One local foreground `ycy tunnel connect` supervisor identified by a Tunnel Control Plane origin and Client Token pair. It owns one isolated state directory, one lock, and at most one `frpc` child.
+_Avoid_: Trusted Tunnel Client, profile, daemon
+
+**Remembered Tunnel Connection**:
+One locally encrypted, previously authenticated Tunnel Control Plane origin and Client Token pair available for interactive connection selection. It is a convenience fallback, not a service-manager identity or an alias.
+_Avoid_: Profile, client name, Trusted Tunnel Client
 
 **Client Remark**:
 An optional, multi-line, operator-maintained note used to distinguish a Trusted Tunnel Client. It is not an identity credential and need not be unique.
@@ -105,6 +113,7 @@ _Avoid_: Tunnel Definition, Tunnel Control Plane
 | Decision | Rationale |
 | --- | --- |
 | Run server and client supervisors in the foreground. | Docker or the host service manager owns supervisor persistence and restart, keeping process ownership, signals, and logs predictable across platforms. |
+| Isolate Client Connection Instances by Control Plane origin and Client Token. | A keyed opaque directory identity allows unrelated connections to run in parallel without exposing Client Tokens in paths, while the same pair retains single-instance ownership. |
 | Persist control-plane state in one embedded SQLite database. | Transactions, ownership queries, uniqueness, and cascade deletion do not require an external database; connection, session, and process status remain bounded in memory. |
 | Keep current Client Tokens recoverable. | Authorized operators can retrieve credentials after creation; control-plane access, its data directory, and backups are therefore trusted, and rotation is the revocation mechanism. |
 | Use fixed Administrator and User roles with client-level ownership. | The two roles cover global operation and self-service without configurable policies; Tunnel Definitions inherit their client's owner so snapshots remain complete. |
@@ -147,7 +156,7 @@ FRP does not see or validate Client Tokens. A server-generated Internal FRP Toke
 
 ## Command Contract
 
-Both commands remain in the foreground until signaled. The server and client each acquire an exclusive lock for their state directory before opening listeners or starting FRP. A second instance fails with a diagnostic identifying the active process and state directory.
+Both commands remain in the foreground until signaled. The server and every Client Connection Instance acquire an exclusive lock for their state directory before opening listeners or starting FRP. A second client using the same normalized origin and Client Token fails with `INSTANCE_ACTIVE`; instances with either value different use independent locks and may run concurrently.
 
 ### Server
 
@@ -193,12 +202,21 @@ ycy tunnel connect [--server <control-plane>] [--token <client-token>]
 
 | Value | CLI option | Environment variable | Secret file | Local fallback |
 | --- | --- | --- | --- | --- |
-| Server | `--server` | `YCY_TUNNEL_SERVER` | - | Remembered server, then `DEFAULT_TUNNEL_SERVER` |
-| Token | `--token` | `YCY_TUNNEL_TOKEN` | `YCY_TUNNEL_TOKEN_FILE` | Token remembered for the resolved server |
+| Server | `--server` | `YCY_TUNNEL_SERVER` | - | Remembered connection selector, then `DEFAULT_TUNNEL_SERVER` |
+| Token | `--token` | `YCY_TUNNEL_TOKEN` | `YCY_TUNNEL_TOKEN_FILE` | Token from the selected remembered connection |
 
-Server precedence is CLI option, environment value, the one remembered connection, then the compile-time `DEFAULT_TUNNEL_SERVER`, which is empty by default. Token precedence is CLI option, direct environment value, secret file, then the remembered token only when its normalized server matches the resolved server. A server without a URL scheme becomes `https://<server>`; an explicit `http://` URL enables an unencrypted local deployment.
+Field precedence is CLI option, environment value, Token secret file, Remembered Tunnel Connections, then the compile-time `DEFAULT_TUNNEL_SERVER`, which is empty by default. A server without a URL scheme becomes `https://<server>`; an explicit `http://` URL enables an unencrypted local deployment.
 
-Supplying a CLI token marks the final server-token pair for remembering. The pair replaces the previous remembered connection only after the control plane accepts the token and sends a compatible welcome; connection, authentication, and compatibility failures leave the old pair unchanged. A server supplied alone never causes an environment or secret-file token to be stored. The Client Token is encrypted with the existing machine-and-user-bound ycy configuration key before the pair is written to `~/.ycy-cli/config.json`. A write failure warns without stopping the authenticated tunnel client.
+A complete server-token pair starts without prompting. With only a server, saved pairs are filtered by normalized origin. With only a previously saved Token, its matching origins are candidates; a new Token instead uses the distinct saved origins as rotation candidates. With neither value, every valid Remembered Tunnel Connection is a candidate. One candidate is selected automatically. Several candidates use an interactive selector ordered by most recent successful authentication; its labels contain the origin and a Token with only its first eight and last four characters visible. A non-interactive process with several candidates fails and requires both values explicitly. Cancelling the selector creates no state and changes no configuration.
+
+Supplying a CLI token marks the authenticated pair for insertion or recency update. Selecting or otherwise reusing an existing saved pair updates its recency. New Tokens sourced only from the environment or secret file are not persisted. Up to 32 pairs are retained using least-recently-authenticated eviction. Each Client Token is encrypted with the existing machine-and-user-bound ycy configuration key in `~/.ycy-cli/config.json`; one corrupt entry is ignored without hiding the rest. Configuration mutation uses a cross-process lock and atomic replacement so parallel client authentication cannot lose entries. A write failure warns without stopping the authenticated tunnel client.
+
+| Startup combination | Local result |
+| --- | --- |
+| Same server + same Token | Same instance lock; the second process fails with `INSTANCE_ACTIVE`. |
+| Same server + different Token | Independent state directories and `frpc` children. |
+| Different server + same Token | Independent state directories and `frpc` children. |
+| Different server + different Token | Independent state directories and `frpc` children. |
 
 ## Listener Contract
 
@@ -341,7 +359,18 @@ SQLite indexes enforce account username and client owner lookups, normalized HTT
 
 Connection presence, child-process state, reconnect backoff, and the latest structured runtime error stay in bounded process memory. The server does not store metrics, traffic samples, complete logs, or revision history.
 
-The client state directory may contain a last-applied snapshot and generated FRP configuration for rollback, but neither file authorizes a cold start. Every new ycy client process must authenticate and receive the current Desired Revision before starting frpc.
+The client state root contains one directory per Client Connection Instance:
+
+```text
+client/
+  v1_<base64url HMAC-SHA-256 digest>/
+    last-applied.json
+    frpc.toml
+```
+
+The digest uses the local configuration encryption key and the domain-separated message `ycy:tunnel-client-instance:v1\0<server.origin>\0<token>`. The complete 32-byte digest is encoded, so the same normalized pair is stable on one machine and user account while paths disclose no Token. A short-lived root registry lock serializes instance creation and cleanup; the per-instance lock remains held for the client process lifetime.
+
+An instance directory may contain a last-applied snapshot and generated FRP configuration for rollback, but neither file authorizes a cold start. Every new ycy client process must authenticate and receive the current Desired Revision before starting frpc. On startup, versioned sibling directories unused for 90 days are removed only when their instance lock is absent or stale. Current, active, recent, unrecognized, and legacy root entries are untouched. The old single connection configuration and old single-directory client state are not read or migrated.
 
 ## Agent Control Protocol
 
@@ -454,7 +483,7 @@ The typed capability scope and the reasons for deferring advanced FRP features a
 
 ## Process Supervision
 
-Server and client supervisors each own zero or one FRP child. Child creation, exit handling, manual commands, and configuration reconciliation pass through one serialized state machine so concurrent events cannot start duplicates.
+The server and each Client Connection Instance own zero or one FRP child. Child creation, exit handling, manual commands, and configuration reconciliation pass through one serialized state machine so concurrent events cannot start duplicates.
 
 Unexpected child exits retry after `1s, 2s, 4s, 8s, 15s, 30s`, capped at 30 seconds. A stable run resets the failure count. A deterministic verification or configuration error enters `configuration_failed` and waits for a new Desired Revision or explicit operator action instead of looping.
 
@@ -592,6 +621,7 @@ src/commands/tunnel/
       ui.tsx               Shared operational UI controls
   client/
     run.ts                 Client composition and signal handling
+    instance-state.ts      Per-connection locking and expired state cleanup
     agent.ts               WebSocket handshake, reconnect, and commands
     reconciler.ts          Verify, activate, rollback, and acknowledge
     state.ts               Last-applied rollback state
@@ -616,9 +646,9 @@ Foundation, server, native client, UI, and distribution remain independently tes
 
 Required automated coverage:
 
-- Configuration precedence, secret files, Custom Domain and Location normalization, port ranges, and platform paths.
+- Configuration precedence, interactive saved-connection selection, encrypted multi-connection retention, opaque instance identities, secret files, Custom Domain and Location normalization, port ranges, and platform paths.
 - SQLite account/ownership constraints, cascade deletion, token rotation, resource reservation, automatic port allocation, and atomic revision increments.
-- Single-instance acquisition, stale-lock handling, one-child ownership, manual stop, backoff, and deterministic-error suppression.
+- Per-identity single-instance acquisition, distinct-instance concurrency, stale-lock handling, 90-day cleanup, one-child ownership, manual stop, backoff, and deterministic-error suppression.
 - Binary artifact selection, SHA-256 rejection, atomic installation, manual-download diagnostics, and reported-version validation.
 - Exact generated TOML for HTTP/TCP/UDP, disabled tunnels, stable names, and server port ranges.
 - Agent authentication, duplicate rejection, compatibility rejection, complete snapshots, acknowledgements, reconnect, revoke, and revision races.
@@ -629,8 +659,8 @@ Required automated coverage:
 
 Acceptance scenarios:
 
-1. A second server or client instance cannot start against the same state directory.
-2. Two trusted clients connect with distinct tokens and receive only their own snapshots.
+1. A second server or Client Connection Instance cannot start against the same state directory; connections with a different origin or Token run concurrently.
+2. Two trusted clients connect with distinct Tokens and receive only their own snapshots, including when launched from the same host state root.
 3. Exact HTTP domain-location pairs and protocol-specific public ports cannot be double-reserved, including by disabled tunnels; different Locations on one domain can coexist.
 4. A valid UI mutation automatically becomes Applied; an invalid snapshot leaves the previous revision running.
 5. An ordinary management-link outage leaves existing forwarding active, but a cold-starting client does not use cache.

@@ -1,9 +1,10 @@
+import type { RememberedTunnelConnection } from '../../config/tunnel'
 import type { ClientTunnelConfig, ServerTunnelConfig } from './types'
 import { readFile } from 'node:fs/promises'
 import { isIP } from 'node:net'
 import path from 'node:path'
 import process from 'node:process'
-import { readRememberedTunnelConnection } from '../../config/tunnel'
+import { readTunnelConnectionCatalog } from '../../config/tunnel'
 import { clientStateDirectory, defaultServerDataDirectory } from './paths'
 import { TunnelError } from './types'
 
@@ -27,6 +28,10 @@ export interface ClientOptionInput {
 export interface ResolvedClientConfig {
   config: ClientTunnelConfig
   rememberOnAuthentication: boolean
+}
+
+export interface ResolveClientConfigOptions {
+  selectConnection?: (connections: readonly RememberedTunnelConnection[]) => Promise<string | undefined>
 }
 
 function option(input: string | number | undefined, env: NodeJS.ProcessEnv, name: string, fallback: string | number): string | number {
@@ -127,18 +132,46 @@ export function normalizeControlPlaneUrl(value: string): URL {
   return url
 }
 
+export function maskTunnelToken(token: string): string {
+  if (token.length <= 12)
+    return '*'.repeat(token.length)
+  return `${token.slice(0, 8)}********${token.slice(-4)}`
+}
+
+async function selectRememberedConnection(
+  connections: readonly RememberedTunnelConnection[],
+  selectConnection: ResolveClientConfigOptions['selectConnection'],
+): Promise<RememberedTunnelConnection | null | undefined> {
+  if (connections.length === 0)
+    return undefined
+  if (connections.length === 1)
+    return connections[0]!
+  if (!selectConnection) {
+    throw new TunnelError(
+      'INVALID_CONFIG',
+      'Multiple remembered tunnel connections match; provide both --server and --token in a non-interactive environment',
+    )
+  }
+  const selectedId = await selectConnection(connections)
+  if (selectedId === undefined)
+    return null
+  const selected = connections.find(connection => connection.id === selectedId)
+  if (!selected)
+    throw new TunnelError('INVALID_CONFIG', 'The selected remembered tunnel connection is unavailable')
+  return selected
+}
+
 export async function resolveClientConfig(
   input: ClientOptionInput,
   env: NodeJS.ProcessEnv = process.env,
   defaultServer: string = DEFAULT_TUNNEL_SERVER,
-): Promise<ResolvedClientConfig> {
-  const remembered = await readRememberedTunnelConnection(env)
-  const rawServer = input.server ?? env.YCY_TUNNEL_SERVER ?? remembered?.server ?? defaultServer
-  if (!rawServer?.trim())
-    throw new TunnelError('INVALID_CONFIG', 'Control plane is required through --server, YCY_TUNNEL_SERVER, a remembered connection, or DEFAULT_TUNNEL_SERVER')
-
-  const server = normalizeControlPlaneUrl(rawServer.trim())
-
+  options: ResolveClientConfigOptions = {},
+): Promise<ResolvedClientConfig | undefined> {
+  const catalog = await readTunnelConnectionCatalog(env)
+  const rawServer = input.server ?? env.YCY_TUNNEL_SERVER
+  if (rawServer !== undefined && !rawServer.trim())
+    throw new TunnelError('INVALID_CONFIG', 'Control plane must not be empty')
+  let server = rawServer?.trim() ? normalizeControlPlaneUrl(rawServer.trim()) : undefined
   let token = input.token ?? env.YCY_TUNNEL_TOKEN
   if (token === undefined && env.YCY_TUNNEL_TOKEN_FILE) {
     try {
@@ -148,15 +181,68 @@ export async function resolveClientConfig(
       throw new TunnelError('INVALID_CONFIG', `Could not read Client Token file: ${cause instanceof Error ? cause.message : String(cause)}`)
     }
   }
-  if (token === undefined && remembered && normalizeControlPlaneUrl(remembered.server).origin === server.origin)
-    token = remembered.token
+  const tokenWasProvided = token !== undefined
   token = token?.trim()
+  if (tokenWasProvided && !token)
+    throw new TunnelError('INVALID_CONFIG', 'Client Token must not be empty')
+
+  if (server && !token) {
+    const selected = await selectRememberedConnection(
+      catalog.connections.filter(connection => connection.server === server!.origin),
+      options.selectConnection,
+    )
+    if (selected === null)
+      return undefined
+    token = selected?.token
+  }
+  else if (!server && token) {
+    let candidates = catalog.connections.filter(connection => connection.token === token)
+    if (candidates.length === 0) {
+      const seenServers = new Set<string>()
+      candidates = catalog.connections.flatMap((connection) => {
+        if (seenServers.has(connection.server))
+          return []
+        seenServers.add(connection.server)
+        const candidateServer = new URL(connection.server)
+        return [{
+          ...connection,
+          id: catalog.instanceId(candidateServer, token!),
+          token: token!,
+        }]
+      })
+    }
+    if (candidates.length > 0) {
+      const selected = await selectRememberedConnection(candidates, options.selectConnection)
+      if (selected === null)
+        return undefined
+      server = selected ? new URL(selected.server) : undefined
+    }
+    else if (defaultServer.trim()) {
+      server = normalizeControlPlaneUrl(defaultServer.trim())
+    }
+  }
+  else if (!server && !token && catalog.connections.length > 0) {
+    const selected = await selectRememberedConnection(catalog.connections, options.selectConnection)
+    if (selected === null)
+      return undefined
+    if (selected) {
+      server = new URL(selected.server)
+      token = selected.token
+    }
+  }
+
+  if (!server && defaultServer.trim())
+    server = normalizeControlPlaneUrl(defaultServer.trim())
+  if (!server)
+    throw new TunnelError('INVALID_CONFIG', 'Control plane is required through --server, YCY_TUNNEL_SERVER, a remembered connection, or DEFAULT_TUNNEL_SERVER')
   if (!token)
     throw new TunnelError('INVALID_CONFIG', 'Client Token is required through --token, YCY_TUNNEL_TOKEN, YCY_TUNNEL_TOKEN_FILE, or a matching remembered connection')
 
+  const id = catalog.instanceId(server, token)
+  const remembered = catalog.connections.some(connection => connection.id === id)
+
   return {
-    config: { server, token, stateDir: clientStateDirectory(env) },
-    rememberOnAuthentication: input.token !== undefined
-      && (remembered?.server !== server.origin || remembered.token !== token),
+    config: { server, token, stateDir: path.join(clientStateDirectory(env), id) },
+    rememberOnAuthentication: input.token !== undefined || remembered,
   }
 }

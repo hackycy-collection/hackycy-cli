@@ -33,14 +33,19 @@ export interface ForkConfig {
   instances: Record<string, ForkInstanceConfig>
 }
 
-export interface TunnelConnectionConfig {
+export interface StoredTunnelConnection {
   server: string
   token: string // encrypted
+  lastAuthenticatedAt: string
+}
+
+export interface TunnelConfig {
+  connections: Record<string, StoredTunnelConnection>
 }
 
 export interface AppConfig {
   salt: string
   fork: ForkConfig
   cm?: CmConfig
-  tunnel?: TunnelConnectionConfig
+  tunnel?: TunnelConfig
 }

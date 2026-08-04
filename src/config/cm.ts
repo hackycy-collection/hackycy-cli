@@ -1,7 +1,7 @@
 import type { CmConfig, CmProfile, ResolvedCmProfile } from './types'
 import process from 'node:process'
 import { decrypt, deriveKey, encrypt } from './crypto'
-import { readConfig, writeConfig } from './store'
+import { readConfig, updateConfig } from './store'
 
 const DEFAULT_TEMPERATURE = 0.2
 const DEFAULT_TIMEOUT_MS = 30_000
@@ -51,9 +51,9 @@ export async function readCmConfig(): Promise<CmConfig> {
 }
 
 export async function writeCmConfig(cm: CmConfig): Promise<void> {
-  const config = await readConfig()
-  config.cm = cm
-  await writeConfig(config)
+  await updateConfig((config) => {
+    config.cm = cm
+  })
 }
 
 export async function addCmProfile(
@@ -62,81 +62,83 @@ export async function addCmProfile(
   model: string,
   apiKey: string,
 ): Promise<void> {
-  const config = await readConfig()
-  const cm = config.cm ?? emptyCmConfig()
-  const key = await deriveKey(config.salt)
-  cm.profiles[name] = {
-    baseURL: normalizeBaseURL(baseURL),
-    model: model.trim(),
-    apiKey: encrypt(apiKey, key),
-  }
-  cm.defaultProfile ??= name
-  config.cm = cm
-  await writeConfig(config)
+  await updateConfig(async (config) => {
+    const cm = config.cm ?? emptyCmConfig()
+    const key = await deriveKey(config.salt)
+    cm.profiles[name] = {
+      baseURL: normalizeBaseURL(baseURL),
+      model: model.trim(),
+      apiKey: encrypt(apiKey, key),
+    }
+    cm.defaultProfile ??= name
+    config.cm = cm
+  })
 }
 
 export async function removeCmProfile(name: string): Promise<boolean> {
-  const cm = await readCmConfig()
-  if (!cm.profiles[name])
-    return false
-
-  delete cm.profiles[name]
-  if (cm.defaultProfile === name)
-    cm.defaultProfile = Object.keys(cm.profiles)[0]
-
-  await writeCmConfig(cm)
-  return true
+  return updateConfig((config) => {
+    const cm = config.cm ?? emptyCmConfig()
+    if (!cm.profiles[name])
+      return false
+    delete cm.profiles[name]
+    if (cm.defaultProfile === name)
+      cm.defaultProfile = Object.keys(cm.profiles)[0]
+    config.cm = cm
+    return true
+  })
 }
 
 export async function setDefaultCmProfile(name: string): Promise<void> {
-  const cm = await readCmConfig()
-  if (!cm.profiles[name])
-    throw new Error(`CM profile not found: ${name}`)
-  cm.defaultProfile = name
-  await writeCmConfig(cm)
+  await updateConfig((config) => {
+    const cm = config.cm ?? emptyCmConfig()
+    if (!cm.profiles[name])
+      throw new Error(`CM profile not found: ${name}`)
+    cm.defaultProfile = name
+    config.cm = cm
+  })
 }
 
 export async function setCmProfileValue(name: string, key: string, value: string): Promise<void> {
-  const config = await readConfig()
-  const cm = config.cm ?? emptyCmConfig()
-  const profile = cm.profiles[name]
-  if (!profile)
-    throw new Error(`CM profile not found: ${name}`)
+  await updateConfig(async (config) => {
+    const cm = config.cm ?? emptyCmConfig()
+    const profile = cm.profiles[name]
+    if (!profile)
+      throw new Error(`CM profile not found: ${name}`)
 
-  if (key === 'baseURL') {
-    profile.baseURL = normalizeBaseURL(value)
-  }
-  else if (key === 'model') {
-    profile.model = value.trim()
-  }
-  else if (key === 'apiKey') {
-    const cryptoKey = await deriveKey(config.salt)
-    profile.apiKey = encrypt(value, cryptoKey)
-  }
-  else if (key === 'temperature') {
-    const parsed = Number(value)
-    if (!Number.isFinite(parsed) || parsed < 0 || parsed > 2)
-      throw new Error('temperature must be a number between 0 and 2')
-    profile.temperature = parsed
-  }
-  else if (key === 'timeoutMs') {
-    const parsed = Number.parseInt(value, 10)
-    if (!Number.isInteger(parsed) || parsed < 1000)
-      throw new Error('timeoutMs must be an integer greater than or equal to 1000')
-    profile.timeoutMs = parsed
-  }
-  else if (key === 'maxOutputTokens') {
-    const parsed = Number.parseInt(value, 10)
-    if (!Number.isInteger(parsed) || parsed < 32)
-      throw new Error('maxOutputTokens must be an integer greater than or equal to 32')
-    profile.maxOutputTokens = parsed
-  }
-  else {
-    throw new Error('Unsupported key. Use baseURL, model, apiKey, temperature, timeoutMs, or maxOutputTokens.')
-  }
+    if (key === 'baseURL') {
+      profile.baseURL = normalizeBaseURL(value)
+    }
+    else if (key === 'model') {
+      profile.model = value.trim()
+    }
+    else if (key === 'apiKey') {
+      const cryptoKey = await deriveKey(config.salt)
+      profile.apiKey = encrypt(value, cryptoKey)
+    }
+    else if (key === 'temperature') {
+      const parsed = Number(value)
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 2)
+        throw new Error('temperature must be a number between 0 and 2')
+      profile.temperature = parsed
+    }
+    else if (key === 'timeoutMs') {
+      const parsed = Number.parseInt(value, 10)
+      if (!Number.isInteger(parsed) || parsed < 1000)
+        throw new Error('timeoutMs must be an integer greater than or equal to 1000')
+      profile.timeoutMs = parsed
+    }
+    else if (key === 'maxOutputTokens') {
+      const parsed = Number.parseInt(value, 10)
+      if (!Number.isInteger(parsed) || parsed < 32)
+        throw new Error('maxOutputTokens must be an integer greater than or equal to 32')
+      profile.maxOutputTokens = parsed
+    }
+    else {
+      throw new Error('Unsupported key. Use baseURL, model, apiKey, temperature, timeoutMs, or maxOutputTokens.')
+    }
 
-  config.cm = cm
-  await writeConfig(config)
+    config.cm = cm
+  })
 }
 
 export async function listCmProfiles(): Promise<CmConfig> {

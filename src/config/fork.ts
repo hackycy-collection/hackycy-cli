@@ -1,6 +1,6 @@
 import type { ForkInstanceConfig } from './types'
 import { decrypt, deriveKey, encrypt } from './crypto'
-import { readConfig, writeConfig } from './store'
+import { readConfig, updateConfig } from './store'
 
 export async function addInstance(
   name: string,
@@ -9,20 +9,20 @@ export async function addInstance(
   token: string,
   scheme: 'http' | 'https' = 'https',
 ): Promise<void> {
-  const config = await readConfig()
-  const key = await deriveKey(config.salt)
-  const encryptedToken = encrypt(token, key)
-  config.fork.instances[name] = { host, scheme, type, token: encryptedToken }
-  await writeConfig(config)
+  await updateConfig(async (config) => {
+    const key = await deriveKey(config.salt)
+    const encryptedToken = encrypt(token, key)
+    config.fork.instances[name] = { host, scheme, type, token: encryptedToken }
+  })
 }
 
 export async function removeInstance(name: string): Promise<boolean> {
-  const config = await readConfig()
-  if (!(name in config.fork.instances))
-    return false
-  delete config.fork.instances[name]
-  await writeConfig(config)
-  return true
+  return updateConfig((config) => {
+    if (!(name in config.fork.instances))
+      return false
+    delete config.fork.instances[name]
+    return true
+  })
 }
 
 export async function getInstanceByName(name: string): Promise<(ForkInstanceConfig & { decryptedToken: string }) | null> {

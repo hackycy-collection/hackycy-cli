@@ -3,8 +3,8 @@ import process from 'node:process'
 import { version } from '../../../../package.json'
 import { ensureFrpBinary } from '../frp/binary'
 import { FRP_ACTIVATION_GRACE_MS, FrpSupervisor } from '../frp/supervisor'
-import { acquireStateDirectoryLock } from '../lock'
 import { TunnelClientAgent } from './agent'
+import { acquireClientInstanceState } from './instance-state'
 import { ClientReconciler, SupervisorClientRuntime } from './reconciler'
 import { readAppliedClientState } from './state'
 
@@ -15,7 +15,7 @@ export interface TunnelClientRunOptions {
 }
 
 export async function runTunnelClient(config: ClientTunnelConfig, options: TunnelClientRunOptions = {}): Promise<void> {
-  const lock = await acquireStateDirectoryLock(config.stateDir)
+  const lock = await acquireClientInstanceState(config.stateDir)
   const shutdown = new AbortController()
   let supervisor: FrpSupervisor | undefined
   let reconciler: ClientReconciler | undefined

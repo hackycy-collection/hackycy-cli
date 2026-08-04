@@ -1,10 +1,12 @@
+import { createHmac } from 'node:crypto'
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
+import { deriveKey } from '../../config/crypto'
 import { readConfig, writeConfig } from '../../config/store'
-import { readRememberedTunnelConnection, rememberTunnelConnection } from '../../config/tunnel'
-import { DEFAULT_TUNNEL_SERVER, normalizeControlPlaneUrl, parseHostPort, parsePortRange, resolveClientConfig, resolveServerConfig } from './config'
+import { readTunnelConnectionCatalog, rememberTunnelConnection } from '../../config/tunnel'
+import { DEFAULT_TUNNEL_SERVER, maskTunnelToken, normalizeControlPlaneUrl, parseHostPort, parsePortRange, resolveClientConfig, resolveServerConfig } from './config'
 import { ensureFrpBinary } from './frp/binary'
 import { renderFrpcConfig, renderFrpsConfig } from './frp/config'
 import { FRP_ARTIFACTS, resolveFrpArtifact } from './frp/manifest'
@@ -52,23 +54,39 @@ describe('tunnel configuration', () => {
     expect(() => resolveServerConfig({ controlPort: 20000 }, environment)).toThrow('must not include')
   })
 
-  test('resolves Client Token precedence including a secret file', async () => {
+  test('resolves Client Token precedence and stable opaque instance directories', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-config-'))
     temporaryDirectories.push(root)
     const secret = path.join(root, 'token')
     await writeFile(secret, ' file-token\n')
-    const fromFile = await resolveClientConfig({ server: 'localhost' }, { HOME: root, YCY_TUNNEL_TOKEN_FILE: secret })
-    const fromEnvironment = await resolveClientConfig({ server: 'localhost' }, { HOME: root, YCY_TUNNEL_TOKEN: 'env-token', YCY_TUNNEL_TOKEN_FILE: secret })
-    const fromCli = await resolveClientConfig({ server: 'localhost', token: 'cli-token' }, { HOME: root, YCY_TUNNEL_TOKEN: 'env-token' })
+    const fromFile = (await resolveClientConfig({ server: 'localhost' }, { HOME: root, YCY_TUNNEL_TOKEN_FILE: secret }))!
+    const fromEnvironment = (await resolveClientConfig({ server: 'localhost' }, { HOME: root, YCY_TUNNEL_TOKEN: 'env-token', YCY_TUNNEL_TOKEN_FILE: secret }))!
+    const fromCli = (await resolveClientConfig({ server: 'localhost', token: 'cli-token' }, { HOME: root, YCY_TUNNEL_TOKEN: 'env-token' }))!
+    const repeated = (await resolveClientConfig({ server: 'https://LOCALHOST:443', token: 'cli-token' }, { HOME: root }))!
+    const otherToken = (await resolveClientConfig({ server: 'localhost', token: 'other-token' }, { HOME: root }))!
+    const otherServer = (await resolveClientConfig({ server: 'other.example.com', token: 'cli-token' }, { HOME: root }))!
     expect(fromFile.config.token).toBe('file-token')
     expect(fromEnvironment.config.token).toBe('env-token')
     expect(fromCli.config.token).toBe('cli-token')
     expect(fromFile.rememberOnAuthentication).toBe(false)
     expect(fromEnvironment.rememberOnAuthentication).toBe(false)
     expect(fromCli.rememberOnAuthentication).toBe(true)
+    expect(path.basename(fromCli.config.stateDir)).toMatch(/^v1_[\w-]{43}$/)
+    expect(repeated.config.stateDir).toBe(fromCli.config.stateDir)
+    expect(otherToken.config.stateDir).not.toBe(fromCli.config.stateDir)
+    expect(otherServer.config.stateDir).not.toBe(fromCli.config.stateDir)
+    expect(fromCli.config.stateDir).not.toContain('cli-token')
+    expect(await Bun.file(path.join(root, '.ycy-cli', 'config.json')).exists()).toBe(true)
+    const key = await deriveKey((await readConfig({ HOME: root })).salt)
+    const expectedId = `v1_${createHmac('sha256', key).update('ycy:tunnel-client-instance:v1\0').update('https://localhost').update('\0').update('cli-token').digest('base64url')}`
+    expect(path.basename(fromCli.config.stateDir)).toBe(expectedId)
+    expect(maskTunnelToken('ycy_abcdefghijklmnopqrstuvwxyz1234567890')).toBe('ycy_abcd********7890')
+    expect(maskTunnelToken('short')).toBe('*****')
+    await expect(resolveClientConfig({ server: 'localhost', token: '  ' }, { HOME: root })).rejects.toThrow('must not be empty')
+    await expect(resolveClientConfig({ server: '  ' }, { HOME: root })).rejects.toThrow('must not be empty')
   })
 
-  test('encrypts and replaces one remembered server-token pair without losing other configuration', async () => {
+  test('encrypts multiple remembered pairs without losing other configuration', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-memory-'))
     temporaryDirectories.push(root)
     const env = { HOME: root }
@@ -77,75 +95,133 @@ describe('tunnel configuration', () => {
     config.fork.instances.github = { host: 'github.com', type: 'github', token: 'existing-encrypted-token' }
     await writeConfig(config, env)
 
-    await rememberTunnelConnection({ server: new URL('https://first.example.com/'), token: 'first-token' }, env)
+    await rememberTunnelConnection({ server: new URL('https://first.example.com/'), token: 'first-token' }, env, new Date('2026-01-01T00:00:00.000Z'))
+    await rememberTunnelConnection({ server: new URL('http://second.example.com:7500/'), token: 'second-token' }, env, new Date('2026-01-02T00:00:00.000Z'))
     const raw = JSON.parse(await readFile(path.join(root, '.ycy-cli', 'config.json'), 'utf8'))
-    expect(raw.tunnel.server).toBe('https://first.example.com')
-    expect(raw.tunnel.token).not.toContain('first-token')
+    expect(Object.keys(raw.tunnel.connections)).toHaveLength(2)
+    expect(JSON.stringify(raw.tunnel)).not.toContain('first-token')
+    expect(JSON.stringify(raw.tunnel)).not.toContain('second-token')
     expect(raw.cm.defaultProfile).toBe('work')
     expect(raw.fork.instances.github.host).toBe('github.com')
-    expect(await readRememberedTunnelConnection(env)).toEqual({ server: 'https://first.example.com', token: 'first-token' })
+    expect((await readTunnelConnectionCatalog(env)).connections.map(connection => [connection.server, connection.token])).toEqual([
+      ['http://second.example.com:7500', 'second-token'],
+      ['https://first.example.com', 'first-token'],
+    ])
 
-    await rememberTunnelConnection({ server: new URL('http://second.example.com:7500/'), token: 'second-token' }, env)
-    expect(await readRememberedTunnelConnection(env)).toEqual({ server: 'http://second.example.com:7500', token: 'second-token' })
+    await rememberTunnelConnection({ server: new URL('https://first.example.com/'), token: 'first-token' }, env, new Date('2026-01-03T00:00:00.000Z'))
+    const refreshed = await readTunnelConnectionCatalog(env)
+    expect(refreshed.connections).toHaveLength(2)
+    expect(refreshed.connections[0]).toMatchObject({ token: 'first-token', lastAuthenticatedAt: '2026-01-03T00:00:00.000Z' })
 
     const corrupted = await readConfig(env)
-    corrupted.tunnel!.token = 'invalid-ciphertext'
+    const corruptId = Object.keys(corrupted.tunnel!.connections)[0]!
+    corrupted.tunnel!.connections[corruptId]!.token = 'invalid-ciphertext'
     await writeConfig(corrupted, env)
-    expect(await readRememberedTunnelConnection(env)).toBeUndefined()
-    const replacement = await resolveClientConfig({ server: 'replacement.example.com', token: 'replacement-token' }, env)
+    expect((await readTunnelConnectionCatalog(env)).connections).toHaveLength(1)
+    const replacement = (await resolveClientConfig({ server: 'replacement.example.com', token: 'replacement-token' }, env))!
     expect(replacement.rememberOnAuthentication).toBe(true)
   })
 
-  test('uses a remembered pair only for its normalized server', async () => {
+  test('selects matching remembered pairs and cancels without resolving state', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-resolution-'))
     temporaryDirectories.push(root)
     const env = { HOME: root }
-    await rememberTunnelConnection({ server: new URL('https://remembered.example.com/'), token: 'remembered-token' }, env)
+    await rememberTunnelConnection({ server: new URL('https://remembered.example.com/'), token: 'first-token' }, env, new Date('2026-01-01T00:00:00.000Z'))
+    await rememberTunnelConnection({ server: new URL('https://remembered.example.com/'), token: 'second-token' }, env, new Date('2026-01-02T00:00:00.000Z'))
+    await rememberTunnelConnection({ server: new URL('https://other.example.com/'), token: 'third-token' }, env, new Date('2026-01-03T00:00:00.000Z'))
 
-    const remembered = await resolveClientConfig({}, env)
-    const sameServer = await resolveClientConfig({ server: 'remembered.example.com' }, env)
-    expect(remembered.config.server.origin).toBe('https://remembered.example.com')
-    expect(remembered.config.token).toBe('remembered-token')
-    expect(sameServer.config.token).toBe('remembered-token')
-    await expect(resolveClientConfig({ server: 'other.example.com' }, env)).rejects.toThrow('matching remembered connection')
+    let offered: readonly { id: string, server: string, token: string }[] = []
+    const selected = (await resolveClientConfig({ server: 'remembered.example.com' }, env, '', {
+      async selectConnection(connections) {
+        offered = connections
+        return connections.find(connection => connection.token === 'first-token')!.id
+      },
+    }))!
+    expect(offered.map(connection => connection.token)).toEqual(['second-token', 'first-token'])
+    expect(selected.config.token).toBe('first-token')
+    expect(selected.rememberOnAuthentication).toBe(true)
+    expect(await resolveClientConfig({}, env, '', { selectConnection: async () => undefined })).toBeUndefined()
+    await expect(resolveClientConfig({}, env)).rejects.toThrow('provide both --server and --token')
+    await expect(resolveClientConfig({ server: 'unknown.example.com' }, env)).rejects.toThrow('matching remembered connection')
   })
 
-  test('uses the code default after environment and memory, and remembers only a CLI token', async () => {
+  test('resolves a new token against remembered servers for rotation', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-default-'))
     temporaryDirectories.push(root)
     const env = { HOME: root }
     expect(DEFAULT_TUNNEL_SERVER).toBe('')
     await expect(resolveClientConfig({}, env)).rejects.toThrow('DEFAULT_TUNNEL_SERVER')
 
-    const fromDefault = await resolveClientConfig({ token: 'cli-token' }, env, 'default.example.com')
+    const fromDefault = (await resolveClientConfig({ token: 'cli-token' }, env, 'default.example.com'))!
     expect(fromDefault.config.server.origin).toBe('https://default.example.com')
     expect(fromDefault.rememberOnAuthentication).toBe(true)
 
-    const environmentServer = await resolveClientConfig(
+    const environmentServer = (await resolveClientConfig(
       { token: 'cli-token' },
       { HOME: root, YCY_TUNNEL_SERVER: 'environment.example.com' },
       'default.example.com',
-    )
-    const cliServer = await resolveClientConfig(
+    ))!
+    const cliServer = (await resolveClientConfig(
       { server: 'cli.example.com', token: 'cli-token' },
       { HOME: root, YCY_TUNNEL_SERVER: 'environment.example.com' },
       'default.example.com',
-    )
+    ))!
     expect(environmentServer.config.server.origin).toBe('https://environment.example.com')
     expect(cliServer.config.server.origin).toBe('https://cli.example.com')
 
-    const fromEnvironment = await resolveClientConfig(
+    const fromEnvironment = (await resolveClientConfig(
       { server: 'cli.example.com' },
       { HOME: root, YCY_TUNNEL_TOKEN: 'env-token' },
       'default.example.com',
-    )
+    ))!
     expect(fromEnvironment.config.server.origin).toBe('https://cli.example.com')
     expect(fromEnvironment.rememberOnAuthentication).toBe(false)
 
-    await rememberTunnelConnection({ server: new URL('https://remembered.example.com/'), token: 'old-token' }, env)
-    const rotated = await resolveClientConfig({ token: 'new-token' }, env, 'default.example.com')
-    expect(rotated.config.server.origin).toBe('https://remembered.example.com')
+    await rememberTunnelConnection({ server: new URL('https://first.example.com/'), token: 'old-token-a' }, env, new Date('2026-01-01T00:00:00.000Z'))
+    await rememberTunnelConnection({ server: new URL('https://second.example.com/'), token: 'old-token-b' }, env, new Date('2026-01-02T00:00:00.000Z'))
+    const rotated = (await resolveClientConfig({ token: 'new-token' }, env, 'default.example.com', {
+      selectConnection: async connections => connections.find(connection => connection.server === 'https://first.example.com')!.id,
+    }))!
+    expect(rotated.config.server.origin).toBe('https://first.example.com')
     expect(rotated.rememberOnAuthentication).toBe(true)
+  })
+
+  test('serializes concurrent saves and retains only the 32 most recent pairs', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-catalog-'))
+    temporaryDirectories.push(root)
+    const env = { HOME: root }
+    await Promise.all([
+      rememberTunnelConnection({ server: new URL('https://parallel-a.example.com'), token: 'parallel-a' }, env, new Date('2025-01-01T00:00:00.000Z')),
+      rememberTunnelConnection({ server: new URL('https://parallel-b.example.com'), token: 'parallel-b' }, env, new Date('2025-01-02T00:00:00.000Z')),
+    ])
+    expect((await readTunnelConnectionCatalog(env)).connections).toHaveLength(2)
+
+    for (let index = 0; index < 33; index++) {
+      await rememberTunnelConnection(
+        { server: new URL(`https://host-${index}.example.com`), token: `token-${index}` },
+        env,
+        new Date(Date.UTC(2026, 0, index + 1)),
+      )
+    }
+    const catalog = await readTunnelConnectionCatalog(env)
+    expect(catalog.connections).toHaveLength(32)
+    expect(catalog.connections[0]!.token).toBe('token-32')
+    expect(catalog.connections.some(connection => connection.token === 'parallel-a')).toBe(false)
+    expect(catalog.connections.some(connection => connection.token === 'token-0')).toBe(false)
+  })
+
+  test('ignores the legacy single remembered connection schema', async () => {
+    const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-legacy-config-'))
+    temporaryDirectories.push(root)
+    const env = { HOME: root }
+    const config = await readConfig(env)
+    await mkdir(path.join(root, '.ycy-cli'), { recursive: true })
+    await writeFile(path.join(root, '.ycy-cli', 'config.json'), JSON.stringify({
+      ...config,
+      tunnel: { server: 'https://legacy.example.com', token: 'legacy-ciphertext' },
+    }))
+    expect((await readTunnelConnectionCatalog(env)).connections).toEqual([])
+    await expect(resolveClientConfig({}, env)).rejects.toThrow('Control plane is required')
   })
 
   test('uses fixed platform-specific server, client, and managed FRP paths', () => {
