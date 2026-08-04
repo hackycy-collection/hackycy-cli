@@ -5,6 +5,15 @@ REPO="hackycy/hackycy-cli"
 INSTALL_DIR="$HOME/.ycy-cli/bin"
 BINARY_NAME="ycy"
 CHECKSUMS_FILE="SHA256SUMS"
+ACTIVE_TEMP_PATH=""
+
+cleanup_temp_file() {
+  if [ -n "$ACTIVE_TEMP_PATH" ]; then
+    rm -f "$ACTIVE_TEMP_PATH" || true
+  fi
+}
+
+trap cleanup_temp_file EXIT
 
 info() {
   printf "\033[1;34m%s\033[0m\n" "$1"
@@ -146,6 +155,7 @@ download_binary() {
   local temp_path="${target_path}.tmp.$$"
   local backup_path="${target_path}.backup.$$"
   local had_backup=0
+  ACTIVE_TEMP_PATH="$temp_path"
 
   mkdir -p "$INSTALL_DIR"
 
@@ -178,6 +188,7 @@ download_binary() {
   fi
 
   mv "$temp_path" "$target_path"
+  ACTIVE_TEMP_PATH=""
 
   if ! verify_file_hash "$target_path"; then
     rm -f "$target_path"

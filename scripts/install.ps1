@@ -69,6 +69,8 @@ function Assert-BinaryVersion {
     }
 }
 
+$TempPath = $null
+
 try {
     Write-Host ""
     Write-Info "Installing ycy CLI..."
@@ -145,6 +147,7 @@ try {
         }
 
         Move-Item -Path $TempPath -Destination $OutputPath -Force
+        $TempPath = $null
 
         Assert-FileHash -Path $OutputPath -ExpectedHash $ExpectedHash
         Assert-BinaryVersion -Path $OutputPath -ExpectedVersion $ExpectedVersion
@@ -160,8 +163,8 @@ try {
         if ($HadBackup -and (Test-Path $BackupPath)) {
             Move-Item -Path $BackupPath -Destination $OutputPath -Force
         }
-        if (Test-Path $TempPath) {
-            Remove-Item $TempPath -Force
+        if ($TempPath -and (Test-Path -LiteralPath $TempPath)) {
+            Remove-Item -LiteralPath $TempPath -Force
         }
         throw
     }
@@ -187,4 +190,9 @@ try {
 catch {
     Write-Host ""
     Write-Error "Installation failed: $_"
+}
+finally {
+    if ($TempPath -and (Test-Path -LiteralPath $TempPath)) {
+        Remove-Item -LiteralPath $TempPath -Force -ErrorAction SilentlyContinue
+    }
 }

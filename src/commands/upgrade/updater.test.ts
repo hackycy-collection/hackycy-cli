@@ -1,6 +1,6 @@
 import type { UpdateTransaction } from './updater'
 import fs from 'node:fs'
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises'
+import { mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
@@ -35,9 +35,8 @@ async function sha256(value: string | ArrayBuffer): Promise<string> {
     .join('')
 }
 
-function transaction(expectedHash: string): UpdateTransaction {
+function transaction(expectedHash: string, transactionId = 'test-transaction'): UpdateTransaction {
   const targetPath = path.join(directory, 'ycy.exe')
-  const transactionId = 'test-transaction'
 
   return createUpdateTransaction({
     transactionId,
@@ -98,6 +97,65 @@ describe('applyUpdateTransaction', () => {
 })
 
 describe('update state', () => {
+  test('cleans stale installer temporary files without touching active downloads', async () => {
+    const targetPath = path.join(directory, 'ycy.exe')
+    const stalePath = `${targetPath}.tmp.2147483647`
+    const activePath = `${targetPath}.tmp.${process.pid}`
+    await writeFile(stalePath, 'stale download')
+    await writeFile(activePath, 'active download')
+
+    expect(consumeUpdateState(targetPath)).toBeNull()
+    expect(fs.existsSync(stalePath)).toBe(false)
+    expect(fs.existsSync(activePath)).toBe(true)
+  })
+
+  test('cleans orphaned state temporary files but preserves pending transactions', async () => {
+    const transactionId = '11111111-1111-4111-8111-111111111111'
+    const update = transaction(await sha256('new binary'), transactionId)
+    const orphanPath = `${update.statePath}.${update.transactionId}.tmp`
+    await writeFile(orphanPath, JSON.stringify(update))
+
+    expect(consumeUpdateState(update.targetPath)).toBeNull()
+    expect(fs.existsSync(orphanPath)).toBe(false)
+
+    const activeTransactionId = '22222222-2222-4222-8222-222222222222'
+    const activeUpdate = transaction(await sha256('new binary'), activeTransactionId)
+    activeUpdate.parentPid = process.pid
+    const activePath = `${activeUpdate.statePath}.${activeUpdate.transactionId}.tmp`
+    await writeFile(activePath, JSON.stringify(activeUpdate))
+
+    expect(consumeUpdateState(activeUpdate.targetPath)).toBeNull()
+    expect(fs.existsSync(activePath)).toBe(true)
+
+    writeUpdateState(update)
+    const pendingTransactionId = '33333333-3333-4333-8333-333333333333'
+    const pendingUpdate = transaction(await sha256('new binary'), pendingTransactionId)
+    const pendingTempPath = `${pendingUpdate.statePath}.${pendingUpdate.transactionId}.tmp`
+    await writeFile(pendingTempPath, JSON.stringify(pendingUpdate))
+
+    expect(consumeUpdateState(update.targetPath)).toMatchObject({ status: 'pending' })
+    expect(fs.existsSync(pendingTempPath)).toBe(true)
+  })
+
+  test('removes malformed state temporary files after they become stale', async () => {
+    const update = transaction(await sha256('new binary'), '44444444-4444-4444-8444-444444444444')
+    const tempPath = `${update.statePath}.${update.transactionId}.tmp`
+    await writeFile(tempPath, '{')
+    const staleTime = new Date(Date.now() - 2 * 60_000)
+    await utimes(tempPath, staleTime, staleTime)
+
+    expect(consumeUpdateState(update.targetPath)).toBeNull()
+    expect(fs.existsSync(tempPath)).toBe(false)
+  })
+
+  test('cleans a state temporary file when atomic state replacement fails', async () => {
+    const update = transaction(await sha256('new binary'))
+    await mkdir(update.statePath)
+
+    expect(() => writeUpdateState(update)).toThrow()
+    expect(fs.existsSync(`${update.statePath}.${update.transactionId}.tmp`)).toBe(false)
+  })
+
   test('passes complete updater arguments and consumes completed state once', async () => {
     const update = transaction(await sha256('new binary'))
     update.status = 'succeeded'

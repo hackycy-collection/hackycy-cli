@@ -9,6 +9,7 @@ export const INTERNAL_UPDATE_VERIFY_ENV = 'YCY_INTERNAL_UPDATE_VERIFY'
 const PROCESS_POLL_INTERVAL_MS = 50
 const PROCESS_EXIT_TIMEOUT_MS = 30_000
 const FILE_OPERATION_RETRY_COUNT = 100
+const STATE_TEMP_STALE_AFTER_MS = 60_000
 
 export type UpdateStatus = 'pending' | 'succeeded' | 'succeeded_with_cleanup_warning' | 'failed'
 
@@ -47,8 +48,15 @@ export function createUpdateTransaction(options: Omit<UpdateTransaction, 'create
 
 export function writeUpdateState(state: UpdateTransaction): void {
   const tempPath = `${state.statePath}.${state.transactionId}.tmp`
-  fs.writeFileSync(tempPath, JSON.stringify(state), 'utf8')
-  fs.renameSync(tempPath, state.statePath)
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(state), 'utf8')
+    fs.renameSync(tempPath, state.statePath)
+  }
+  finally {
+    if (fs.existsSync(tempPath)) {
+      tryRemoveFile(tempPath)
+    }
+  }
 }
 
 export function readUpdateState(statePath: string): UpdateTransaction | null {
@@ -71,6 +79,7 @@ export function readUpdateState(statePath: string): UpdateTransaction | null {
 export function consumeUpdateState(targetPath: string): UpdateTransaction | null {
   const statePath = getUpdateStatePath(targetPath)
   const state = readUpdateState(statePath)
+  cleanupTemporaryFiles(targetPath, state)
 
   if (!state || state.status === 'pending') {
     return state
@@ -312,6 +321,73 @@ function isProcessRunning(pid: number): boolean {
   catch (error) {
     return (error as NodeJS.ErrnoException).code !== 'ESRCH'
   }
+}
+
+function cleanupTemporaryFiles(targetPath: string, state: UpdateTransaction | null): void {
+  const targetDirectory = path.dirname(targetPath)
+  let entries: fs.Dirent[]
+
+  try {
+    entries = fs.readdirSync(targetDirectory, { withFileTypes: true })
+  }
+  catch {
+    return
+  }
+
+  const targetName = path.basename(targetPath)
+  const statePath = getUpdateStatePath(targetPath)
+  const stateFileName = path.basename(statePath)
+  const installerTempPattern = new RegExp(`^${escapeRegExp(targetName)}\\.tmp\\.(\\d+)$`)
+  const stateTempPattern = new RegExp(`^${escapeRegExp(stateFileName)}\\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\\.tmp$`, 'i')
+  const now = Date.now()
+
+  for (const entry of entries) {
+    if (!entry.isFile()) {
+      continue
+    }
+
+    const entryPath = path.join(targetDirectory, entry.name)
+    const installerMatch = entry.name.match(installerTempPattern)
+    if (installerMatch) {
+      const pid = Number(installerMatch[1])
+      if (Number.isSafeInteger(pid) && pid > 0 && !isProcessRunning(pid)) {
+        tryRemoveFile(entryPath)
+      }
+      continue
+    }
+
+    if (!stateTempPattern.test(entry.name)) {
+      continue
+    }
+
+    if (state?.status === 'pending') {
+      continue
+    }
+
+    const tempState = readUpdateState(entryPath)
+    if (tempState
+      && entry.name === `${stateFileName}.${tempState.transactionId}.tmp`
+      && path.resolve(tempState.targetPath) === path.resolve(targetPath)
+      && path.resolve(tempState.statePath) === path.resolve(statePath)) {
+      if (!isProcessRunning(tempState.parentPid)) {
+        tryRemoveFile(entryPath)
+      }
+      continue
+    }
+
+    try {
+      if (now - fs.statSync(entryPath).mtimeMs >= STATE_TEMP_STALE_AFTER_MS) {
+        tryRemoveFile(entryPath)
+      }
+    }
+    catch {
+      // Cleanup is best effort and must not block normal CLI startup.
+    }
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
 async function retryFileOperation(operation: () => void): Promise<void> {
