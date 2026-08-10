@@ -1,9 +1,90 @@
-import type { FrpcDesiredConfiguration, ServerTunnelConfig } from '../types'
+import type { FrpcDesiredConfiguration, ServerTunnelConfig, TunnelHeader, TunnelProtocol } from '../types'
+import type { TomlDocument } from './toml'
+import { tomlCodec } from './toml'
 
 export interface FrpConfigurationVerificationOptions {
   signal?: AbortSignal
   timeoutMs?: number
 }
+
+interface FrpAuthenticationToml extends TomlDocument {
+  method: 'token'
+  token: string
+}
+
+interface FrpLogToml extends TomlDocument {
+  to: 'console'
+  level: 'warn'
+}
+
+interface FrpPortRangeToml extends TomlDocument {
+  start: number
+  end: number
+}
+
+interface FrpTransportToml extends TomlDocument {
+  bandwidthLimit?: string
+  bandwidthLimitMode?: 'client' | 'server'
+  useEncryption?: true
+  useCompression?: true
+  proxyProtocolVersion?: 'v1' | 'v2'
+}
+
+interface FrpHealthCheckToml extends TomlDocument {
+  type: 'http' | 'tcp'
+  timeoutSeconds: number
+  maxFailed: number
+  intervalSeconds: number
+  path?: string
+  httpHeaders?: FrpHeaderToml[]
+}
+
+interface FrpHeaderToml extends TomlDocument {
+  name: string
+  value: string
+}
+
+interface FrpHeaderSetToml extends TomlDocument {
+  set: TomlDocument
+}
+
+interface FrpProxyToml extends TomlDocument {
+  name: string
+  type: TunnelProtocol
+  localIP: string
+  localPort: number
+  remotePort?: number
+  customDomains?: string[]
+  locations?: string[]
+  httpUser?: string
+  httpPassword?: string
+  hostHeaderRewrite?: string
+  transport?: FrpTransportToml
+  healthCheck?: FrpHealthCheckToml
+  requestHeaders?: FrpHeaderSetToml
+  responseHeaders?: FrpHeaderSetToml
+}
+
+interface FrpsTomlDocument extends TomlDocument {
+  bindAddr: string
+  bindPort: number
+  vhostHTTPPort: number
+  auth: FrpAuthenticationToml
+  allowPorts: FrpPortRangeToml[]
+  log: FrpLogToml
+}
+
+interface FrpcTomlDocument extends TomlDocument {
+  serverAddr: string
+  serverPort: number
+  user: string
+  loginFailExit: false
+  auth: FrpAuthenticationToml
+  log: FrpLogToml
+  proxies?: FrpProxyToml[]
+}
+
+type FrpcTunnel = FrpcDesiredConfiguration['snapshot']['tunnels'][number]
 
 export async function verifyFrpConfiguration(binaryPath: string, configurationPath: string, options: FrpConfigurationVerificationOptions = {}): Promise<void> {
   options.signal?.throwIfAborted()
@@ -29,99 +110,104 @@ export async function verifyFrpConfiguration(binaryPath: string, configurationPa
   }
 }
 
-function tomlString(value: string): string {
-  return JSON.stringify(value)
+function headerSet(headers: TunnelHeader[]): FrpHeaderSetToml | undefined {
+  if (!headers.length)
+    return undefined
+  return { set: Object.fromEntries(headers.map(header => [header.name, header.value])) }
 }
 
-function renderProxyOptions(lines: string[], tunnel: FrpcDesiredConfiguration['snapshot']['tunnels'][number]): void {
+function applyProxyOptions(proxy: FrpProxyToml, tunnel: FrpcTunnel): void {
   const { transport, healthCheck } = tunnel.options
+  const transportToml: FrpTransportToml = {}
   if (transport.bandwidthLimit) {
-    lines.push(`transport.bandwidthLimit = ${tomlString(`${transport.bandwidthLimit.value}${transport.bandwidthLimit.unit}`)}`)
-    lines.push(`transport.bandwidthLimitMode = ${tomlString(transport.bandwidthLimit.mode)}`)
+    transportToml.bandwidthLimit = `${transport.bandwidthLimit.value}${transport.bandwidthLimit.unit}`
+    transportToml.bandwidthLimitMode = transport.bandwidthLimit.mode
   }
   if (transport.useEncryption)
-    lines.push('transport.useEncryption = true')
+    transportToml.useEncryption = true
   if (transport.useCompression)
-    lines.push('transport.useCompression = true')
+    transportToml.useCompression = true
   if (transport.proxyProtocolVersion)
-    lines.push(`transport.proxyProtocolVersion = ${tomlString(transport.proxyProtocolVersion)}`)
+    transportToml.proxyProtocolVersion = transport.proxyProtocolVersion
+  if (Object.keys(transportToml).length)
+    proxy.transport = transportToml
 
-  if (healthCheck) {
-    lines.push(`healthCheck.type = ${tomlString(healthCheck.type)}`)
-    lines.push(`healthCheck.timeoutSeconds = ${healthCheck.timeoutSeconds}`)
-    lines.push(`healthCheck.maxFailed = ${healthCheck.maxFailed}`)
-    lines.push(`healthCheck.intervalSeconds = ${healthCheck.intervalSeconds}`)
-    if (healthCheck.type === 'http') {
-      lines.push(`healthCheck.path = ${tomlString(healthCheck.path)}`)
-      if (healthCheck.headers.length) {
-        const headers = healthCheck.headers.map(header => `{ name = ${tomlString(header.name)}, value = ${tomlString(header.value)} }`).join(', ')
-        lines.push(`healthCheck.httpHeaders = [${headers}]`)
-      }
-    }
+  if (!healthCheck)
+    return
+  const healthCheckToml: FrpHealthCheckToml = {
+    type: healthCheck.type,
+    timeoutSeconds: healthCheck.timeoutSeconds,
+    maxFailed: healthCheck.maxFailed,
+    intervalSeconds: healthCheck.intervalSeconds,
+  }
+  if (healthCheck.type === 'http') {
+    healthCheckToml.path = healthCheck.path
+    if (healthCheck.headers.length)
+      healthCheckToml.httpHeaders = healthCheck.headers.map(header => ({ name: header.name, value: header.value }))
+  }
+  proxy.healthCheck = healthCheckToml
+}
+
+function buildProxy(tunnel: FrpcTunnel): FrpProxyToml {
+  const proxy: FrpProxyToml = {
+    name: `t_${tunnel.id.replace(/[^\w-]/g, '_')}`,
+    type: tunnel.protocol,
+    localIP: tunnel.localHost,
+    localPort: tunnel.localPort,
+  }
+  applyProxyOptions(proxy, tunnel)
+  if (tunnel.protocol !== 'http') {
+    proxy.remotePort = tunnel.serverPort
+    return proxy
+  }
+
+  proxy.customDomains = tunnel.customDomains
+  if (tunnel.location !== null)
+    proxy.locations = [tunnel.location]
+  const http = tunnel.options.http!
+  if (http.basicAuth) {
+    proxy.httpUser = http.basicAuth.username
+    proxy.httpPassword = http.basicAuth.password
+  }
+  if (http.hostHeaderRewrite)
+    proxy.hostHeaderRewrite = http.hostHeaderRewrite
+  const requestHeaders = headerSet(http.requestHeaders)
+  if (requestHeaders)
+    proxy.requestHeaders = requestHeaders
+  const responseHeaders = headerSet(http.responseHeaders)
+  if (responseHeaders)
+    proxy.responseHeaders = responseHeaders
+  return proxy
+}
+
+function buildFrpsDocument(config: ServerTunnelConfig, internalFrpToken: string): FrpsTomlDocument {
+  return {
+    bindAddr: config.address,
+    bindPort: config.frpPort,
+    vhostHTTPPort: config.httpPort,
+    auth: { method: 'token', token: internalFrpToken },
+    allowPorts: [{ start: config.portRange.start, end: config.portRange.end }],
+    log: { to: 'console', level: 'warn' },
+  }
+}
+
+function buildFrpcDocument(input: FrpcDesiredConfiguration): FrpcTomlDocument {
+  const proxies = input.snapshot.tunnels.filter(tunnel => tunnel.enabled).map(buildProxy)
+  return {
+    serverAddr: input.advertisedFrpHost,
+    serverPort: input.advertisedFrpPort,
+    user: `ycy_${input.snapshot.clientKey.replace(/[^\w-]/g, '_')}`,
+    loginFailExit: false,
+    auth: { method: 'token', token: input.internalFrpToken },
+    log: { to: 'console', level: 'warn' },
+    ...(proxies.length ? { proxies } : {}),
   }
 }
 
 export function renderFrpsConfig(config: ServerTunnelConfig, internalFrpToken: string): string {
-  return [
-    `bindAddr = ${tomlString(config.address)}`,
-    `bindPort = ${config.frpPort}`,
-    `vhostHTTPPort = ${config.httpPort}`,
-    '',
-    'auth.method = "token"',
-    `auth.token = ${tomlString(internalFrpToken)}`,
-    '',
-    `allowPorts = [{ start = ${config.portRange.start}, end = ${config.portRange.end} }]`,
-    '',
-    'log.to = "console"',
-    'log.level = "warn"',
-    '',
-  ].join('\n')
+  return tomlCodec.stringify(buildFrpsDocument(config, internalFrpToken))
 }
 
 export function renderFrpcConfig(input: FrpcDesiredConfiguration): string {
-  const lines = [
-    `serverAddr = ${tomlString(input.advertisedFrpHost)}`,
-    `serverPort = ${input.advertisedFrpPort}`,
-    `user = ${tomlString(`ycy_${input.snapshot.clientKey.replace(/[^\w-]/g, '_')}`)}`,
-    'loginFailExit = false',
-    '',
-    'auth.method = "token"',
-    `auth.token = ${tomlString(input.internalFrpToken)}`,
-    '',
-    'log.to = "console"',
-    'log.level = "warn"',
-  ]
-
-  for (const tunnel of input.snapshot.tunnels.filter(candidate => candidate.enabled)) {
-    lines.push(
-      '',
-      '[[proxies]]',
-      `name = ${tomlString(`t_${tunnel.id.replace(/[^\w-]/g, '_')}`)}`,
-      `type = ${tomlString(tunnel.protocol)}`,
-      `localIP = ${tomlString(tunnel.localHost)}`,
-      `localPort = ${tunnel.localPort}`,
-    )
-    renderProxyOptions(lines, tunnel)
-    if (tunnel.protocol === 'http') {
-      lines.push(`customDomains = [${tunnel.customDomains.map(tomlString).join(', ')}]`)
-      if (tunnel.location !== null)
-        lines.push(`locations = [${tomlString(tunnel.location)}]`)
-      const http = tunnel.options.http!
-      if (http.basicAuth) {
-        lines.push(`httpUser = ${tomlString(http.basicAuth.username)}`)
-        lines.push(`httpPassword = ${tomlString(http.basicAuth.password)}`)
-      }
-      if (http.hostHeaderRewrite)
-        lines.push(`hostHeaderRewrite = ${tomlString(http.hostHeaderRewrite)}`)
-      for (const header of http.requestHeaders)
-        lines.push(`requestHeaders.set.${tomlString(header.name)} = ${tomlString(header.value)}`)
-      for (const header of http.responseHeaders)
-        lines.push(`responseHeaders.set.${tomlString(header.name)} = ${tomlString(header.value)}`)
-    }
-    else {
-      lines.push(`remotePort = ${tunnel.serverPort}`)
-    }
-  }
-  lines.push('')
-  return lines.join('\n')
+  return tomlCodec.stringify(buildFrpcDocument(input))
 }

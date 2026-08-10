@@ -433,6 +433,11 @@ The system `PATH` is never consulted and no custom FRP path override exists. The
 ## Generated FRP Configuration
 
 ycy owns all generated TOML. Operators never need to maintain `frps.toml` or `frpc.toml`.
+The generated document is mapped from the typed tunnel model, then passed through
+one TOML codec adapter. Its layout is not a compatibility contract; the codec
+owns both parsing and serialization so a future TOML implementation can replace
+the current one without changing the FRP renderers. Raw FRP configuration is
+still not accepted.
 
 The server configuration is equivalent to:
 
@@ -603,7 +608,8 @@ src/commands/tunnel/
     manifest.ts            Stable artifact resolution interface
     archive.ts             Archive extraction and digest primitives
     binary.ts              Resolve, download, verify, and atomically install
-    config.ts              Typed frps/frpc TOML rendering
+    toml.ts                TOML parse/stringify codec adapter
+    config.ts              Typed frps/frpc document mapping and rendering
     supervisor.ts          Serialized zero-or-one child state machine
   server/
     run.ts                 Server composition and signal handling

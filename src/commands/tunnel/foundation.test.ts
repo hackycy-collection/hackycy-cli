@@ -10,6 +10,7 @@ import { DEFAULT_TUNNEL_SERVER, maskTunnelToken, normalizeControlPlaneUrl, parse
 import { ensureFrpBinary } from './frp/binary'
 import { renderFrpcConfig, renderFrpsConfig } from './frp/config'
 import { FRP_ARTIFACTS, resolveFrpArtifact } from './frp/manifest'
+import { tomlCodec } from './frp/toml'
 import { acquireStateDirectoryLock } from './lock'
 import { clientStateDirectory, defaultServerDataDirectory, managedFrpBinaryPath } from './paths'
 
@@ -252,13 +253,20 @@ describe('FRP foundation', () => {
     }
   })
 
-  test('renders exact server and enabled client proxy TOML', () => {
+  test('renders server and enabled client proxy TOML documents', () => {
     const server = resolveServerConfig(
       { address: '127.0.0.1', frpPort: 7001, httpPort: 8081, portRange: '21000-21005', dataDir: '/tmp/tunnel' },
       { YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret' },
     )
-    expect(renderFrpsConfig(server, 'internal')).toContain('allowPorts = [{ start = 21000, end = 21005 }]')
-    const client = renderFrpcConfig({
+    expect(tomlCodec.parse(renderFrpsConfig(server, 'internal'))).toEqual({
+      bindAddr: '127.0.0.1',
+      bindPort: 7001,
+      vhostHTTPPort: 8081,
+      auth: { method: 'token', token: 'internal' },
+      allowPorts: [{ start: 21000, end: 21005 }],
+      log: { to: 'console', level: 'warn' },
+    })
+    const client = tomlCodec.parse(renderFrpcConfig({
       advertisedFrpHost: 'frp.example.com',
       advertisedFrpPort: 7001,
       internalFrpToken: 'internal',
@@ -293,23 +301,52 @@ describe('FRP foundation', () => {
           { id: 'off-id', label: '', protocol: 'udp', serverPort: 21001, localHost: 'dns', localPort: 53, enabled: false, options: { transport: { useEncryption: false, useCompression: false, bandwidthLimit: null, proxyProtocolVersion: null }, healthCheck: null, http: null }, createdAt: '', updatedAt: '' },
         ],
       },
+    }))
+    expect(client).toEqual({
+      serverAddr: 'frp.example.com',
+      serverPort: 7001,
+      user: 'ycy_client-key',
+      loginFailExit: false,
+      auth: { method: 'token', token: 'internal' },
+      log: { to: 'console', level: 'warn' },
+      proxies: [
+        {
+          name: 't_http-id',
+          type: 'http',
+          localIP: '127.0.0.1',
+          localPort: 3000,
+          customDomains: ['app.example.com', 'app-alt.example.com'],
+          locations: ['/service-a'],
+          httpUser: 'operator',
+          httpPassword: 'secret-value',
+          hostHeaderRewrite: 'internal.example.com',
+          transport: {
+            bandwidthLimit: '2MB',
+            bandwidthLimitMode: 'server',
+            useEncryption: true,
+            useCompression: true,
+            proxyProtocolVersion: 'v2',
+          },
+          healthCheck: {
+            type: 'http',
+            timeoutSeconds: 3,
+            maxFailed: 2,
+            intervalSeconds: 10,
+            path: '/health',
+            httpHeaders: [{ name: 'X-Probe', value: 'ycy' }],
+          },
+          requestHeaders: { set: { 'X-Forwarded-By': 'ycy' } },
+          responseHeaders: { set: { 'X-Tunnel': 'ticket' } },
+        },
+        {
+          name: 't_tcp-id',
+          type: 'tcp',
+          localIP: 'db',
+          localPort: 5432,
+          remotePort: 21000,
+        },
+      ],
     })
-    expect(client).toContain('customDomains = ["app.example.com", "app-alt.example.com"]')
-    expect(client).toContain('locations = ["/service-a"]')
-    expect(client).toContain('transport.bandwidthLimit = "2MB"')
-    expect(client).toContain('transport.bandwidthLimitMode = "server"')
-    expect(client).toContain('transport.useEncryption = true')
-    expect(client).toContain('transport.useCompression = true')
-    expect(client).toContain('transport.proxyProtocolVersion = "v2"')
-    expect(client).toContain('httpUser = "operator"')
-    expect(client).toContain('httpPassword = "secret-value"')
-    expect(client).toContain('hostHeaderRewrite = "internal.example.com"')
-    expect(client).toContain('requestHeaders.set."X-Forwarded-By" = "ycy"')
-    expect(client).toContain('responseHeaders.set."X-Tunnel" = "ticket"')
-    expect(client).toContain('healthCheck.httpHeaders = [{ name = "X-Probe", value = "ycy" }]')
-    expect(client).toContain('remotePort = 21000')
-    expect(client).not.toContain('off-id')
-    expect(client).not.toContain('21001')
   })
 
   test('rejects an archive with the wrong SHA and prints manual placement details', async () => {
