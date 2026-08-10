@@ -15,7 +15,7 @@ Options:
       --account <user:pass> Require login with an account (repeatable)
 ```
 
-The directory defaults to the current working directory. The default binding is available to the local network; use `--address 127.0.0.1` for local-only access. Management mode allows upload, remote download, archive extraction, copy, move, rename, and permanent deletion. Without `--account`, use it only with a trusted directory and network.
+The directory defaults to the current working directory. The default binding is available to the local network; use `--address 127.0.0.1` for local-only access. Management mode allows text editing, upload, remote download, archive extraction, copy, move, rename, and permanent deletion. Without `--account`, use it only with a trusted directory and network.
 
 HTML and XHTML files are executable same-origin pages by default, similar to a conventional static file server. Use `--safe-html` to sandbox those documents and force them to download instead. This option does not remove a sandbox imposed by an outer iframe; the embedding page must grant `allow-scripts`.
 
@@ -58,7 +58,7 @@ CLI registration (index.ts)
 | `GET /`, `GET /browse/*` | Embedded React application and browser history fallback. |
 | `GET\|POST\|DELETE /api/session` | Inspect the current login state, authenticate, or end the current session. |
 | `GET /api/directory?path=` | Current directory metadata and entries. |
-| `GET /api/text?path=` | UTF-8 or BOM-marked UTF-16 text up to 2 MiB. |
+| `GET\|PUT /api/text?path=` | Read text previews with SHA-256 revisions or conditionally save text in management mode. |
 | `POST /api/upload?path=` | One multipart file per request when `--manage` is enabled. |
 | `POST /api/operations` | Validated create-directory, rename, copy, move, and permanent-delete commands in management mode. |
 | `GET\|POST\|DELETE /api/downloads` | List, create, or clear terminal remote-download tasks in management mode. |
@@ -75,6 +75,15 @@ CLI registration (index.ts)
 The former direct file URL shape is intentionally not retained. A served path such as `docs/readme.txt` is available at `/files/docs/readme.txt`; `/browse/docs` is the browser route.
 
 Errors use `{ version: 1, error: { code, message } }`. Directory and text responses are not cacheable. Original files support ETag, Last-Modified, HEAD, and one byte range. Thumbnail responses support ETag, Last-Modified, and conditional 304 responses. Only `/files/*` enables wildcard CORS, and only when login mode is disabled.
+
+## Text Editing
+
+- A file is text-capable when the bounded bytes returned by the text reader decode as UTF-8, BOM-marked UTF-16 LE, or BOM-marked UTF-16 BE. This is a content capability, not an extension or MIME allowlist. The browser probes text after opening files that are not already classified as image, video, audio, or PDF, so extensionless files such as `.claude` can become text previews without making directory listings read every file.
+- The existing `GET /api/text?path=` response includes an opaque SHA-256 `revision` on `ready` results. `PUT /api/text?path=` accepts a UTF-8 `text/plain` request body and requires `If-Match` with that revision. Missing preconditions return `428`; a stale revision returns `412` and never overwrites the file. Successful responses return the new revision, byte size, modification time, and encoding.
+- Editing is exposed only in management mode, after the current preview is `ready`, and only when the final directory entry is a regular file. Internal symlinks remain previewable and downloadable but are not edit targets. Requests repeat root, regular-file, supported-encoding, size, and revision checks independently of the UI.
+- The editor enters from the preview header in a full-screen dialog and uses CodeMirror. Common recognized languages get CodeMirror language packages; unknown or unsupported languages use a plain-text editor. Save, Cancel, dirty/saving/conflict states, Ctrl/Cmd+S, and dirty-navigation guards are required. Edit state and drafts remain in page memory and do not enter the preview URL or browser History.
+- On save, the server preserves the original encoding and BOM, converts all line endings to the source file's dominant style (LF wins ties), preserves whether the file ended with a newline, and rejects output over 2 MiB. It preserves mode bits, writes a temporary file beside the target, and atomically replaces the original only after a final revision check. A per-path process-local save lock serializes in-process writers; the narrow external TOCTOU window is documented residual risk.
+- A `412` conflict keeps the local draft in the editor and offers Reload remote or Download draft. There is no force-overwrite action, system-clipboard draft copy, new-file creation, or save-as flow in this scope.
 
 ## Authentication Invariants
 

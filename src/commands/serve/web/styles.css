@@ -760,9 +760,94 @@ button.details-heading:hover {
   padding: 7px 8px 7px 12px;
 }
 
+.text-editor-dialog-overlay {
+  z-index: 100;
+  background: rgb(0 0 0 / 48%);
+}
+
+.text-editor-dialog {
+  position: fixed;
+  z-index: 101;
+  inset: 0;
+  display: flex;
+  width: 100vw;
+  height: 100dvh;
+  min-height: 0;
+  flex-direction: column;
+  border: 0;
+  outline: none;
+  background: var(--background);
+  box-shadow: var(--shadow);
+}
+
+.text-editor-dialog-header {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 58px;
+  border-bottom: 1px solid var(--border);
+  padding: 8px 12px 8px 16px;
+}
+
+.text-editor-dialog-body {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+  flex-direction: column;
+  background: var(--code);
+}
+
+.text-editor-conflict {
+  display: flex;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in srgb, #f59e0b 12%, var(--content));
+  padding: 8px 16px;
+  color: var(--foreground);
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.text-editor-conflict > span {
+  min-width: 0;
+  flex: 1 1 220px;
+}
+
+.text-editor-conflict button {
+  height: 30px;
+  padding: 0 9px;
+  font-size: 11px;
+}
+
+.text-editor-surface {
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  background: var(--code);
+}
+
+.text-editor-surface .cm-editor {
+  height: 100%;
+  outline: none;
+}
+
+.text-editor-surface .cm-editor.cm-focused {
+  box-shadow: none;
+}
+
 .text-preview-scroll {
   overflow: auto;
   outline: none;
+  overscroll-behavior: contain;
+  scrollbar-color: var(--border-strong) transparent;
+  scrollbar-width: thin;
+}
+
+.text-editor-surface .cm-scroller {
   overscroll-behavior: contain;
   scrollbar-color: var(--border-strong) transparent;
   scrollbar-width: thin;
@@ -779,24 +864,29 @@ button.details-heading:hover {
   --diffs-font-size: 12px;
 }
 
-.text-preview-scroll::-webkit-scrollbar {
+.text-preview-scroll::-webkit-scrollbar,
+.text-editor-surface .cm-scroller::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 .text-preview-scroll::-webkit-scrollbar-track,
-.text-preview-scroll::-webkit-scrollbar-corner {
+.text-preview-scroll::-webkit-scrollbar-corner,
+.text-editor-surface .cm-scroller::-webkit-scrollbar-track,
+.text-editor-surface .cm-scroller::-webkit-scrollbar-corner {
   background: var(--code);
 }
 
-.text-preview-scroll::-webkit-scrollbar-thumb {
+.text-preview-scroll::-webkit-scrollbar-thumb,
+.text-editor-surface .cm-scroller::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 999px;
   background: var(--border-strong);
   background-clip: padding-box;
 }
 
-.text-preview-scroll::-webkit-scrollbar-thumb:hover {
+.text-preview-scroll::-webkit-scrollbar-thumb:hover,
+.text-editor-surface .cm-scroller::-webkit-scrollbar-thumb:hover {
   background: var(--muted-foreground);
   background-clip: padding-box;
 }

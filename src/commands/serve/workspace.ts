@@ -9,9 +9,11 @@ import type {
   ServePreviewKind,
   ServeStreamWriteOptions,
   ServeTextPreview,
+  ServeTextSaveResult,
   ServeUploadResult,
   ServeWorkspace,
 } from './types'
+import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
 import path from 'node:path'
 import { getFiletypeFromFileName } from '@pierre/diffs'
@@ -32,6 +34,7 @@ const IMAGE_MIME_TYPES = new Map([
 const THUMBNAIL_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', '.webp'])
 const DOWNLOAD_TEMPORARY_NAME = /^\.download-[0-9a-f-]{36}\.tmp$/i
 const EXTRACTION_TEMPORARY_NAME = /^\.extract-[0-9a-f-]{36}\.tmp(?:\.outer)?$/i
+const EDIT_TEMPORARY_NAME = /^\.edit-[0-9a-f-]{36}\.tmp$/i
 const EXTRACTION_TEMPORARY_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
 export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
@@ -224,18 +227,132 @@ function previewKind(mimeType: string, language: string | undefined): ServePrevi
   return 'none'
 }
 
-function decodeText(bytes: Uint8Array): { text: string, encoding: 'utf-8' | 'utf-16le' | 'utf-16be' } | undefined {
+interface DecodedText {
+  text: string
+  encoding: 'utf-8' | 'utf-16le' | 'utf-16be'
+  bom: boolean
+}
+
+function decodeText(bytes: Uint8Array): DecodedText | undefined {
   try {
     if (bytes[0] === 0xFF && bytes[1] === 0xFE)
-      return { text: new TextDecoder('utf-16le', { fatal: true }).decode(bytes), encoding: 'utf-16le' }
+      return { text: new TextDecoder('utf-16le', { fatal: true }).decode(bytes), encoding: 'utf-16le', bom: true }
     if (bytes[0] === 0xFE && bytes[1] === 0xFF)
-      return { text: new TextDecoder('utf-16be', { fatal: true }).decode(bytes), encoding: 'utf-16be' }
-    if (bytes.includes(0))
-      return undefined
-    return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), encoding: 'utf-8' }
+      return { text: new TextDecoder('utf-16be', { fatal: true }).decode(bytes), encoding: 'utf-16be', bom: true }
+    const bom = bytes[0] === 0xEF && bytes[1] === 0xBB && bytes[2] === 0xBF
+    return { text: new TextDecoder('utf-8', { fatal: true }).decode(bytes), encoding: 'utf-8', bom }
   }
   catch {
     return undefined
+  }
+}
+
+function revision(bytes: Uint8Array): string {
+  return createHash('sha256').update(bytes).digest('hex')
+}
+
+function lineEndingStyle(text: string): '\n' | '\r\n' | '\r' {
+  let crlf = 0
+  let lf = 0
+  let cr = 0
+  for (let index = 0; index < text.length; index++) {
+    if (text[index] === '\r') {
+      if (text[index + 1] === '\n') {
+        crlf++
+        index++
+      }
+      else {
+        cr++
+      }
+    }
+    else if (text[index] === '\n') {
+      lf++
+    }
+  }
+  if (crlf > lf && crlf > cr)
+    return '\r\n'
+  if (cr > lf && cr > crlf)
+    return '\r'
+  return '\n'
+}
+
+function normalizeDraft(text: string, source: string): string {
+  const endedWithNewline = /(?:\r\n|\r|\n)$/.test(source)
+  const normalized = text.replace(/\r\n|\r|\n/g, '\n')
+  const withoutTrailing = normalized.replace(/\n+$/g, '')
+  const preserved = endedWithNewline ? `${withoutTrailing}\n` : withoutTrailing
+  const separator = lineEndingStyle(source)
+  return separator === '\n' ? preserved : preserved.replaceAll('\n', separator)
+}
+
+function encodeText(text: string, encoding: DecodedText['encoding'], bom: boolean): Uint8Array {
+  if (encoding === 'utf-8') {
+    const encoded = new TextEncoder().encode(text)
+    if (!bom)
+      return encoded
+    const result = new Uint8Array(encoded.byteLength + 3)
+    result.set([0xEF, 0xBB, 0xBF])
+    result.set(encoded, 3)
+    return result
+  }
+  const result = new Uint8Array(text.length * 2 + 2)
+  result[0] = encoding === 'utf-16le' ? 0xFF : 0xFE
+  result[1] = encoding === 'utf-16le' ? 0xFE : 0xFF
+  for (let index = 0; index < text.length; index++) {
+    const code = text.charCodeAt(index)
+    if (encoding === 'utf-16le') {
+      result[2 + index * 2] = code & 0xFF
+      result[3 + index * 2] = code >>> 8
+    }
+    else {
+      result[2 + index * 2] = code >>> 8
+      result[3 + index * 2] = code & 0xFF
+    }
+  }
+  return result
+}
+
+async function readTextBytes(resolved: string): Promise<{ bytes: Uint8Array, size: number, stat: Stats }> {
+  const stat = await fs.stat(resolved)
+  if (!stat.isFile())
+    throw new ServeWorkspaceError('NOT_FILE', 'Path is not a file')
+  if (stat.size > MAX_TEXT_PREVIEW_BYTES)
+    return { bytes: new Uint8Array(), size: stat.size, stat }
+  const handle = await fs.open(resolved, 'r')
+  try {
+    const buffer = new Uint8Array(MAX_TEXT_PREVIEW_BYTES)
+    let bytesRead = 0
+    while (bytesRead < buffer.length) {
+      const result = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead)
+      if (result.bytesRead === 0)
+        break
+      bytesRead += result.bytesRead
+    }
+    const currentStat = await handle.stat()
+    if (currentStat.size > MAX_TEXT_PREVIEW_BYTES)
+      return { bytes: new Uint8Array(), size: currentStat.size, stat: currentStat }
+    return { bytes: buffer.subarray(0, bytesRead), size: currentStat.size, stat: currentStat }
+  }
+  finally {
+    await handle.close()
+  }
+}
+
+const saveLocks = new Map<string, Promise<void>>()
+
+async function withSaveLock<T>(key: string, operation: () => Promise<T>): Promise<T> {
+  const previous = saveLocks.get(key) ?? Promise.resolve()
+  let release!: () => void
+  const current = new Promise<void>(resolve => release = resolve)
+  saveLocks.set(key, current)
+  await previous
+  try {
+    return await operation()
+  }
+  finally {
+    release()
+    if (saveLocks.get(key) === current)
+      saveLocks.delete(key)
   }
 }
 
@@ -411,7 +528,7 @@ export async function createServeWorkspace(directory: string, options: ServeWork
 
       let names: string[]
       try {
-        names = (await fs.readdir(resolved)).filter(name => !DOWNLOAD_TEMPORARY_NAME.test(name) && !EXTRACTION_TEMPORARY_NAME.test(name))
+        names = (await fs.readdir(resolved)).filter(name => !DOWNLOAD_TEMPORARY_NAME.test(name) && !EXTRACTION_TEMPORARY_NAME.test(name) && !EDIT_TEMPORARY_NAME.test(name))
       }
       catch {
         throw new ServeWorkspaceError('UNAVAILABLE', 'Directory cannot be read')
@@ -450,45 +567,85 @@ export async function createServeWorkspace(directory: string, options: ServeWork
     async readTextPreview(requestedPath): Promise<ServeTextPreview> {
       const relativePath = normalizedRelativePath(requestedPath)
       const resolved = await resolvedInsideRoot(root, absolutePath(root, relativePath))
-      const stat = await fs.stat(resolved)
-      if (!stat.isFile())
-        throw new ServeWorkspaceError('NOT_FILE', 'Path is not a file')
-      if (stat.size > MAX_TEXT_PREVIEW_BYTES) {
+      const { bytes, size } = await readTextBytes(resolved)
+      if (size > MAX_TEXT_PREVIEW_BYTES) {
         return {
           status: 'too_large',
-          size: stat.size,
+          size,
           maxBytes: MAX_TEXT_PREVIEW_BYTES,
         }
       }
-      const handle = await fs.open(resolved, 'r')
-      let bytes: Uint8Array
-      let size: number
-      try {
-        const buffer = new Uint8Array(MAX_TEXT_PREVIEW_BYTES)
-        let bytesRead = 0
-        while (bytesRead < buffer.length) {
-          const result = await handle.read(buffer, bytesRead, buffer.length - bytesRead, bytesRead)
-          if (result.bytesRead === 0)
-            break
-          bytesRead += result.bytesRead
-        }
-        size = (await handle.stat()).size
-        if (size > MAX_TEXT_PREVIEW_BYTES) {
-          return {
-            status: 'too_large',
-            size,
-            maxBytes: MAX_TEXT_PREVIEW_BYTES,
-          }
-        }
-        bytes = buffer.subarray(0, bytesRead)
-      }
-      finally {
-        await handle.close()
-      }
       const decoded = decodeText(bytes)
       return decoded
-        ? { status: 'ready', ...decoded, size }
+        ? { status: 'ready', text: decoded.text, encoding: decoded.encoding, size, revision: revision(bytes) }
         : { status: 'binary', size }
+    },
+    async saveTextFile(requestedPath, text, expectedRevision): Promise<ServeTextSaveResult> {
+      const relativePath = normalizedRelativePath(requestedPath)
+      const candidate = absolutePath(root, relativePath)
+      const resolved = await resolvedInsideRoot(root, candidate)
+      return withSaveLock(resolved, async () => {
+        let linkStat: Stats
+        try {
+          linkStat = await fs.lstat(candidate)
+        }
+        catch {
+          throw new ServeWorkspaceError('NOT_FOUND', 'Path does not exist')
+        }
+        if (linkStat.isSymbolicLink())
+          throw new ServeWorkspaceError('NOT_FILE', 'Symbolic links are not edit targets')
+        if (!linkStat.isFile())
+          throw new ServeWorkspaceError('NOT_FILE', 'Path is not a file')
+
+        const source = await readTextBytes(resolved)
+        if (source.size > MAX_TEXT_PREVIEW_BYTES)
+          throw new ServeWorkspaceError('TOO_LARGE', 'Text file exceeds the 2 MiB limit')
+        const decoded = decodeText(source.bytes)
+        if (!decoded)
+          throw new ServeWorkspaceError('UNSUPPORTED_TEXT', 'File contents are not supported text')
+        const currentRevision = revision(source.bytes)
+        if (currentRevision !== expectedRevision)
+          throw new ServeWorkspaceError('REVISION_MISMATCH', 'The file changed while it was being edited')
+
+        const normalized = normalizeDraft(text, decoded.text)
+        const output = encodeText(normalized, decoded.encoding, decoded.bom)
+        if (output.byteLength > MAX_TEXT_PREVIEW_BYTES)
+          throw new ServeWorkspaceError('TOO_LARGE', 'Edited text exceeds the 2 MiB limit')
+
+        const temporaryPath = path.join(path.dirname(candidate), `.edit-${crypto.randomUUID()}.tmp`)
+        try {
+          const handle = await fs.open(temporaryPath, 'wx', linkStat.mode & 0o7777)
+          try {
+            await handle.writeFile(output)
+            await handle.chmod(linkStat.mode & 0o7777)
+            await handle.sync()
+          }
+          finally {
+            await handle.close()
+          }
+
+          const finalLinkStat = await fs.lstat(candidate)
+          if (!finalLinkStat.isFile() || finalLinkStat.isSymbolicLink())
+            throw new ServeWorkspaceError('NOT_FILE', 'Symbolic links are not edit targets')
+          if (await fs.realpath(candidate) !== resolved)
+            throw new ServeWorkspaceError('REVISION_MISMATCH', 'The file changed while it was being edited')
+          const finalSource = await readTextBytes(resolved)
+          if (finalSource.size > MAX_TEXT_PREVIEW_BYTES || revision(finalSource.bytes) !== expectedRevision)
+            throw new ServeWorkspaceError('REVISION_MISMATCH', 'The file changed while it was being edited')
+          await fs.rename(temporaryPath, candidate)
+          const finalStat = await fs.stat(candidate)
+          return {
+            revision: revision(output),
+            size: output.byteLength,
+            modifiedAt: finalStat.mtime,
+            encoding: decoded.encoding,
+          }
+        }
+        catch (cause) {
+          await fs.unlink(temporaryPath).catch(() => {})
+          throw cause
+        }
+      })
     },
     async uploadFile(requestedDirectory, file): Promise<ServeUploadResult> {
       if (file.size > MAX_UPLOAD_BYTES)

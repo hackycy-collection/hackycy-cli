@@ -34,9 +34,17 @@ export type SessionState
     | { version: 1, authenticationEnabled: true, authenticated: true, account: { username: string } }
 
 export type TextPreview
-  = | { version: 1, status: 'ready', text: string, encoding: string, size: number }
+  = | { version: 1, status: 'ready', text: string, encoding: 'utf-8' | 'utf-16le' | 'utf-16be', size: number, revision: string }
     | { version: 1, status: 'too_large', size: number, maxBytes: number }
     | { version: 1, status: 'binary', size: number }
+
+export interface TextSaveResult {
+  version: 1
+  revision: string
+  size: number
+  modifiedAt: string
+  encoding: 'utf-8' | 'utf-16le' | 'utf-16be'
+}
 
 export interface UploadResult {
   version: 1
@@ -122,6 +130,13 @@ export interface ExtractionResponse {
   task: ExtractionTask
 }
 
+export class ApiError extends Error {
+  constructor(readonly status: number, message: string) {
+    super(message)
+    this.name = 'ApiError'
+  }
+}
+
 interface ErrorBody {
   error?: { message?: string }
 }
@@ -132,7 +147,7 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     if (response.status === 401 && url !== '/api/session')
       window.dispatchEvent(new Event('serve-authentication-required'))
-    throw new Error(body?.error?.message ?? `Request failed (${response.status})`)
+    throw new ApiError(response.status, body?.error?.message ?? `Request failed (${response.status})`)
   }
   return body as T
 }

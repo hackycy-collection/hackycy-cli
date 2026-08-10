@@ -452,16 +452,50 @@ describe('ServeHttpServer', () => {
     const binary = await fetch(new URL('/api/text?path=bad.txt', server.url))
     const invalidMethod = await fetch(new URL('/api/text?path=page.html', server.url), { method: 'POST' })
 
-    expect(await text.json()).toEqual({
+    expect(await text.json()).toEqual(expect.objectContaining({
       version: 1,
       status: 'ready',
       text: '<script>alert(1)</script>',
       encoding: 'utf-8',
       size: 25,
-    })
+      revision: expect.stringMatching(/^[0-9a-f]{64}$/),
+    }))
     expect(text.headers.get('content-type')).toContain('application/json')
     expect(await binary.json()).toEqual({ version: 1, status: 'binary', size: 2 })
     expect(invalidMethod.status).toBe(405)
+  })
+
+  test('conditionally saves text only in management mode and rejects stale revisions', async () => {
+    const disabledFixture = await startFixtureServer(false)
+    const fixture = await startFixtureServer(true)
+    const endpoint = new URL('/api/text?path=hello.txt', fixture.server.url)
+    const preview = await fetch(endpoint)
+    const previewBody = await preview.json() as { revision: string }
+    const origin = fixture.server.url.origin
+
+    const disabled = await fetch(new URL('/api/text?path=hello.txt', disabledFixture.server.url), {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain', 'Origin': disabledFixture.server.url.origin, 'If-Match': 'x' },
+      body: 'blocked',
+    })
+    const crossOrigin = await fetch(endpoint, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain', 'Origin': 'https://attacker.example', 'If-Match': previewBody.revision },
+      body: 'blocked',
+    })
+    const missing = await fetch(endpoint, { method: 'PUT', headers: { 'Content-Type': 'text/plain', 'Origin': origin }, body: 'missing' })
+    const wrongType = await fetch(endpoint, { method: 'PUT', headers: { 'Content-Type': 'application/json', 'Origin': origin, 'If-Match': previewBody.revision }, body: 'wrong' })
+    const saved = await fetch(endpoint, { method: 'PUT', headers: { 'Content-Type': 'text/plain; charset=utf-8', 'Origin': origin, 'If-Match': previewBody.revision }, body: 'updated\n' })
+    const stale = await fetch(endpoint, { method: 'PUT', headers: { 'Content-Type': 'text/plain', 'Origin': origin, 'If-Match': previewBody.revision }, body: 'must not overwrite' })
+
+    expect(disabled.status).toBe(403)
+    expect(crossOrigin.status).toBe(403)
+    expect(missing.status).toBe(428)
+    expect(wrongType.status).toBe(415)
+    expect(saved.status).toBe(200)
+    expect(await saved.json()).toEqual(expect.objectContaining({ version: 1, encoding: 'utf-8', size: 7, revision: expect.stringMatching(/^[0-9a-f]{64}$/) }))
+    expect(stale.status).toBe(412)
+    expect(await (await fetch(new URL('/files/hello.txt', fixture.server.url))).text()).toBe('updated')
   })
 
   test('uploads only when enabled and requested by the bound same origin', async () => {

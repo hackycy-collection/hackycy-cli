@@ -9,7 +9,7 @@ import { createExtractionManager, ExtractionError } from './extraction-service'
 import { ThumbnailError, ThumbnailService } from './thumbnail-service'
 import { ServeWorkspaceError } from './types'
 import serveWebApp from './web/index.html'
-import { MAX_UPLOAD_BYTES } from './workspace'
+import { MAX_TEXT_PREVIEW_BYTES, MAX_UPLOAD_BYTES } from './workspace'
 
 export interface RunningServeServer {
   readonly url: URL
@@ -78,6 +78,9 @@ const ERROR_STATUS: Record<ServeErrorCode, number> = {
   NOT_DIRECTORY: 409,
   NOT_FILE: 409,
   TOO_LARGE: 413,
+  PRECONDITION_REQUIRED: 428,
+  REVISION_MISMATCH: 412,
+  UNSUPPORTED_TEXT: 409,
   NAME_EXHAUSTED: 409,
   ALREADY_EXISTS: 409,
   ROOT_IMMUTABLE: 409,
@@ -511,6 +514,61 @@ export function startServeHttpServer(options: {
         }
       }
       if (url.pathname === '/api/text') {
+        if (request.method === 'PUT') {
+          if (!options.managementEnabled)
+            return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable filesystem management', 403)
+          const invalidOrigin = validateMutationOrigin(request, options.address)
+          if (invalidOrigin)
+            return invalidOrigin
+          const contentType = request.headers.get('Content-Type')
+          const [mediaType, ...parameters] = contentType?.split(';').map(value => value.trim().toLowerCase()) ?? []
+          if (mediaType !== 'text/plain' || parameters.some(parameter => parameter !== 'charset=utf-8'))
+            return error('UNSUPPORTED_MEDIA_TYPE', 'Text saves must use UTF-8 text/plain', 415)
+          const expectedRevision = request.headers.get('If-Match')
+          if (!expectedRevision)
+            return error('PRECONDITION_REQUIRED', 'If-Match is required when saving text', 428)
+          let body: string
+          try {
+            const length = Number(request.headers.get('Content-Length'))
+            if (Number.isSafeInteger(length) && length > MAX_TEXT_PREVIEW_BYTES)
+              return error('TOO_LARGE', 'Edited text exceeds the 2 MiB limit', 413)
+            const reader = request.body?.getReader()
+            if (!reader) {
+              body = ''
+            }
+            else {
+              const chunks: Uint8Array[] = []
+              let size = 0
+              while (true) {
+                const chunk = await reader.read()
+                if (chunk.done)
+                  break
+                size += chunk.value.byteLength
+                if (size > MAX_TEXT_PREVIEW_BYTES) {
+                  await reader.cancel()
+                  return error('TOO_LARGE', 'Edited text exceeds the 2 MiB limit', 413)
+                }
+                chunks.push(chunk.value)
+              }
+              const bytes = new Uint8Array(size)
+              let offset = 0
+              for (const chunk of chunks) {
+                bytes.set(chunk, offset)
+                offset += chunk.byteLength
+              }
+              body = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+            }
+          }
+          catch {
+            return error('INVALID_REQUEST', 'Text save body must be valid UTF-8', 400)
+          }
+          try {
+            return json({ version: 1, ...await options.workspace.saveTextFile(url.searchParams.get('path') ?? '', body, expectedRevision) })
+          }
+          catch (cause) {
+            return workspaceError(cause)
+          }
+        }
         const invalidMethod = requireMethod(request, 'GET')
         if (invalidMethod)
           return invalidMethod

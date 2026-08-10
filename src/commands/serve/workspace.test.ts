@@ -1,5 +1,5 @@
 import type { ServeWorkspace } from './types'
-import { lstat, mkdir, mkdtemp, readdir, readlink, rm, symlink, writeFile } from 'node:fs/promises'
+import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -150,25 +150,45 @@ describe('ServeWorkspace', () => {
       writeFile(path.join(root, 'large.txt'), new Uint8Array(2 * 1024 * 1024 + 1)),
     ])
 
-    expect(await workspace.readTextPreview('Alpha.txt')).toEqual({
+    expect(await workspace.readTextPreview('Alpha.txt')).toEqual(expect.objectContaining({
       status: 'ready',
       text: 'alpha',
       encoding: 'utf-8',
       size: 5,
-    })
-    expect(await workspace.readTextPreview('utf16.txt')).toEqual({
+      revision: expect.stringMatching(/^[0-9a-f]{64}$/),
+    }))
+    expect(await workspace.readTextPreview('utf16.txt')).toEqual(expect.objectContaining({
       status: 'ready',
       text: 'hi',
       encoding: 'utf-16le',
       size: 6,
-    })
+      revision: expect.stringMatching(/^[0-9a-f]{64}$/),
+    }))
     expect(await workspace.readTextPreview('binary.txt')).toEqual({ status: 'binary', size: 2 })
-    expect(await workspace.readTextPreview('nul.txt')).toEqual({ status: 'binary', size: 3 })
+    expect(await workspace.readTextPreview('nul.txt')).toEqual(expect.objectContaining({
+      status: 'ready',
+      text: '\0\u0001\u0002',
+      encoding: 'utf-8',
+      size: 3,
+      revision: expect.stringMatching(/^[0-9a-f]{64}$/),
+    }))
     expect(await workspace.readTextPreview('large.txt')).toEqual({
       status: 'too_large',
       size: 2 * 1024 * 1024 + 1,
       maxBytes: 2 * 1024 * 1024,
     })
+  })
+
+  test('discovers extensionless text by content without listing it as text', async () => {
+    const { root, workspace } = await createFixture()
+    await writeFile(path.join(root, '.claude'), 'model=local')
+
+    expect((await workspace.listDirectory('')).entries.find(entry => entry.name === '.claude')).toEqual(expect.objectContaining({ previewKind: 'none' }))
+    expect(await workspace.readTextPreview('.claude')).toEqual(expect.objectContaining({
+      status: 'ready',
+      text: 'model=local',
+      encoding: 'utf-8',
+    }))
   })
 
   test('uploads atomically and chooses a new name instead of overwriting', async () => {
@@ -186,6 +206,54 @@ describe('ServeWorkspace', () => {
       'report.txt',
     ])
     await expect(workspace.uploadFile('docs', new File(['bad'], '../secret.txt'))).rejects.toMatchObject({ code: 'INVALID_UPLOAD' })
+  })
+
+  test('conditionally saves text while preserving encoding, BOM, line endings, and mode bits', async () => {
+    const { root, workspace } = await createFixture()
+    const target = path.join(root, 'edited.txt')
+    await writeFile(target, 'one\r\ntwo\r\n')
+    await chmod(target, 0o640)
+
+    const preview = await workspace.readTextPreview('edited.txt')
+    expect(preview.status).toBe('ready')
+    if (preview.status !== 'ready')
+      return
+    const saved = await workspace.saveTextFile('edited.txt', 'new\ncontent', preview.revision)
+    expect(saved).toEqual(expect.objectContaining({
+      encoding: 'utf-8',
+      size: 'new\r\ncontent\r\n'.length,
+      revision: expect.stringMatching(/^[0-9a-f]{64}$/),
+    }))
+    expect(await readFile(target, 'utf8')).toBe('new\r\ncontent\r\n')
+    expect((await stat(target)).mode & 0o7777).toBe(0o640)
+
+    const stale = await workspace.readTextPreview('edited.txt')
+    await expect(workspace.saveTextFile('edited.txt', 'stale', preview.revision)).rejects.toMatchObject({ code: 'REVISION_MISMATCH' })
+    expect(stale.status).toBe('ready')
+  })
+
+  test('preserves UTF-16 BOMs and rejects final symbolic links as edit targets', async () => {
+    const { root, workspace } = await createFixture()
+    await writeFile(path.join(root, 'be.txt'), Uint8Array.from([0xFE, 0xFF, 0x00, 0x68, 0x00, 0x69]))
+    await writeFile(path.join(root, 'utf8-bom.txt'), Uint8Array.from([0xEF, 0xBB, 0xBF, 0x68, 0x69]))
+    await symlink('Alpha.txt', path.join(root, 'linked.txt'))
+
+    const preview = await workspace.readTextPreview('be.txt')
+    expect(preview.status).toBe('ready')
+    if (preview.status === 'ready') {
+      await workspace.saveTextFile('be.txt', 'ok', preview.revision)
+      expect(Array.from(await readFile(path.join(root, 'be.txt')))).toEqual([0xFE, 0xFF, 0x00, 0x6F, 0x00, 0x6B])
+    }
+    const utf8Bom = await workspace.readTextPreview('utf8-bom.txt')
+    expect(utf8Bom.status).toBe('ready')
+    if (utf8Bom.status === 'ready') {
+      await workspace.saveTextFile('utf8-bom.txt', 'ok', utf8Bom.revision)
+      expect(Array.from(await readFile(path.join(root, 'utf8-bom.txt')))).toEqual([0xEF, 0xBB, 0xBF, 0x6F, 0x6B])
+    }
+    const linked = await workspace.readTextPreview('linked.txt')
+    expect(linked.status).toBe('ready')
+    if (linked.status === 'ready')
+      await expect(workspace.saveTextFile('linked.txt', 'changed', linked.revision)).rejects.toMatchObject({ code: 'NOT_FILE' })
   })
 
   test('writes a streamed download atomically with bounded progress updates', async () => {

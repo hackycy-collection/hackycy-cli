@@ -1,6 +1,7 @@
 import type { FormEvent } from 'react'
 import type { Layout, LayoutChangedMeta } from 'react-resizable-panels'
 import type { DirectoryEntry, DirectoryListing, DownloadList, DownloadTask, ExtractionList, ExtractionTask, OperationCommand, OperationResult, SessionState } from './api'
+import type { TextEditorTarget } from './components/text-editor-dialog'
 import type { ExplorerClipboard, ExplorerSelection, NavigationHistory } from './explorer-state'
 import type { ActivityTask, SortDirection, SortKey, ViewMode } from './types'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
@@ -52,6 +53,7 @@ import { FileBrowser } from './components/file-browser'
 import { NavigationPane } from './components/navigation-pane'
 import { PreviewPane, PreviewSheet } from './components/preview-sheet'
 import { RenameDialog } from './components/rename-dialog'
+import { TextEditorDialog } from './components/text-editor-dialog'
 import {
   clipboardOperation,
   createNavigationHistory,
@@ -299,8 +301,13 @@ function ExplorerApp({
   const [dragging, setDragging] = useState(false)
   const [mobileNavigation, setMobileNavigation] = useState(false)
   const [imageViewerOpen, setImageViewerOpen] = useState(false)
+  const [editingTarget, setEditingTarget] = useState<TextEditorTarget>()
+  const [editorDirty, setEditorDirty] = useState(false)
   const [toast, setToast] = useState<string>()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const currentRouteRef = useRef({ directoryPath, previewPath })
+  const editorDirtyRef = useRef(editorDirty)
+  const revertingPopStateRef = useRef(false)
   const activeResizeHandleRef = useRef<'navigation' | 'preview' | undefined>(undefined)
   const navigationPanelRef = usePanelRef()
   const mobile = useMobile()
@@ -324,16 +331,46 @@ function ExplorerApp({
   }, [navigation])
 
   useEffect(() => {
+    currentRouteRef.current = { directoryPath, previewPath }
+  }, [directoryPath, previewPath])
+
+  useEffect(() => {
+    editorDirtyRef.current = editorDirty
+  }, [editorDirty])
+
+  useEffect(() => {
     history.replaceState({ serveCursor: 0 }, '', window.location.href)
     const popstate = (event: PopStateEvent): void => {
       const next = routeState()
       const cursor = typeof event.state?.serveCursor === 'number' ? event.state.serveCursor : undefined
+      if (revertingPopStateRef.current) {
+        revertingPopStateRef.current = false
+      }
+      else if (editorDirtyRef.current) {
+        // eslint-disable-next-line no-alert
+        if (!window.confirm('Discard unsaved changes?')) {
+          const current = currentRouteRef.current
+          if (cursor !== undefined && cursor !== navigationRef.current.cursor) {
+            revertingPopStateRef.current = true
+            history.go(navigationRef.current.cursor - cursor)
+          }
+          else {
+            const restoreUrl = new URL(browserUrl(current.directoryPath), window.location.origin)
+            if (current.previewPath)
+              restoreUrl.searchParams.set('preview', current.previewPath)
+            history.replaceState({ serveCursor: navigationRef.current.cursor }, '', restoreUrl)
+          }
+          return
+        }
+      }
       if (cursor !== undefined && navigationRef.current.paths[cursor] === next.directoryPath)
         setNavigation(current => ({ ...current, cursor }))
       else
         setNavigation(createNavigationHistory(next.directoryPath))
       setDirectoryPath(next.directoryPath)
       setPreviewPath(next.previewPath)
+      setEditingTarget(undefined)
+      setEditorDirty(false)
       setImageViewerOpen(false)
       setRouteError(next.error)
       setQuery('')
@@ -479,11 +516,16 @@ function ExplorerApp({
       setMobileNavigation(false)
       return
     }
+    // eslint-disable-next-line no-alert
+    if (editorDirty && !window.confirm('Discard unsaved changes?'))
+      return
     const next = pushNavigation(navigationRef.current, path)
     history.pushState({ serveCursor: next.cursor }, '', browserUrl(path))
     setNavigation(next)
     setDirectoryPath(path)
     setPreviewPath(undefined)
+    setEditingTarget(undefined)
+    setEditorDirty(false)
     setImageViewerOpen(false)
     setRouteError(undefined)
     setQuery('')
@@ -492,9 +534,12 @@ function ExplorerApp({
     setRenamingPath(undefined)
     setEditingError(undefined)
     setMobileNavigation(false)
-  }, [directoryPath])
+  }, [directoryPath, editorDirty])
 
   const moveHistory = (offset: -1 | 1): void => {
+    // eslint-disable-next-line no-alert
+    if (editorDirty && !window.confirm('Discard unsaved changes?'))
+      return
     const next = moveNavigation(navigationRef.current, offset)
     if (next.cursor === navigationRef.current.cursor)
       return
@@ -504,13 +549,20 @@ function ExplorerApp({
   const openPreview = useCallback((entry: DirectoryEntry): void => {
     if (entry.kind !== 'file')
       return
+    // eslint-disable-next-line no-alert
+    if (entry.path !== previewPath && editorDirty && !window.confirm('Discard unsaved changes?'))
+      return
     const url = new URL(window.location.href)
     url.searchParams.set('preview', entry.path)
     history.replaceState({ serveCursor: navigationRef.current.cursor }, '', url)
     setPreviewPath(entry.path)
+    if (entry.path !== previewPath) {
+      setEditingTarget(undefined)
+      setEditorDirty(false)
+    }
     setImageViewerOpen(false)
     setSelection({ paths: [entry.path], anchorPath: entry.path })
-  }, [])
+  }, [editorDirty, previewPath])
 
   const openTreeFile = useCallback((entry: DirectoryEntry): void => {
     if (entry.kind !== 'file')
@@ -521,6 +573,9 @@ function ExplorerApp({
       openPreview(entry)
       return
     }
+    // eslint-disable-next-line no-alert
+    if (editorDirty && !window.confirm('Discard unsaved changes?'))
+      return
 
     const next = pushNavigation(navigationRef.current, parentPath)
     const previewUrl = new URL(browserUrl(parentPath), window.location.origin)
@@ -529,6 +584,8 @@ function ExplorerApp({
     setNavigation(next)
     setDirectoryPath(parentPath)
     setPreviewPath(entry.path)
+    setEditingTarget(undefined)
+    setEditorDirty(false)
     setImageViewerOpen(false)
     setRouteError(undefined)
     setQuery('')
@@ -536,15 +593,20 @@ function ExplorerApp({
     setCreatingFolder(false)
     setRenamingPath(undefined)
     setEditingError(undefined)
-  }, [directoryPath, openPreview])
+  }, [directoryPath, openPreview, editorDirty, previewPath])
 
-  const closePreview = useCallback((): void => {
+  const closePreview = useCallback((confirmed = false): void => {
+    // eslint-disable-next-line no-alert
+    if (editorDirty && !confirmed && !window.confirm('Discard unsaved changes?'))
+      return
     const url = new URL(window.location.href)
     url.searchParams.delete('preview')
     history.replaceState({ serveCursor: navigationRef.current.cursor }, '', url)
     setPreviewPath(undefined)
+    setEditingTarget(undefined)
+    setEditorDirty(false)
     setImageViewerOpen(false)
-  }, [])
+  }, [editorDirty])
 
   const changeSort = (key: SortKey): void => {
     if (key === sortKey) {
@@ -1137,7 +1199,7 @@ function ExplorerApp({
                       <span />
                     </Separator>
                     <Panel id="preview" defaultSize="360px" minSize="300px" maxSize="48%">
-                      <PreviewPane entry={previewEntry} theme={theme} imageViewerOpen={imageViewerOpen} onImageViewerOpenChange={setImageViewerOpen} onClose={closePreview} />
+                      <PreviewPane entry={previewEntry} theme={theme} managementEnabled={managementEnabled} imageViewerOpen={imageViewerOpen} onImageViewerOpenChange={setImageViewerOpen} onClose={closePreview} onEdit={setEditingTarget} />
                     </Panel>
                   </>
                 )}
@@ -1155,7 +1217,8 @@ function ExplorerApp({
       <Sheet open={mobileNavigation} onOpenChange={setMobileNavigation}>
         <SheetContent side="left" title="File navigation" description="Browse files and folders" className="mobile-sheet flex w-[min(88vw,340px)] flex-col pt-12">{navigationPane}</SheetContent>
       </Sheet>
-      {mobile && <PreviewSheet entry={previewEntry} theme={theme} imageViewerOpen={imageViewerOpen} onImageViewerOpenChange={setImageViewerOpen} onClose={closePreview} />}
+      {mobile && <PreviewSheet entry={previewEntry} theme={theme} managementEnabled={managementEnabled} imageViewerOpen={imageViewerOpen} onImageViewerOpenChange={setImageViewerOpen} onClose={closePreview} onEdit={setEditingTarget} />}
+      <TextEditorDialog target={editingTarget} theme={theme} onDirtyChange={setEditorDirty} onSaved={refresh} onClose={() => setEditingTarget(undefined)} />
       <RenameDialog
         entry={renamingEntry}
         busy={editingBusy}

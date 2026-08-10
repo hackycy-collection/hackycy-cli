@@ -43,9 +43,16 @@ export interface ServeFile {
 }
 
 export type ServeTextPreview
-  = | { status: 'ready', text: string, encoding: 'utf-8' | 'utf-16le' | 'utf-16be', size: number }
+  = | { status: 'ready', text: string, encoding: 'utf-8' | 'utf-16le' | 'utf-16be', size: number, revision: string }
     | { status: 'too_large', size: number, maxBytes: number }
     | { status: 'binary', size: number }
+
+export interface ServeTextSaveResult {
+  revision: string
+  size: number
+  modifiedAt: Date
+  encoding: 'utf-8' | 'utf-16le' | 'utf-16be'
+}
 
 export interface ServeUploadResult {
   filename: string
@@ -161,6 +168,7 @@ export interface ServeWorkspace {
   listDirectory: (relativePath: string) => Promise<ServeDirectoryListing>
   openFile: (relativePath: string) => Promise<ServeFile>
   readTextPreview: (relativePath: string) => Promise<ServeTextPreview>
+  saveTextFile: (relativePath: string, text: string, revision: string) => Promise<ServeTextSaveResult>
   uploadFile: (directoryPath: string, file: File) => Promise<ServeUploadResult>
   writeFileStream: (directoryPath: string, filename: string, stream: ReadableStream<Uint8Array>, options?: ServeStreamWriteOptions) => Promise<ServeUploadResult>
   extractArchive: (archivePath: string, options?: ServeArchiveExtractOptions) => Promise<ServeArchiveExtractResult>
@@ -177,6 +185,9 @@ export type ServeErrorCode
     | 'NOT_DIRECTORY'
     | 'NOT_FILE'
     | 'TOO_LARGE'
+    | 'PRECONDITION_REQUIRED'
+    | 'REVISION_MISMATCH'
+    | 'UNSUPPORTED_TEXT'
     | 'NAME_EXHAUSTED'
     | 'ALREADY_EXISTS'
     | 'ROOT_IMMUTABLE'
