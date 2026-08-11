@@ -1,11 +1,19 @@
-import type { ChangeSummary, FileChange } from './types'
+import type {
+  ChangeStats,
+  ContentPolicy,
+  DiffHunk,
+  FileChange,
+  FileRole,
+  GitChangeSnapshot,
+  GitScope,
+  SnapshotFile,
+} from './types'
+import { createHash } from 'node:crypto'
 import { lstat } from 'node:fs/promises'
 import path from 'node:path'
+import { CommitMessageError } from './types'
 
-export const MAX_PROMPT_CHARS = 24_000
-const MAX_MANIFEST_CHARS = 8_000
 const LARGE_FILE_BYTES = 200_000
-const COMPACTION_NOTICE = 'Some raw diffs were compacted to fit the prompt budget.'
 
 const BINARY_EXTS = new Set([
   '.png',
@@ -31,12 +39,35 @@ const BINARY_EXTS = new Set([
   '.mov',
 ])
 
-const SKIP_DIFF_BASENAMES = new Set([
+const LOCKFILE_BASENAMES = new Set([
   'bun.lock',
+  'bun.lockb',
   'package-lock.json',
   'pnpm-lock.yaml',
   'yarn.lock',
 ])
+
+interface ParsedPatchFile {
+  hunks: DiffHunk[]
+  rawLength: number
+}
+
+interface Numstat {
+  additions: number
+  deletions: number
+  binary: boolean
+}
+
+interface InspectionOptions {
+  cwd?: string
+  repoRoot?: string
+  scope?: GitScope
+}
+
+interface CaptureOptions {
+  repoRoot: string
+  scope: GitScope
+}
 
 async function pathExists(filePath: string): Promise<boolean> {
   try {
@@ -46,7 +77,6 @@ async function pathExists(filePath: string): Promise<boolean> {
   catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT')
       return false
-
     throw err
   }
 }
@@ -69,6 +99,23 @@ async function runGit(args: string[], cwd?: string, allowFailure = false): Promi
   return stdout
 }
 
+async function runGitBytes(args: string[], cwd: string, input: string): Promise<Uint8Array> {
+  const proc = Bun.spawn(['git', ...args], {
+    cwd,
+    stdin: new TextEncoder().encode(input),
+    stdout: 'pipe',
+    stderr: 'pipe',
+  })
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).arrayBuffer(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ])
+  if (exitCode !== 0)
+    throw new Error(stderr.trim() || `git ${args.join(' ')} failed with exit code ${exitCode}`)
+  return new Uint8Array(stdout)
+}
+
 export async function getRepoRoot(cwd?: string): Promise<string> {
   return (await runGit(['rev-parse', '--show-toplevel'], cwd)).trim()
 }
@@ -79,8 +126,7 @@ export async function stageAllChanges(repoRoot: string): Promise<void> {
 
 export async function hasStagedChanges(repoRoot: string): Promise<boolean> {
   const proc = Bun.spawn(['git', 'diff', '--cached', '--quiet'], { cwd: repoRoot })
-  const exitCode = await proc.exited
-  return exitCode === 1
+  return (await proc.exited) === 1
 }
 
 export async function stageFiles(repoRoot: string, filePaths: string[]): Promise<void> {
@@ -88,8 +134,7 @@ export async function stageFiles(repoRoot: string, filePaths: string[]): Promise
   const missingPaths: string[] = []
 
   for (const filePath of filePaths) {
-    const exists = await pathExists(path.join(repoRoot, filePath))
-    if (exists)
+    if (await pathExists(path.join(repoRoot, filePath)))
       existingPaths.push(filePath)
     else
       missingPaths.push(filePath)
@@ -112,7 +157,6 @@ export async function commitWithMessage(repoRoot: string, message: string): Prom
   const args = ['commit', '-m', subject]
   if (body)
     args.push('-m', body)
-
   await runGit(args, repoRoot)
 }
 
@@ -120,82 +164,81 @@ async function getCurrentBranch(repoRoot: string): Promise<string> {
   const branch = (await runGit(['branch', '--show-current'], repoRoot)).trim()
   if (!branch)
     throw new Error('Cannot push from detached HEAD. Check out a branch first.')
-
   return branch
 }
 
 export async function pushChanges(repoRoot: string, remote = 'origin'): Promise<void> {
-  const branch = await getCurrentBranch(repoRoot)
-  await runGit(['push', '-u', remote, branch], repoRoot)
+  await runGit(['push', '-u', remote, await getCurrentBranch(repoRoot)], repoRoot)
 }
 
-export async function getRecentCommitSubjects(repoRoot: string, limit = 20): Promise<string[]> {
-  const output = await runGit(['log', `-${limit}`, '--pretty=%s'], repoRoot, true)
-  return output.split('\n').map(line => line.trim()).filter(Boolean)
+function formatStatus(indexStatus: string, worktreeStatus: string, filePath: string, originalPath?: string): string {
+  if (indexStatus === '?' && worktreeStatus === '?')
+    return `A ${filePath}`
+  if (indexStatus === 'R' || indexStatus === 'C')
+    return `${indexStatus} ${originalPath ?? filePath} -> ${filePath}`
+  const status = `${indexStatus}${worktreeStatus}`.trim()
+  return `${status || 'M'} ${filePath}`
 }
 
 function parseStatus(output: string): FileChange[] {
   const chunks = output.split('\0').filter(Boolean)
   const files: FileChange[] = []
 
-  for (let i = 0; i < chunks.length; i++) {
-    const chunk = chunks[i]!
+  for (let index = 0; index < chunks.length; index++) {
+    const chunk = chunks[index]!
     const indexStatus = chunk[0] ?? ' '
     const worktreeStatus = chunk[1] ?? ' '
     const filePath = chunk.slice(3)
-    let originalPath: string | undefined
-
-    if (indexStatus === 'R' || indexStatus === 'C') {
-      originalPath = chunks[++i]
-    }
-
+    const renamed = indexStatus === 'R' || indexStatus === 'C'
+    const originalPath = renamed ? chunks[++index] : undefined
     files.push({
       path: filePath,
       originalPath,
       status: formatStatus(indexStatus, worktreeStatus, filePath, originalPath),
       indexStatus,
       worktreeStatus,
-      binary: isBinaryPath(filePath),
-      sensitive: isSensitivePath(filePath),
     })
   }
 
   return files
 }
 
-async function isSubmodulePath(repoRoot: string, filePath: string): Promise<boolean> {
-  const output = await runGit(['ls-files', '-s', '--', filePath], repoRoot, true)
-  return output.split('\n').some(line => line.startsWith('160000 '))
-}
-
-async function filterSubmodules(repoRoot: string, files: FileChange[]): Promise<FileChange[]> {
-  const filtered: FileChange[] = []
-
-  for (const file of files) {
-    if (!(await isSubmodulePath(repoRoot, file.path)))
-      filtered.push(file)
+function parseSubmodulePaths(output: string): Set<string> {
+  const paths = new Set<string>()
+  for (const entry of output.split('\0').filter(Boolean)) {
+    const tab = entry.indexOf('\t')
+    if (tab === -1)
+      continue
+    if (entry.startsWith('160000 '))
+      paths.add(entry.slice(tab + 1))
   }
-
-  return filtered
+  return paths
 }
 
-function formatStatus(indexStatus: string, worktreeStatus: string, filePath: string, originalPath?: string): string {
-  if (indexStatus === '?' && worktreeStatus === '?')
-    return `A ${filePath}`
-  if (indexStatus === 'R')
-    return `R ${originalPath ?? filePath} -> ${filePath}`
-  const status = `${indexStatus}${worktreeStatus}`.trim()
-  return `${status || 'M'} ${filePath}`
+export async function inspectGitChanges(options: InspectionOptions = {}): Promise<{ repoRoot: string, files: FileChange[] }> {
+  const repoRoot = options.repoRoot ?? await getRepoRoot(options.cwd)
+  const [statusOutput, lsFilesOutput] = await Promise.all([
+    runGit(['status', '--porcelain=v1', '-z', '--untracked-files=all'], repoRoot),
+    runGit(['ls-files', '--stage', '-z'], repoRoot),
+  ])
+  const submodulePaths = parseSubmodulePaths(lsFilesOutput)
+  const scope = options.scope ?? 'all-uncommitted'
+  const files = parseStatus(statusOutput)
+    .filter(file => scope === 'all-uncommitted' || (file.indexStatus !== ' ' && file.indexStatus !== '?'))
+    .filter(file => !submodulePaths.has(file.path))
+    .toSorted((left, right) => left.path.localeCompare(right.path))
+
+  return { repoRoot, files }
 }
 
-function isBinaryPath(filePath: string): boolean {
-  return BINARY_EXTS.has(path.extname(filePath).toLowerCase())
+function normalizePath(value: string): string {
+  return value.replaceAll('\\', '/')
 }
 
 function isGeneratedPath(filePath: string): boolean {
-  const normalized = filePath.replaceAll('\\', '/')
+  const normalized = normalizePath(filePath)
   const basename = path.basename(filePath)
-  return SKIP_DIFF_BASENAMES.has(basename)
+  return LOCKFILE_BASENAMES.has(basename)
     || normalized.includes('/dist/')
     || normalized.startsWith('dist/')
     || normalized.includes('/build/')
@@ -208,270 +251,405 @@ function isGeneratedPath(filePath: string): boolean {
 
 function isSensitivePath(filePath: string): boolean {
   const basename = path.basename(filePath)
-  const ext = path.extname(filePath).toLowerCase()
+  const extension = path.extname(filePath).toLowerCase()
   return basename === '.env'
     || basename.startsWith('.env.')
     || basename === 'id_rsa'
     || basename === 'id_ed25519'
-    || ext === '.pem'
-    || ext === '.key'
-    || ext === '.p12'
-    || ext === '.pfx'
+    || extension === '.pem'
+    || extension === '.key'
+    || extension === '.p12'
+    || extension === '.pfx'
 }
 
-async function fileSize(repoRoot: string, filePath: string): Promise<number | undefined> {
+function isBinaryPath(filePath: string): boolean {
+  return BINARY_EXTS.has(path.extname(filePath).toLowerCase())
+}
+
+export function getFileRole(filePath: string, binary = false): FileRole {
+  const normalized = normalizePath(filePath)
+  const basename = path.basename(filePath).toLowerCase()
+  if (isSensitivePath(filePath))
+    return 'sensitive'
+  if (binary || isBinaryPath(filePath))
+    return 'binary'
+  if (isGeneratedPath(filePath))
+    return 'generated'
+  if (basename === 'package.json' || basename === 'composer.json' || basename === 'cargo.toml')
+    return 'dependency'
+  if (/(?:^|\/)(?:__tests__|test|tests|spec|specs)(?:\/|$)|\.(?:test|spec)\.[^.]+$/i.test(normalized))
+    return 'test'
+  if (basename.endsWith('.md') || basename.startsWith('readme') || normalized.startsWith('docs/'))
+    return 'docs'
+  if (normalized.startsWith('.github/') || /(?:^|\/)(?:[^/]+\.)?(?:config|rc)\.[^.]+$/i.test(normalized) || /\.(?:json|ya?ml|toml|ini)$/i.test(normalized))
+    return 'config'
+  if (/\.(?:[cm]?[jt]sx?|py|go|rs|java|kt|rb|php|swift|cs|c|cc|cpp|h|hpp)$/i.test(normalized))
+    return 'source'
+  return 'unknown'
+}
+
+async function getFileSize(repoRoot: string, filePath: string): Promise<number | undefined> {
   try {
-    const file = Bun.file(path.join(repoRoot, filePath))
-    return file.size
+    return (await lstat(path.join(repoRoot, filePath))).size
+  }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT')
+      return undefined
+    throw error
+  }
+}
+
+async function getContentPolicy(repoRoot: string, filePath: string, role: FileRole): Promise<ContentPolicy> {
+  if (role === 'sensitive')
+    return 'redacted'
+  if (role === 'binary' || role === 'generated')
+    return 'metadata-only'
+  const size = await getFileSize(repoRoot, filePath)
+  return size !== undefined && size > LARGE_FILE_BYTES ? 'metadata-only' : 'inspect'
+}
+
+function stripDiffPath(value: string): string | undefined {
+  if (value === '/dev/null')
+    return undefined
+  const unquoted = value.replace(/^"|"$/g, '')
+  return unquoted.replace(/^[ab]\//, '')
+}
+
+function parseHunkHeader(line: string): Omit<DiffHunk, 'id' | 'source' | 'addedLines' | 'deletedLines'> | undefined {
+  const match = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?:\s(.*))?$/.exec(line)
+  if (!match)
+    return undefined
+  return {
+    oldStart: Number(match[1]),
+    oldLines: Number(match[2] ?? 1),
+    newStart: Number(match[3]),
+    newLines: Number(match[4] ?? 1),
+    heading: match[5]?.trim() || undefined,
+  }
+}
+
+function parseUnifiedPatch(patch: string, source: DiffHunk['source']): Map<string, ParsedPatchFile> {
+  const parsed = new Map<string, ParsedPatchFile>()
+  for (const section of patch.split(/^diff --git /m).slice(1)) {
+    const lines = section.split('\n')
+    let oldPath: string | undefined
+    let newPath: string | undefined
+    for (const line of lines) {
+      if (line.startsWith('--- '))
+        oldPath = stripDiffPath(line.slice(4).split('\t', 1)[0]!)
+      if (line.startsWith('+++ ')) {
+        newPath = stripDiffPath(line.slice(4).split('\t', 1)[0]!)
+        break
+      }
+    }
+    const filePath = newPath ?? oldPath
+    if (!filePath)
+      continue
+
+    const hunks: DiffHunk[] = []
+    let current: DiffHunk | undefined
+    for (const line of lines) {
+      const header = parseHunkHeader(line)
+      if (header) {
+        current = {
+          ...header,
+          id: `${source}:${filePath}:${hunks.length}`,
+          source,
+          addedLines: [],
+          deletedLines: [],
+        }
+        hunks.push(current)
+        continue
+      }
+      if (!current)
+        continue
+      if (line.startsWith('+') && !line.startsWith('+++'))
+        current.addedLines.push(line.slice(1))
+      else if (line.startsWith('-') && !line.startsWith('---'))
+        current.deletedLines.push(line.slice(1))
+    }
+    parsed.set(filePath, { hunks, rawLength: section.length + 'diff --git '.length })
+  }
+  return parsed
+}
+
+function parseNumstat(output: string): Map<string, Numstat> {
+  const stats = new Map<string, Numstat>()
+  const chunks = output.split('\0').filter(Boolean)
+  for (let index = 0; index < chunks.length; index++) {
+    const chunk = chunks[index]!
+    const match = /^([^\t]+)\t([^\t]+)\t(.*)$/.exec(chunk)
+    if (!match)
+      continue
+    let filePath = match[3]
+    if (!filePath) {
+      index += 1
+      const originalPath = chunks[index]
+      index += 1
+      filePath = chunks[index] ?? originalPath ?? ''
+    }
+    if (!filePath)
+      continue
+    const additions = match[1] === '-' ? 0 : Number(match[1])
+    const deletions = match[2] === '-' ? 0 : Number(match[2])
+    const existing = stats.get(filePath) ?? { additions: 0, deletions: 0, binary: false }
+    existing.additions += Number.isFinite(additions) ? additions : 0
+    existing.deletions += Number.isFinite(deletions) ? deletions : 0
+    existing.binary ||= match[1] === '-' || match[2] === '-'
+    stats.set(filePath, existing)
+  }
+  return stats
+}
+
+function mergeStats(...maps: Array<Map<string, Numstat>>): Map<string, Numstat> {
+  const merged = new Map<string, Numstat>()
+  for (const map of maps) {
+    for (const [filePath, stat] of map) {
+      const current = merged.get(filePath) ?? { additions: 0, deletions: 0, binary: false }
+      current.additions += stat.additions
+      current.deletions += stat.deletions
+      current.binary ||= stat.binary
+      merged.set(filePath, current)
+    }
+  }
+  return merged
+}
+
+function untrackedPatch(filePath: string, text: string): string {
+  const lines = text.endsWith('\n') ? text.slice(0, -1).split('\n') : text.split('\n')
+  return [
+    `diff --git a/${filePath} b/${filePath}`,
+    'new file mode 100644',
+    '--- /dev/null',
+    `+++ b/${filePath}`,
+    `@@ -0,0 +1,${lines.length} @@`,
+    ...lines.map(line => `+${line}`),
+  ].join('\n')
+}
+
+async function hashFile(filePath: string): Promise<string> {
+  const hash = createHash('sha256')
+  const reader = Bun.file(filePath).stream().getReader()
+  try {
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done)
+        break
+      hash.update(value)
+    }
+  }
+  finally {
+    reader.releaseLock()
+  }
+  return hash.digest('hex')
+}
+
+async function mapWithConcurrency<T, R>(items: T[], limit: number, mapper: (item: T) => Promise<R>): Promise<R[]> {
+  const result = [] as R[]
+  result.length = items.length
+  let next = 0
+  const workers = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (next < items.length) {
+      const index = next++
+      result[index] = await mapper(items[index]!)
+    }
+  })
+  await Promise.all(workers)
+  return result
+}
+
+async function captureUntrackedContents(repoRoot: string, files: FileChange[]): Promise<Map<string, { patch?: string, hash: string, binary: boolean }>> {
+  const untracked = files.filter(file => file.indexStatus === '?' && file.worktreeStatus === '?')
+  const captured = await mapWithConcurrency(untracked, 8, async (file) => {
+    const absolutePath = path.join(repoRoot, file.path)
+    const role = getFileRole(file.path)
+    const policy = await getContentPolicy(repoRoot, file.path, role)
+    const hash = await hashFile(absolutePath)
+    if (policy !== 'inspect')
+      return [file.path, { hash, binary: role === 'binary' }] as const
+    const text = await Bun.file(absolutePath).text()
+    if (text.includes('\0'))
+      return [file.path, { hash, binary: true }] as const
+    return [file.path, { hash, patch: untrackedPatch(file.path, text), binary: false }] as const
+  })
+  return new Map(captured)
+}
+
+async function readWorkingText(repoRoot: string, filePath: string): Promise<string | undefined> {
+  try {
+    return await Bun.file(path.join(repoRoot, filePath)).text()
   }
   catch {
     return undefined
   }
 }
 
-async function getFileDiff(repoRoot: string, file: FileChange, stagedOnly: boolean): Promise<string> {
-  if (file.indexStatus === '?' && file.worktreeStatus === '?')
-    return readUntrackedFilePreview(repoRoot, file.path)
-
-  if (stagedOnly)
-    return runGit(['diff', '--cached', '--no-ext-diff', '--', file.path], repoRoot, true)
-
-  const parts: string[] = []
-
-  if (file.indexStatus !== ' ' && file.indexStatus !== '?') {
-    const cached = await runGit(['diff', '--cached', '--no-ext-diff', '--', file.path], repoRoot, true)
-    if (cached.trim())
-      parts.push(`# staged diff\n${cached}`)
+async function readGitBlobs(repoRoot: string, specs: string[]): Promise<Map<string, string | undefined>> {
+  if (specs.length === 0)
+    return new Map()
+  const bytes = await runGitBytes(['cat-file', '--batch'], repoRoot, `${specs.join('\n')}\n`)
+  const decoder = new TextDecoder()
+  const blobs = new Map<string, string | undefined>()
+  let offset = 0
+  for (const spec of specs) {
+    const headerEnd = bytes.indexOf(10, offset)
+    if (headerEnd === -1)
+      throw new Error(`git cat-file returned an incomplete response for ${spec}`)
+    const header = decoder.decode(bytes.subarray(offset, headerEnd))
+    offset = headerEnd + 1
+    if (header.endsWith(' missing')) {
+      blobs.set(spec, undefined)
+      continue
+    }
+    const match = /^[0-9a-f]+ blob (\d+)$/.exec(header)
+    if (!match)
+      throw new Error(`git cat-file returned an unexpected response for ${spec}: ${header}`)
+    const length = Number(match[1])
+    const content = bytes.subarray(offset, offset + length)
+    if (content.length !== length || bytes[offset + length] !== 10)
+      throw new Error(`git cat-file returned an incomplete blob for ${spec}`)
+    blobs.set(spec, decoder.decode(content))
+    offset += length + 1
   }
-
-  if (file.worktreeStatus !== ' ') {
-    const unstaged = await runGit(['diff', '--no-ext-diff', '--', file.path], repoRoot, true)
-    if (unstaged.trim())
-      parts.push(`# unstaged diff\n${unstaged}`)
-  }
-
-  return parts.join('\n')
+  return blobs
 }
 
-async function readUntrackedFilePreview(repoRoot: string, filePath: string): Promise<string> {
-  const absolute = path.join(repoRoot, filePath)
-  const file = Bun.file(absolute)
-  const size = file.size
-  if (size > LARGE_FILE_BYTES)
-    return ''
-
-  const text = await file.text()
-  if (text.includes('\0'))
-    return ''
-
-  return [
-    `diff --git a/${filePath} b/${filePath}`,
-    'new file mode 100644',
-    `--- /dev/null`,
-    `+++ b/${filePath}`,
-    '@@',
-    ...text.split('\n').map(line => `+${line}`),
-  ].join('\n')
+async function captureManifestStates(
+  repoRoot: string,
+  scope: GitScope,
+  files: FileChange[],
+): Promise<Map<string, SnapshotFile['manifest']>> {
+  const manifests = files.filter(file => path.basename(file.path) === 'package.json')
+  const beforeSpecs = manifests.map(file => `HEAD:${file.originalPath ?? file.path}`)
+  const afterSpecs = scope === 'staged' ? manifests.map(file => `:${file.path}`) : []
+  const blobs = await readGitBlobs(repoRoot, [...beforeSpecs, ...afterSpecs])
+  const states = await Promise.all(manifests.map(async (file) => {
+    const before = blobs.get(`HEAD:${file.originalPath ?? file.path}`)
+    const after = scope === 'staged' ? blobs.get(`:${file.path}`) : await readWorkingText(repoRoot, file.path)
+    return [file.path, { before, after }] as const
+  }))
+  return new Map(states)
 }
 
-async function enrichFile(repoRoot: string, file: FileChange, stagedOnly: boolean): Promise<void> {
-  if (file.sensitive) {
-    file.diffSkippedReason = 'sensitive file path'
-    return
-  }
-
-  if (file.binary) {
-    file.diffSkippedReason = 'binary file'
-    return
-  }
-
-  if (isGeneratedPath(file.path)) {
-    file.diffSkippedReason = 'generated or lock file'
-    return
-  }
-
-  const size = await fileSize(repoRoot, file.path)
-  if (size !== undefined && size > LARGE_FILE_BYTES) {
-    file.diffSkippedReason = 'large file'
-    return
-  }
-
-  const diff = await getFileDiff(repoRoot, file, stagedOnly)
-  if (!diff.trim()) {
-    file.diffSkippedReason = 'no textual diff'
-    return
-  }
-
-  if (/^Binary files .+ differ$/m.test(diff)) {
-    file.diffSkippedReason = 'binary diff'
-    file.binary = true
-    return
-  }
-
-  file.diff = diff
+function totalStats(files: SnapshotFile[]): ChangeStats {
+  return files.reduce<ChangeStats>((total, file) => ({
+    additions: total.additions + file.stats.additions,
+    deletions: total.deletions + file.stats.deletions,
+  }), { additions: 0, deletions: 0 })
 }
 
-function getDirectoryGroup(filePath: string): string {
-  const normalized = filePath.replaceAll('\\', '/')
-  const separator = normalized.indexOf('/')
-  return separator === -1 ? '.' : normalized.slice(0, separator)
-}
-
-function appendWithinBudget(text: string, addition: string, budget: number): string | undefined {
-  const next = `${text}${addition}`
-  return next.length <= budget ? next : undefined
-}
-
-function buildManifest(files: FileChange[]): { text: string, compacted: boolean } {
-  const header = `Changed files (${files.length} total):`
-  const fullManifest = [header, ...files.map(file => file.status)].join('\n')
-  if (fullManifest.length <= MAX_MANIFEST_CHARS)
-    return { text: fullManifest, compacted: false }
-
-  const groups = new Map<string, number>()
-  for (const file of files) {
-    const kind = file.status.split(' ', 1)[0] ?? 'M'
-    const group = `${kind} ${getDirectoryGroup(file.path)}`
-    groups.set(group, (groups.get(group) ?? 0) + 1)
-  }
-
-  const lines = [...groups]
+function snapshotHash(
+  scope: GitScope,
+  files: FileChange[],
+  cachedPatch: string,
+  worktreePatch: string,
+  untracked: Map<string, { hash: string }>,
+): string {
+  const status = files.map(file => [
+    file.indexStatus,
+    file.worktreeStatus,
+    file.path,
+    file.originalPath ?? '',
+  ].join('\0')).join('\0')
+  const untrackedHashes = [...untracked]
     .sort(([left], [right]) => left.localeCompare(right))
-    .map(([group, count]) => `${group} (${count} file${count === 1 ? '' : 's'})`)
-  let text = `Changed files (${files.length} total; paths grouped):`
-  let rendered = 0
-  for (const line of lines) {
-    const next = appendWithinBudget(text, `\n${line}`, MAX_MANIFEST_CHARS)
-    if (!next)
-      break
-    text = next
-    rendered += 1
-  }
-
-  if (rendered < lines.length) {
-    const suffix = `\n... ${lines.length - rendered} additional path group(s)`
-    const next = appendWithinBudget(text, suffix, MAX_MANIFEST_CHARS)
-    if (next)
-      text = next
-  }
-
-  return { text, compacted: true }
+    .map(([filePath, value]) => `${filePath}\0${value.hash}`)
+    .join('\0')
+  return createHash('sha256')
+    .update([scope, status, cachedPatch, worktreePatch, untrackedHashes].join('\0'))
+    .digest('hex')
 }
 
-interface DiffGroup {
-  name: string
-  files: FileChange[]
-}
-
-function groupDiffFiles(files: FileChange[]): DiffGroup[] {
-  const groups = new Map<string, FileChange[]>()
-  for (const file of files) {
-    if (!file.diff)
-      continue
-    const name = getDirectoryGroup(file.path)
-    const group = groups.get(name) ?? []
-    group.push(file)
-    groups.set(name, group)
-  }
-
-  return [...groups]
-    .map(([name, groupFiles]) => ({
-      name,
-      files: groupFiles.sort((left, right) => {
-        const lengthDelta = (right.diff?.length ?? 0) - (left.diff?.length ?? 0)
-        return lengthDelta || left.path.localeCompare(right.path)
-      }),
+export async function captureGitSnapshot(options: CaptureOptions): Promise<GitChangeSnapshot> {
+  try {
+    const inspected = await inspectGitChanges({ repoRoot: options.repoRoot, scope: options.scope })
+    const repoRoot = inspected.repoRoot
+    const files = options.scope === 'staged'
+      ? inspected.files.map(file => ({
+          ...file,
+          status: formatStatus(file.indexStatus, ' ', file.path, file.originalPath),
+          worktreeStatus: ' ',
+        }))
+      : inspected.files
+    const [cachedPatch, cachedNumstat, worktreePatch, worktreeNumstat, untracked] = await Promise.all([
+      runGit(['diff', '--cached', '--no-ext-diff', '--find-renames', '--unified=0'], repoRoot),
+      runGit(['diff', '--cached', '--numstat', '-z', '--find-renames'], repoRoot),
+      options.scope === 'all-uncommitted'
+        ? runGit(['diff', '--no-ext-diff', '--find-renames', '--unified=0'], repoRoot)
+        : Promise.resolve(''),
+      options.scope === 'all-uncommitted'
+        ? runGit(['diff', '--numstat', '-z', '--find-renames'], repoRoot)
+        : Promise.resolve(''),
+      options.scope === 'all-uncommitted'
+        ? captureUntrackedContents(repoRoot, files)
+        : Promise.resolve(new Map<string, { patch?: string, hash: string, binary: boolean }>()),
+    ])
+    const stagedPatches = parseUnifiedPatch(cachedPatch, 'staged')
+    const worktreePatches = parseUnifiedPatch(worktreePatch, 'worktree')
+    const untrackedPatches = new Map<string, ParsedPatchFile>()
+    for (const [filePath, content] of untracked) {
+      if (content.patch)
+        untrackedPatches.set(filePath, parseUnifiedPatch(content.patch, 'untracked').get(filePath) ?? { hunks: [], rawLength: content.patch.length })
+    }
+    const stats = mergeStats(parseNumstat(cachedNumstat), parseNumstat(worktreeNumstat))
+    for (const [filePath, content] of untracked) {
+      const patch = untrackedPatches.get(filePath)
+      if (patch) {
+        const additions = patch.hunks.reduce((count, hunk) => count + hunk.addedLines.length, 0)
+        stats.set(filePath, { additions, deletions: 0, binary: content.binary })
+      }
+      else if (content.binary) {
+        stats.set(filePath, { additions: 0, deletions: 0, binary: true })
+      }
+    }
+    const manifestStates = await captureManifestStates(repoRoot, options.scope, files)
+    const snapshotFiles = await Promise.all(files.map(async (file) => {
+      const fileStats = stats.get(file.path) ?? { additions: 0, deletions: 0, binary: false }
+      const patches = [stagedPatches.get(file.path), worktreePatches.get(file.path), untrackedPatches.get(file.path)]
+        .filter((value): value is ParsedPatchFile => Boolean(value))
+      const role = getFileRole(file.path, fileStats.binary)
+      let contentPolicy = await getContentPolicy(repoRoot, file.path, role)
+      if (patches.some(patch => patch.rawLength > LARGE_FILE_BYTES) && contentPolicy === 'inspect')
+        contentPolicy = 'metadata-only'
+      const hunks = contentPolicy === 'inspect'
+        ? patches.flatMap(patch => patch.hunks)
+        : []
+      return {
+        id: createHash('sha256').update([file.path, file.originalPath ?? '', file.indexStatus, file.worktreeStatus].join('\0')).digest('hex'),
+        path: file.path,
+        originalPath: file.originalPath,
+        status: file.status,
+        indexStatus: file.indexStatus,
+        worktreeStatus: file.worktreeStatus,
+        role,
+        contentPolicy,
+        stats: { additions: fileStats.additions, deletions: fileStats.deletions },
+        hunks,
+        manifest: manifestStates.get(file.path),
+      } satisfies SnapshotFile
     }))
-    .sort((left, right) => left.name.localeCompare(right.name))
-}
-
-function buildGroupDiffSection(group: DiffGroup, budget: number): { text: string, compacted: boolean } {
-  const header = `\n# ${group.name}`
-  if (header.length >= budget)
-    return { text: '', compacted: true }
-
-  let text = header
-  for (const file of group.files) {
-    const sectionHeader = `\n\n## ${file.status}\n`
-    const available = budget - text.length - sectionHeader.length
-    if (available <= 0)
-      return { text, compacted: true }
-
-    const diff = file.diff!
-    if (diff.length <= available) {
-      text += `${sectionHeader}${diff}`
-      continue
-    }
-
-    const marker = '\n...[diff truncated for prompt budget]'
-    const previewLength = Math.max(0, available - marker.length)
-    if (previewLength > 0)
-      text += `${sectionHeader}${diff.slice(0, previewLength)}${marker}`
-    return { text, compacted: true }
-  }
-
-  return { text, compacted: false }
-}
-
-function buildDiffContext(files: FileChange[], budget: number): { text: string, compacted: boolean } {
-  const groups = groupDiffFiles(files)
-  let remaining = budget
-  let text = ''
-  let compacted = false
-
-  for (let index = 0; index < groups.length; index++) {
-    const group = groups[index]!
-    const groupBudget = Math.floor(remaining / (groups.length - index))
-    const section = buildGroupDiffSection(group, groupBudget)
-    if (!section.text) {
-      compacted = true
-      continue
-    }
-
-    text += section.text
-    remaining -= section.text.length
-    compacted ||= section.compacted
-  }
-
-  return { text, compacted }
-}
-
-export async function collectChangeSummary(options: { stagedOnly?: boolean, cwd?: string } = {}): Promise<ChangeSummary> {
-  const repoRoot = await getRepoRoot(options.cwd)
-  const statusOutput = await runGit(['status', '--porcelain=v1', '-z', '--untracked-files=all'], repoRoot)
-  let files = parseStatus(statusOutput)
-
-  if (options.stagedOnly) {
-    files = files.filter(file => file.indexStatus !== ' ' && file.indexStatus !== '?')
-  }
-
-  files = await filterSubmodules(repoRoot, files)
-
-  if (files.length === 0) {
+    const sortedFiles = snapshotFiles.toSorted((left, right) => left.path.localeCompare(right.path))
     return {
       repoRoot,
-      files,
-      promptText: '',
-      truncated: false,
+      scope: options.scope,
+      snapshotId: snapshotHash(options.scope, files, cachedPatch, worktreePatch, untracked),
+      files: sortedFiles,
+      totals: totalStats(sortedFiles),
     }
   }
-
-  for (const file of files)
-    await enrichFile(repoRoot, file, Boolean(options.stagedOnly))
-
-  const manifest = buildManifest(files)
-  const diffHeader = '\n\nDiffs:'
-  const diffBudget = Math.max(0, MAX_PROMPT_CHARS - manifest.text.length - diffHeader.length - COMPACTION_NOTICE.length - 2)
-  const diffs = buildDiffContext(files, diffBudget)
-  const truncated = manifest.compacted || diffs.compacted
-  const sections = [manifest.text, diffHeader, diffs.text]
-  if (truncated)
-    sections.push(`\n\n${COMPACTION_NOTICE}`)
-
-  return {
-    repoRoot,
-    files,
-    promptText: sections.join(''),
-    truncated,
+  catch (error) {
+    if (error instanceof CommitMessageError)
+      throw error
+    throw new CommitMessageError('GIT_CAPTURE_FAILED', `Unable to capture Git snapshot: ${(error as Error).message}`, error)
   }
+}
+
+export async function assertGitSnapshotCurrent(
+  repoRoot: string,
+  scope: GitScope,
+  expectedSnapshotId: string,
+): Promise<void> {
+  const current = await captureGitSnapshot({ repoRoot, scope })
+  if (current.snapshotId !== expectedSnapshotId)
+    throw new CommitMessageError('STALE_GIT_SCOPE', 'Git changes changed after the commit message was generated. Generate a new message before committing.')
 }

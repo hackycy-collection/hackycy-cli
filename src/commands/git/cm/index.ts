@@ -7,7 +7,6 @@ export function register(parent: Command): void {
     .description('Generate an Angular-style commit message from uncommitted changes')
     .option('--profile <name>', 'CM provider profile to use')
     .option('-l, --lang <lang>', 'Commit message language: en or zh', 'en')
-    .option('-H, --history', 'Use recent commit subjects as style reference')
     .option('-S, --staged', 'Only use staged changes')
     .option('-s, --stage', 'Select files to stage before generating')
     .option('-a, --stage-all', 'Stage all changes before generating')

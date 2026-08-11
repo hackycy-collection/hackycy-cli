@@ -13,6 +13,15 @@ const profile: ResolvedCmProfile = {
   maxOutputTokens: 200,
 }
 
+const completeEvidence = {
+  estimatedInputTokens: 456,
+  representedClusters: 1,
+  totalClusters: 1,
+  includedFacts: 4,
+  omittedFacts: 0,
+  contentCompacted: false,
+}
+
 describe('formatGeneratedMessage', () => {
   test('prints a compact result without changed file details', () => {
     const output = stripVTControlCharacters(formatGeneratedMessage(
@@ -23,7 +32,7 @@ describe('formatGeneratedMessage', () => {
         completionTokens: 42,
         totalTokens: 1_276,
       },
-      false,
+      completeEvidence,
     ))
 
     expect(output).toBe([
@@ -31,9 +40,10 @@ describe('formatGeneratedMessage', () => {
       '',
       'Profile: deepseek (deepseek-chat)',
       'Tokens: 1,234 prompt / 42 completion / 1,276 total',
+      'Evidence: ~456 input tokens / 1 of 1 clusters / 4 of 4 facts',
     ].join('\n'))
     expect(output).not.toContain('Changed files')
-    expect(output).not.toContain('raw diffs were compressed')
+    expect(output).not.toContain('compacted semantic evidence')
   })
 
   test('preserves a multiline commit body and handles unavailable usage', () => {
@@ -41,24 +51,31 @@ describe('formatGeneratedMessage', () => {
       'fix(cm): preserve commit body\n\nKeep the generated context intact.',
       profile,
       undefined,
-      false,
+      completeEvidence,
     ))
 
     expect(output).toContain('fix(cm): preserve commit body\n\nKeep the generated context intact.')
     expect(output).toContain('Tokens: unavailable')
   })
 
-  test('shows unknown partial usage values and the truncation warning', () => {
+  test('shows unknown partial usage values and semantic evidence compaction', () => {
     const output = stripVTControlCharacters(formatGeneratedMessage(
       'feat(cm): streamline generated output',
       profile,
       { completionTokens: 42 },
-      true,
-      101,
+      {
+        estimatedInputTokens: 2_000,
+        representedClusters: 2,
+        totalClusters: 3,
+        includedFacts: 18,
+        omittedFacts: 13,
+        contentCompacted: true,
+      },
     ))
 
     expect(output).toContain('Tokens: unknown prompt / 42 completion / unknown total')
-    expect(output).toContain('Commit scope: 101 changed files; raw diffs were compressed to fit the prompt budget.')
+    expect(output).toContain('Evidence: ~2,000 input tokens / 2 of 3 clusters / 18 of 31 facts')
+    expect(output).toContain('Commit scope: 3 clusters represented with compacted semantic evidence.')
     expect(output).toContain('This does not affect which files are committed.')
   })
 })

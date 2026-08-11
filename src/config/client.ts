@@ -67,6 +67,7 @@ function normalizeTokenUsage(usage: ChatCompletionResponse['usage']): ChatComple
 export async function createChatCompletionWithUsage(
   profile: ResolvedCmProfile,
   messages: ChatMessage[],
+  options: { maxOutputTokens?: number } = {},
 ): Promise<ChatCompletionResult> {
   const controller = new AbortController()
   const timeout = setTimeout(() => controller.abort(), profile.timeoutMs)
@@ -82,7 +83,7 @@ export async function createChatCompletionWithUsage(
       body: JSON.stringify({
         model: profile.model,
         temperature: profile.temperature,
-        max_tokens: profile.maxOutputTokens,
+        max_tokens: options.maxOutputTokens ?? profile.maxOutputTokens,
         messages,
         ...(shouldDisableThinking(profile)
           ? { thinking: { type: 'disabled' } }
