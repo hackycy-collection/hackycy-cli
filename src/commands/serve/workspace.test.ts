@@ -3,7 +3,7 @@ import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, stat, sy
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
-import { createServeWorkspace } from './workspace'
+import { createServeWorkspace, MAX_TEXT_PREVIEW_BYTES } from './workspace'
 
 const temporaryDirectories: string[] = []
 
@@ -147,7 +147,8 @@ describe('ServeWorkspace', () => {
       writeFile(path.join(root, 'utf16.txt'), Uint8Array.from([0xFF, 0xFE, 0x68, 0x00, 0x69, 0x00])),
       writeFile(path.join(root, 'binary.txt'), Uint8Array.from([0xC3, 0x28])),
       writeFile(path.join(root, 'nul.txt'), Uint8Array.from([0x00, 0x01, 0x02])),
-      writeFile(path.join(root, 'large.txt'), new Uint8Array(2 * 1024 * 1024 + 1)),
+      writeFile(path.join(root, 'max.txt'), new Uint8Array(10 * 1024 * 1024).fill(0x61)),
+      writeFile(path.join(root, 'large.txt'), new Uint8Array(10 * 1024 * 1024 + 1)),
     ])
 
     expect(await workspace.readTextPreview('Alpha.txt')).toEqual(expect.objectContaining({
@@ -172,10 +173,14 @@ describe('ServeWorkspace', () => {
       size: 3,
       revision: expect.stringMatching(/^[0-9a-f]{64}$/),
     }))
+    const max = await workspace.readTextPreview('max.txt')
+    expect(max).toEqual(expect.objectContaining({ status: 'ready', size: 10 * 1024 * 1024, encoding: 'utf-8' }))
+    if (max.status === 'ready')
+      expect(max.text.length).toBe(10 * 1024 * 1024)
     expect(await workspace.readTextPreview('large.txt')).toEqual({
       status: 'too_large',
-      size: 2 * 1024 * 1024 + 1,
-      maxBytes: 2 * 1024 * 1024,
+      size: 10 * 1024 * 1024 + 1,
+      maxBytes: 10 * 1024 * 1024,
     })
   })
 
@@ -230,6 +235,18 @@ describe('ServeWorkspace', () => {
     const stale = await workspace.readTextPreview('edited.txt')
     await expect(workspace.saveTextFile('edited.txt', 'stale', preview.revision)).rejects.toMatchObject({ code: 'REVISION_MISMATCH' })
     expect(stale.status).toBe('ready')
+  })
+
+  test('rejects edited text over the 10 MiB limit', async () => {
+    const { workspace } = await createFixture()
+    const preview = await workspace.readTextPreview('Alpha.txt')
+    expect(preview.status).toBe('ready')
+    if (preview.status !== 'ready')
+      return
+
+    await expect(workspace.saveTextFile('Alpha.txt', 'x'.repeat(MAX_TEXT_PREVIEW_BYTES + 1), preview.revision)).rejects.toMatchObject({
+      code: 'TOO_LARGE',
+    })
   })
 
   test('preserves UTF-16 BOMs and rejects final symbolic links as edit targets', async () => {

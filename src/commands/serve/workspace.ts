@@ -37,7 +37,7 @@ const EXTRACTION_TEMPORARY_NAME = /^\.extract-[0-9a-f-]{36}\.tmp(?:\.outer)?$/i
 const EDIT_TEMPORARY_NAME = /^\.edit-[0-9a-f-]{36}\.tmp$/i
 const EXTRACTION_TEMPORARY_MAX_AGE_MS = 24 * 60 * 60 * 1000
 
-export const MAX_TEXT_PREVIEW_BYTES = 2 * 1024 * 1024
+export const MAX_TEXT_PREVIEW_BYTES = 10 * 1024 * 1024
 export const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
 
 function normalizedRelativePath(value: string): string {
@@ -599,7 +599,7 @@ export async function createServeWorkspace(directory: string, options: ServeWork
 
         const source = await readTextBytes(resolved)
         if (source.size > MAX_TEXT_PREVIEW_BYTES)
-          throw new ServeWorkspaceError('TOO_LARGE', 'Text file exceeds the 2 MiB limit')
+          throw new ServeWorkspaceError('TOO_LARGE', 'Text file exceeds the 10 MiB limit')
         const decoded = decodeText(source.bytes)
         if (!decoded)
           throw new ServeWorkspaceError('UNSUPPORTED_TEXT', 'File contents are not supported text')
@@ -610,7 +610,7 @@ export async function createServeWorkspace(directory: string, options: ServeWork
         const normalized = normalizeDraft(text, decoded.text)
         const output = encodeText(normalized, decoded.encoding, decoded.bom)
         if (output.byteLength > MAX_TEXT_PREVIEW_BYTES)
-          throw new ServeWorkspaceError('TOO_LARGE', 'Edited text exceeds the 2 MiB limit')
+          throw new ServeWorkspaceError('TOO_LARGE', 'Edited text exceeds the 10 MiB limit')
 
         const temporaryPath = path.join(path.dirname(candidate), `.edit-${crypto.randomUUID()}.tmp`)
         try {

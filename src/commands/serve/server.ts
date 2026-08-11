@@ -24,7 +24,7 @@ const API_HEADERS = {
   'X-Content-Type-Options': 'nosniff',
 }
 
-const APP_CONTENT_SECURITY_POLICY = 'default-src \'self\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\'; img-src \'self\' blob: data:; media-src \'self\'; frame-src \'self\'; connect-src \'self\'; object-src \'none\'; base-uri \'none\'; frame-ancestors \'none\''
+const APP_CONTENT_SECURITY_POLICY = 'default-src \'self\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\'; worker-src \'self\'; img-src \'self\' blob: data:; media-src \'self\'; frame-src \'self\'; connect-src \'self\'; object-src \'none\'; base-uri \'none\'; frame-ancestors \'none\''
 const ACTIVE_FILE_CONTENT_SECURITY_POLICY = 'sandbox; default-src \'none\'; style-src \'unsafe-inline\'; img-src data:; object-src \'none\'; base-uri \'none\'; frame-ancestors \'none\''
 const SESSION_COOKIE = 'ycy_serve_session'
 const SESSION_COOKIE_ATTRIBUTES = 'HttpOnly; SameSite=Strict; Path=/'
@@ -531,7 +531,7 @@ export function startServeHttpServer(options: {
           try {
             const length = Number(request.headers.get('Content-Length'))
             if (Number.isSafeInteger(length) && length > MAX_TEXT_PREVIEW_BYTES)
-              return error('TOO_LARGE', 'Edited text exceeds the 2 MiB limit', 413)
+              return error('TOO_LARGE', 'Edited text exceeds the 10 MiB limit', 413)
             const reader = request.body?.getReader()
             if (!reader) {
               body = ''
@@ -546,7 +546,7 @@ export function startServeHttpServer(options: {
                 size += chunk.value.byteLength
                 if (size > MAX_TEXT_PREVIEW_BYTES) {
                   await reader.cancel()
-                  return error('TOO_LARGE', 'Edited text exceeds the 2 MiB limit', 413)
+                  return error('TOO_LARGE', 'Edited text exceeds the 10 MiB limit', 413)
                 }
                 chunks.push(chunk.value)
               }

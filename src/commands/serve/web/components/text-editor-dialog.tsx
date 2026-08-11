@@ -1,18 +1,7 @@
-import type { Extension } from '@codemirror/state'
 import type { DirectoryEntry, TextPreview, TextSaveResult } from '../api'
-import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands'
-import { css } from '@codemirror/lang-css'
-import { html } from '@codemirror/lang-html'
-import { javascript } from '@codemirror/lang-javascript'
-import { json } from '@codemirror/lang-json'
-import { markdown } from '@codemirror/lang-markdown'
-import { python } from '@codemirror/lang-python'
-import { yaml } from '@codemirror/lang-yaml'
-import { bracketMatching, defaultHighlightStyle, indentOnInput, syntaxHighlighting } from '@codemirror/language'
-import { EditorState } from '@codemirror/state'
-import { drawSelection, EditorView, highlightActiveLine, highlightActiveLineGutter, keymap, lineNumbers } from '@codemirror/view'
 import * as Dialog from '@radix-ui/react-dialog'
 import { AlertTriangle, Download, LoaderCircle, Save, X } from 'lucide-react'
+import * as monaco from 'monaco-editor'
 import { useEffect, useRef, useState } from 'react'
 import { Button } from '../../../../shared/web/components/ui/button'
 import { ApiError, apiJson } from '../api'
@@ -177,7 +166,7 @@ export function TextEditorDialog({ target, theme, onDirtyChange, onSaved, onClos
               </div>
             )}
             <div className="text-editor-dialog-body">
-              <CodeMirrorEditor value={draft} language={target.entry.syntaxLanguage} theme={theme} onChange={setDraft} onSave={() => void save()} />
+              <MonacoEditor value={draft} language={target.entry.syntaxLanguage} theme={theme} onChange={setDraft} onSave={() => void save()} />
             </div>
           </Dialog.Content>
         )}
@@ -186,25 +175,25 @@ export function TextEditorDialog({ target, theme, onDirtyChange, onSaved, onClos
   )
 }
 
-function languageExtension(language: string | undefined): Extension | undefined {
+function monacoLanguage(language: string | undefined): string {
   switch (language) {
-    case 'javascript': return javascript()
-    case 'typescript': return javascript({ typescript: true })
-    case 'jsx': return javascript({ jsx: true })
-    case 'tsx': return javascript({ jsx: true, typescript: true })
-    case 'json': return json()
-    case 'html': case 'xml': case 'svg': return html()
-    case 'css': case 'scss': case 'less': return css()
-    case 'markdown': return markdown()
-    case 'python': return python()
-    case 'yaml': return yaml()
-    default: return undefined
+    case 'javascript': case 'jsx': return 'javascript'
+    case 'typescript': case 'tsx': return 'typescript'
+    case 'json': return 'json'
+    case 'html': case 'xml': case 'svg': return 'html'
+    case 'css': case 'scss': case 'less': return language
+    case 'markdown': return 'markdown'
+    case 'python': return 'python'
+    case 'yaml': return 'yaml'
+    default: return 'plaintext'
   }
 }
 
-function CodeMirrorEditor({ value, language, theme, onChange, onSave }: { value: string, language?: string, theme: 'light' | 'dark', onChange: (value: string) => void, onSave: () => void }): React.JSX.Element {
+function MonacoEditor({ value, language, theme, onChange, onSave }: { value: string, language?: string, theme: 'light' | 'dark', onChange: (value: string) => void, onSave: () => void }): React.JSX.Element {
   const hostRef = useRef<HTMLDivElement>(null)
-  const viewRef = useRef<EditorView | null>(null)
+  const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null)
+  const modelRef = useRef<monaco.editor.ITextModel | null>(null)
+  const suppressChangeRef = useRef(false)
   const callbacks = useRef({ onChange, onSave })
   callbacks.current = { onChange, onSave }
 
@@ -212,47 +201,53 @@ function CodeMirrorEditor({ value, language, theme, onChange, onSave }: { value:
     const parent = hostRef.current
     if (!parent)
       return
-    const extensions: Extension[] = [
-      lineNumbers(),
-      highlightActiveLineGutter(),
-      history(),
-      drawSelection(),
-      indentOnInput(),
-      bracketMatching(),
-      highlightActiveLine(),
-      syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
-      keymap.of([...defaultKeymap, ...historyKeymap, indentWithTab, {
-        key: 'Mod-s',
-        preventDefault: true,
-        run: () => {
-          callbacks.current.onSave()
-          return true
-        },
-      }]),
-      EditorView.lineWrapping,
-      EditorView.updateListener.of(update => update.docChanged && callbacks.current.onChange(update.state.doc.toString())),
-      EditorView.theme({
-        '&': { height: '100%', fontSize: '13px', backgroundColor: 'var(--code)', color: 'var(--foreground)' },
-        '.cm-scroller': { overflow: 'auto', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' },
-        '.cm-gutters': { backgroundColor: 'var(--code)', color: 'var(--muted-foreground)', border: 'none' },
-      }, { dark: theme === 'dark' }),
-    ]
-    const syntax = languageExtension(language)
-    if (syntax)
-      extensions.push(syntax)
-    const view = new EditorView({ state: EditorState.create({ doc: value, extensions }), parent })
-    viewRef.current = view
-    view.focus()
+    const model = monaco.editor.createModel(value, monacoLanguage(language))
+    const editor = monaco.editor.create(parent, {
+      model,
+      automaticLayout: true,
+      bracketPairColorization: { enabled: true },
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace',
+      fontSize: 13,
+      largeFileOptimizations: true,
+      lineNumbers: 'on',
+      minimap: { enabled: false },
+      padding: { top: 8, bottom: 8 },
+      scrollBeyondLastLine: false,
+      scrollbar: { alwaysConsumeMouseWheel: false, verticalScrollbarSize: 8, horizontalScrollbarSize: 8 },
+      wordWrap: 'on',
+    })
+    monaco.editor.setTheme(theme === 'dark' ? 'vs-dark' : 'vs')
+    const changeSubscription = model.onDidChangeContent(() => {
+      if (!suppressChangeRef.current)
+        callbacks.current.onChange(model.getValue())
+    })
+    editor.addAction({
+      id: 'serve.save-text-file',
+      label: 'Save file',
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
+      run: () => {
+        callbacks.current.onSave()
+      },
+    })
+    editorRef.current = editor
+    modelRef.current = model
+    editor.focus()
     return () => {
-      view.destroy()
-      viewRef.current = null
+      changeSubscription.dispose()
+      editor.dispose()
+      model.dispose()
+      editorRef.current = null
+      modelRef.current = null
     }
   }, [language, theme])
 
   useEffect(() => {
-    const view = viewRef.current
-    if (view && view.state.doc.toString() !== value)
-      view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: value } })
+    const model = modelRef.current
+    if (model && model.getValue() !== value) {
+      suppressChangeRef.current = true
+      model.setValue(value)
+      suppressChangeRef.current = false
+    }
   }, [value])
 
   return <div ref={hostRef} role="textbox" aria-label="Text editor" className="text-editor-surface" />

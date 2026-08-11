@@ -11,7 +11,7 @@ import { createRemoteDownloadManager } from './download-service'
 import { createExtractionManager } from './extraction-service'
 import { startServeHttpServer } from './server'
 import { THUMBNAIL_MAX_INPUT_BYTES, ThumbnailService } from './thumbnail-service'
-import { createServeWorkspace, MAX_UPLOAD_BYTES } from './workspace'
+import { createServeWorkspace, MAX_TEXT_PREVIEW_BYTES, MAX_UPLOAD_BYTES } from './workspace'
 
 const temporaryDirectories: string[] = []
 const servers: RunningServeServer[] = []
@@ -493,10 +493,18 @@ describe('ServeHttpServer', () => {
     expect(missing.status).toBe(428)
     expect(wrongType.status).toBe(415)
     expect(saved.status).toBe(200)
-    expect(await saved.json()).toEqual(expect.objectContaining({ version: 1, encoding: 'utf-8', size: 7, revision: expect.stringMatching(/^[0-9a-f]{64}$/) }))
+    const savedBody = await saved.json() as { version: number, encoding: string, size: number, revision: string }
+    expect(savedBody).toEqual(expect.objectContaining({ version: 1, encoding: 'utf-8', size: 7, revision: expect.stringMatching(/^[0-9a-f]{64}$/) }))
+    const oversized = await fetch(endpoint, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'text/plain', 'Origin': origin, 'If-Match': savedBody.revision },
+      body: 'x'.repeat(MAX_TEXT_PREVIEW_BYTES + 1),
+    })
+
+    expect(oversized.status).toBe(413)
     expect(stale.status).toBe(412)
     expect(await (await fetch(new URL('/files/hello.txt', fixture.server.url))).text()).toBe('updated')
-  })
+  }, { timeout: 20_000 })
 
   test('uploads only when enabled and requested by the bound same origin', async () => {
     const disabledFixture = await startFixtureServer(false)
@@ -762,6 +770,7 @@ describe('ServeHttpServer', () => {
     expect(html).toContain('<div id="root"></div>')
     expect(html).toContain('http-equiv="Content-Security-Policy"')
     expect(html).toContain('default-src \'self\'')
+    expect(html).toContain('worker-src \'self\'')
     expect(emptyBrowser.status).toBe(200)
     expect(nested.status).toBe(200)
     expect(nested.headers.get('content-type')).toContain('text/html')

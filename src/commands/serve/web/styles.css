@@ -830,24 +830,38 @@ button.details-heading:hover {
   background: var(--code);
 }
 
-.text-editor-surface .cm-editor {
+.text-editor-surface .monaco-editor {
+  width: 100%;
   height: 100%;
   outline: none;
 }
 
-.text-editor-surface .cm-editor.cm-focused {
+.text-editor-surface .monaco-editor .overflow-guard {
+  background: var(--code);
+}
+
+.text-editor-surface .monaco-editor .margin,
+.text-editor-surface .monaco-editor .line-numbers {
+  background: var(--code);
+  color: var(--muted-foreground);
+}
+
+.text-editor-surface .monaco-editor.focused {
   box-shadow: none;
+}
+
+.text-editor-surface .monaco-editor .monaco-scrollable-element > .scrollbar > .slider {
+  border-radius: 999px;
+  background: var(--border-strong);
+}
+
+.text-editor-surface .monaco-editor .monaco-scrollable-element > .scrollbar > .slider:hover {
+  background: var(--muted-foreground);
 }
 
 .text-preview-scroll {
   overflow: auto;
   outline: none;
-  overscroll-behavior: contain;
-  scrollbar-color: var(--border-strong) transparent;
-  scrollbar-width: thin;
-}
-
-.text-editor-surface .cm-scroller {
   overscroll-behavior: contain;
   scrollbar-color: var(--border-strong) transparent;
   scrollbar-width: thin;
@@ -865,20 +879,20 @@ button.details-heading:hover {
 }
 
 .text-preview-scroll::-webkit-scrollbar,
-.text-editor-surface .cm-scroller::-webkit-scrollbar {
+.text-editor-surface .monaco-editor .monaco-scrollable-element > .scrollbar::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 .text-preview-scroll::-webkit-scrollbar-track,
 .text-preview-scroll::-webkit-scrollbar-corner,
-.text-editor-surface .cm-scroller::-webkit-scrollbar-track,
-.text-editor-surface .cm-scroller::-webkit-scrollbar-corner {
+.text-editor-surface .monaco-editor .monaco-scrollable-element > .scrollbar::-webkit-scrollbar-track,
+.text-editor-surface .monaco-editor .monaco-scrollable-element > .scrollbar::-webkit-scrollbar-corner {
   background: var(--code);
 }
 
 .text-preview-scroll::-webkit-scrollbar-thumb,
-.text-editor-surface .cm-scroller::-webkit-scrollbar-thumb {
+.text-editor-surface .monaco-editor .monaco-scrollable-element > .scrollbar::-webkit-scrollbar-thumb {
   border: 2px solid transparent;
   border-radius: 999px;
   background: var(--border-strong);
@@ -886,7 +900,7 @@ button.details-heading:hover {
 }
 
 .text-preview-scroll::-webkit-scrollbar-thumb:hover,
-.text-editor-surface .cm-scroller::-webkit-scrollbar-thumb:hover {
+.text-editor-surface .monaco-editor .monaco-scrollable-element > .scrollbar::-webkit-scrollbar-thumb:hover {
   background: var(--muted-foreground);
   background-clip: padding-box;
 }
