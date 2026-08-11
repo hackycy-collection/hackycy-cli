@@ -111,6 +111,7 @@ export function formatGeneratedMessage(
   profile: ResolvedCmProfile,
   tokenUsage: ChatCompletionTokenUsage | undefined,
   truncated: boolean,
+  fileCount?: number,
 ): string {
   const lines = [
     ansis.green(message),
@@ -119,8 +120,12 @@ export function formatGeneratedMessage(
     ansis.dim(formatTokenUsage(tokenUsage)),
   ]
 
-  if (truncated)
-    lines.push(ansis.yellow('Diff context was truncated to fit the token budget.'))
+  if (truncated) {
+    const scope = fileCount === undefined
+      ? 'Commit context'
+      : `Commit scope: ${fileCount} changed file${fileCount === 1 ? '' : 's'}`
+    lines.push(ansis.yellow(`${scope}; raw diffs were compressed to fit the prompt budget. This does not affect which files are committed.`))
+  }
 
   return lines.join('\n')
 }
@@ -130,8 +135,9 @@ function printGeneratedMessage(
   profile: ResolvedCmProfile,
   tokenUsage: ChatCompletionTokenUsage | undefined,
   truncated: boolean,
+  fileCount: number,
 ): void {
-  const output = formatGeneratedMessage(message, profile, tokenUsage, truncated)
+  const output = formatGeneratedMessage(message, profile, tokenUsage, truncated, fileCount)
   p.note(output, 'Commit message', { format: line => line })
 }
 
@@ -298,7 +304,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
   }
 
   spin?.clear()
-  printGeneratedMessage(generated.message, profile, generated.tokenUsage, summary.truncated)
+  printGeneratedMessage(generated.message, profile, generated.tokenUsage, summary.truncated, summary.files.length)
 
   if (!shouldCreateCommit)
     return

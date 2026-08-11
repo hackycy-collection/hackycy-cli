@@ -2,10 +2,10 @@ import type { ChangeSummary, FileChange } from './types'
 import { lstat } from 'node:fs/promises'
 import path from 'node:path'
 
-const MAX_TOTAL_CHARS = 24_000
-const MAX_FILE_DIFF_CHARS = 6_000
-const MAX_FILES = 80
+export const MAX_PROMPT_CHARS = 24_000
+const MAX_MANIFEST_CHARS = 8_000
 const LARGE_FILE_BYTES = 200_000
+const COMPACTION_NOTICE = 'Some raw diffs were compacted to fit the prompt budget.'
 
 const BINARY_EXTS = new Set([
   '.png',
@@ -69,8 +69,8 @@ async function runGit(args: string[], cwd?: string, allowFailure = false): Promi
   return stdout
 }
 
-export async function getRepoRoot(): Promise<string> {
-  return (await runGit(['rev-parse', '--show-toplevel'])).trim()
+export async function getRepoRoot(cwd?: string): Promise<string> {
+  return (await runGit(['rev-parse', '--show-toplevel'], cwd)).trim()
 }
 
 export async function stageAllChanges(repoRoot: string): Promise<void> {
@@ -229,16 +229,6 @@ async function fileSize(repoRoot: string, filePath: string): Promise<number | un
   }
 }
 
-function truncateDiff(diff: string): { text: string, truncated: boolean } {
-  if (diff.length <= MAX_FILE_DIFF_CHARS)
-    return { text: diff, truncated: false }
-
-  return {
-    text: `${diff.slice(0, MAX_FILE_DIFF_CHARS)}\n...[diff truncated for token budget]`,
-    truncated: true,
-  }
-}
-
 async function getFileDiff(repoRoot: string, file: FileChange, stagedOnly: boolean): Promise<string> {
   if (file.indexStatus === '?' && file.worktreeStatus === '?')
     return readUntrackedFilePreview(repoRoot, file.path)
@@ -284,64 +274,178 @@ async function readUntrackedFilePreview(repoRoot: string, filePath: string): Pro
   ].join('\n')
 }
 
-async function enrichFile(repoRoot: string, file: FileChange, stagedOnly: boolean): Promise<boolean> {
+async function enrichFile(repoRoot: string, file: FileChange, stagedOnly: boolean): Promise<void> {
   if (file.sensitive) {
     file.diffSkippedReason = 'sensitive file path'
-    return false
+    return
   }
 
   if (file.binary) {
     file.diffSkippedReason = 'binary file'
-    return false
+    return
   }
 
   if (isGeneratedPath(file.path)) {
     file.diffSkippedReason = 'generated or lock file'
-    return false
+    return
   }
 
   const size = await fileSize(repoRoot, file.path)
   if (size !== undefined && size > LARGE_FILE_BYTES) {
     file.diffSkippedReason = 'large file'
-    return false
+    return
   }
 
   const diff = await getFileDiff(repoRoot, file, stagedOnly)
   if (!diff.trim()) {
     file.diffSkippedReason = 'no textual diff'
-    return false
+    return
   }
 
   if (/^Binary files .+ differ$/m.test(diff)) {
     file.diffSkippedReason = 'binary diff'
     file.binary = true
-    return false
+    return
   }
 
-  const truncated = truncateDiff(diff)
-  file.diff = truncated.text
-  if (truncated.truncated)
-    file.diffSkippedReason = 'diff truncated'
-
-  return truncated.truncated
+  file.diff = diff
 }
 
-export async function collectChangeSummary(options: { stagedOnly?: boolean } = {}): Promise<ChangeSummary> {
-  const repoRoot = await getRepoRoot()
+function getDirectoryGroup(filePath: string): string {
+  const normalized = filePath.replaceAll('\\', '/')
+  const separator = normalized.indexOf('/')
+  return separator === -1 ? '.' : normalized.slice(0, separator)
+}
+
+function appendWithinBudget(text: string, addition: string, budget: number): string | undefined {
+  const next = `${text}${addition}`
+  return next.length <= budget ? next : undefined
+}
+
+function buildManifest(files: FileChange[]): { text: string, compacted: boolean } {
+  const header = `Changed files (${files.length} total):`
+  const fullManifest = [header, ...files.map(file => file.status)].join('\n')
+  if (fullManifest.length <= MAX_MANIFEST_CHARS)
+    return { text: fullManifest, compacted: false }
+
+  const groups = new Map<string, number>()
+  for (const file of files) {
+    const kind = file.status.split(' ', 1)[0] ?? 'M'
+    const group = `${kind} ${getDirectoryGroup(file.path)}`
+    groups.set(group, (groups.get(group) ?? 0) + 1)
+  }
+
+  const lines = [...groups]
+    .sort(([left], [right]) => left.localeCompare(right))
+    .map(([group, count]) => `${group} (${count} file${count === 1 ? '' : 's'})`)
+  let text = `Changed files (${files.length} total; paths grouped):`
+  let rendered = 0
+  for (const line of lines) {
+    const next = appendWithinBudget(text, `\n${line}`, MAX_MANIFEST_CHARS)
+    if (!next)
+      break
+    text = next
+    rendered += 1
+  }
+
+  if (rendered < lines.length) {
+    const suffix = `\n... ${lines.length - rendered} additional path group(s)`
+    const next = appendWithinBudget(text, suffix, MAX_MANIFEST_CHARS)
+    if (next)
+      text = next
+  }
+
+  return { text, compacted: true }
+}
+
+interface DiffGroup {
+  name: string
+  files: FileChange[]
+}
+
+function groupDiffFiles(files: FileChange[]): DiffGroup[] {
+  const groups = new Map<string, FileChange[]>()
+  for (const file of files) {
+    if (!file.diff)
+      continue
+    const name = getDirectoryGroup(file.path)
+    const group = groups.get(name) ?? []
+    group.push(file)
+    groups.set(name, group)
+  }
+
+  return [...groups]
+    .map(([name, groupFiles]) => ({
+      name,
+      files: groupFiles.sort((left, right) => {
+        const lengthDelta = (right.diff?.length ?? 0) - (left.diff?.length ?? 0)
+        return lengthDelta || left.path.localeCompare(right.path)
+      }),
+    }))
+    .sort((left, right) => left.name.localeCompare(right.name))
+}
+
+function buildGroupDiffSection(group: DiffGroup, budget: number): { text: string, compacted: boolean } {
+  const header = `\n# ${group.name}`
+  if (header.length >= budget)
+    return { text: '', compacted: true }
+
+  let text = header
+  for (const file of group.files) {
+    const sectionHeader = `\n\n## ${file.status}\n`
+    const available = budget - text.length - sectionHeader.length
+    if (available <= 0)
+      return { text, compacted: true }
+
+    const diff = file.diff!
+    if (diff.length <= available) {
+      text += `${sectionHeader}${diff}`
+      continue
+    }
+
+    const marker = '\n...[diff truncated for prompt budget]'
+    const previewLength = Math.max(0, available - marker.length)
+    if (previewLength > 0)
+      text += `${sectionHeader}${diff.slice(0, previewLength)}${marker}`
+    return { text, compacted: true }
+  }
+
+  return { text, compacted: false }
+}
+
+function buildDiffContext(files: FileChange[], budget: number): { text: string, compacted: boolean } {
+  const groups = groupDiffFiles(files)
+  let remaining = budget
+  let text = ''
+  let compacted = false
+
+  for (let index = 0; index < groups.length; index++) {
+    const group = groups[index]!
+    const groupBudget = Math.floor(remaining / (groups.length - index))
+    const section = buildGroupDiffSection(group, groupBudget)
+    if (!section.text) {
+      compacted = true
+      continue
+    }
+
+    text += section.text
+    remaining -= section.text.length
+    compacted ||= section.compacted
+  }
+
+  return { text, compacted }
+}
+
+export async function collectChangeSummary(options: { stagedOnly?: boolean, cwd?: string } = {}): Promise<ChangeSummary> {
+  const repoRoot = await getRepoRoot(options.cwd)
   const statusOutput = await runGit(['status', '--porcelain=v1', '-z', '--untracked-files=all'], repoRoot)
   let files = parseStatus(statusOutput)
-  let omittedFileCount = 0
 
   if (options.stagedOnly) {
     files = files.filter(file => file.indexStatus !== ' ' && file.indexStatus !== '?')
   }
 
   files = await filterSubmodules(repoRoot, files)
-
-  if (files.length > MAX_FILES) {
-    omittedFileCount = files.length - MAX_FILES
-    files = files.slice(0, MAX_FILES)
-  }
 
   if (files.length === 0) {
     return {
@@ -352,45 +456,22 @@ export async function collectChangeSummary(options: { stagedOnly?: boolean } = {
     }
   }
 
-  let truncated = omittedFileCount > 0
   for (const file of files)
-    truncated = (await enrichFile(repoRoot, file, Boolean(options.stagedOnly))) || truncated
+    await enrichFile(repoRoot, file, Boolean(options.stagedOnly))
 
-  const statusLines = files.map(file => file.status)
-  const sections = [
-    'Changed files:',
-    ...statusLines,
-    '',
-    'Diffs:',
-  ]
-
-  let remaining = MAX_TOTAL_CHARS - sections.join('\n').length
-  for (const file of files) {
-    if (!file.diff) {
-      sections.push(`\n# ${file.status}\n[diff omitted: ${file.diffSkippedReason ?? 'not available'}]`)
-      continue
-    }
-
-    const section = `\n# ${file.status}\n${file.diff}`
-    if (section.length > remaining) {
-      sections.push(`\n# ${file.status}\n[diff omitted: total token budget exceeded]`)
-      truncated = true
-      continue
-    }
-
-    sections.push(section)
-    remaining -= section.length
-  }
-
+  const manifest = buildManifest(files)
+  const diffHeader = '\n\nDiffs:'
+  const diffBudget = Math.max(0, MAX_PROMPT_CHARS - manifest.text.length - diffHeader.length - COMPACTION_NOTICE.length - 2)
+  const diffs = buildDiffContext(files, diffBudget)
+  const truncated = manifest.compacted || diffs.compacted
+  const sections = [manifest.text, diffHeader, diffs.text]
   if (truncated)
-    sections.push('\nSome diffs were omitted or truncated to save tokens.')
-  if (omittedFileCount > 0)
-    sections.push(`${omittedFileCount} changed file(s) were omitted because the file count exceeded ${MAX_FILES}.`)
+    sections.push(`\n\n${COMPACTION_NOTICE}`)
 
   return {
     repoRoot,
     files,
-    promptText: sections.join('\n'),
+    promptText: sections.join(''),
     truncated,
   }
 }

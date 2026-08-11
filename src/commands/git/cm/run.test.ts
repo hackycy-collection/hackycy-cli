@@ -33,7 +33,7 @@ describe('formatGeneratedMessage', () => {
       'Tokens: 1,234 prompt / 42 completion / 1,276 total',
     ].join('\n'))
     expect(output).not.toContain('Changed files')
-    expect(output).not.toContain('Diff context was truncated')
+    expect(output).not.toContain('raw diffs were compressed')
   })
 
   test('preserves a multiline commit body and handles unavailable usage', () => {
@@ -54,9 +54,11 @@ describe('formatGeneratedMessage', () => {
       profile,
       { completionTokens: 42 },
       true,
+      101,
     ))
 
     expect(output).toContain('Tokens: unknown prompt / 42 completion / unknown total')
-    expect(output).toContain('Diff context was truncated to fit the token budget.')
+    expect(output).toContain('Commit scope: 101 changed files; raw diffs were compressed to fit the prompt budget.')
+    expect(output).toContain('This does not affect which files are committed.')
   })
 })
