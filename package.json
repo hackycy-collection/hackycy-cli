@@ -41,7 +41,7 @@
     "prepare:7zip": "bun scripts/prepare-seven-zip.ts"
   },
   "dependencies": {
-    "@clack/prompts": "^1.0.1",
+    "@clack/prompts": "^1.7.0",
     "@hookform/resolvers": "^5.7.1",
     "@modelcontextprotocol/sdk": "1.29.0",
     "@pierre/diffs": "1.2.12",
