@@ -122,7 +122,7 @@ _Avoid_: Tunnel Definition, Tunnel Control Plane
 | Enforce Client Token revocation cooperatively in ycy. | Native FRP is identity-agnostic; trusted clients stop on explicit revoke or rejected authentication without adding FRP plugins or a fork. |
 | Use one WebSocket agent control channel. | The channel carries authentication, snapshots, acknowledgements, process state, liveness, and cooperative revocation while FRP remains the data plane. |
 | Pin one official FRP version per ycy release. | A generated, verified manifest keeps every native target and the Docker image on one tested distribution without hand-maintained artifact tables. |
-| Separate Client Tokens from the Internal FRP Token. | Per-client identity belongs to ycy; one server-generated FRP token authenticates the trusted native data plane and is never shown in the UI. |
+| Separate Client Tokens from the Internal FRP Token. | Per-client identity belongs to ycy; one ycy-owned token authenticates its managed FRP data plane and is never shown in the UI. |
 | Disable FRP Dashboard, Admin API, metrics, polling, and retained logs. | The operational UI reports only bounded control and process state, avoiding a second management plane and unbounded traffic history. |
 | Publish one server-oriented Linux x64/arm64 image. | The image uses the same ycy binary and pinned FRP distribution as native releases; clients remain native and no client-container workflow is maintained. |
 
@@ -152,7 +152,7 @@ TCP/UDP request
   -> configured localHost:localPort
 ```
 
-FRP does not see or validate Client Tokens. Client Tokens authenticate a native agent to ycy only. The separate Internal FRP Token is shared with trusted agents after ycy authentication and is used only for native frpc-to-frps authentication. It is generated and persisted by default, or is the configured `YCY_TUNNEL_FRP_TOKEN` when that environment variable is set.
+FRP does not see or validate Client Tokens. Client Tokens authenticate a native agent to ycy only. The separate Internal FRP Token is shared with trusted agents after ycy authentication and is used only for native frpc-to-frps authentication. ycy starts the only supported `frps` process and uses this same token in its generated `frps.toml` and every generated `frpc.toml`. The token is generated and persisted by default, or `YCY_TUNNEL_FRP_TOKEN` supplies a fixed value for that ycy-managed `frps`.
 
 ## Command Contract
 
@@ -193,7 +193,7 @@ The Deployment Administrator is a stable account configured through environment 
 | Password | `YCY_TUNNEL_ADMIN_PASSWORD` | required |
 | FRP authentication token | `YCY_TUNNEL_FRP_TOKEN` | generated and persisted in the server data directory |
 
-Account usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens and compare case-insensitively. Passwords contain 5-256 characters. `YCY_TUNNEL_FRP_TOKEN` must be non-empty when set; use it when the deployment needs a fixed FRP token, including when matching an existing `frps` `auth.token`. It is not exposed in the management UI or API. The UI displays deployment settings but cannot mutate them. Changing a listener, port pool, Deployment Administrator credential, FRP authentication token, data directory, or advertised endpoint requires restarting the ycy supervisor through Docker or the host service manager.
+Account usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens and compare case-insensitively. Passwords contain 5-256 characters. `YCY_TUNNEL_FRP_TOKEN` must be non-empty when set; it optionally fixes the one token used by ycy's own managed `frps` and every generated `frpc`. It does not connect ycy to an externally managed `frps`; that deployment model is unsupported. It is not exposed in the management UI or API. The UI displays deployment settings but cannot mutate them. Changing a listener, port pool, Deployment Administrator credential, FRP authentication token, data directory, or advertised endpoint requires restarting the ycy supervisor through Docker or the host service manager.
 
 ### Client
 
@@ -433,7 +433,7 @@ The system `PATH` is never consulted and no custom FRP path override exists. The
 
 ## Generated FRP Configuration
 
-ycy owns all generated TOML. Operators never need to maintain `frps.toml` or `frpc.toml`.
+ycy owns all generated TOML and starts the only supported `frps`. Operators never need to maintain `frps.toml` or `frpc.toml`, and must not run an independent `frps` on the configured FRP bind or HTTP vhost ports.
 The generated document is mapped from the typed tunnel model, then passed through
 one TOML codec adapter. Its layout is not a compatibility contract; the codec
 owns both parsing and serialization so a future TOML implementation can replace
@@ -491,7 +491,7 @@ The typed capability scope and the reasons for deferring advanced FRP features a
 
 ## Process Supervision
 
-The server and each Client Connection Instance own zero or one FRP child. Child creation, exit handling, manual commands, and configuration reconciliation pass through one serialized state machine so concurrent events cannot start duplicates.
+The server and each Client Connection Instance own zero or one FRP child. Child creation, exit handling, manual commands, and configuration reconciliation pass through one serialized state machine so concurrent events cannot start duplicates. The server opens its control HTTP listener first, then initializes its managed `frps` in the background and requires a 3-second activation confirmation before marking it `running` or issuing Agent configuration. A binary, configuration, port-conflict, or startup failure leaves `frps` `stopped` with a visible error while the control plane and state lock remain available; Server UI `Start` and `Restart` retry the complete initialization. `frpc` keeps its shorter activation confirmation window.
 
 Unexpected child exits retry after `1s, 2s, 4s, 8s, 15s, 30s`, capped at 30 seconds. A stable run resets the failure count. A deterministic verification or configuration error enters `configuration_failed` and waits for a new Desired Revision or explicit operator action instead of looping.
 
@@ -509,7 +509,7 @@ This deliberately causes a brief interruption to every tunnel on that client whe
 
 ### Manual Control
 
-- Server UI `Start`, `Stop`, and `Restart` affect only frps. Intentional Stop suppresses crash recovery until Start, Restart, or supervisor restart.
+- Server UI `Start`, `Stop`, and `Restart` affect only the ycy-managed frps. Start and Restart return success only after the 3-second activation confirmation; an immediate exit leaves the state `stopped` and returns an error. Intentional Stop suppresses crash recovery until Start, Restart, or supervisor restart.
 - Client UI exposes only `Restart frpc`; tunnel start/stop is the per-tunnel Enabled switch.
 - ycy supervisors never restart themselves. Docker, systemd, launchd, or the calling shell owns that lifecycle.
 
@@ -594,7 +594,9 @@ services:
       - '20000-20100:20000-20100/udp'
 ```
 
-NPM should normally expose the control UI through a dedicated HTTPS hostname and proxy each externally managed HTTP hostname to port 8080 while retaining its Host header. The FRP bind port and TCP/UDP pool must be published directly through Docker and the host firewall.
+NPM should normally expose the control UI through a dedicated HTTPS hostname and proxy each externally managed HTTP hostname to port 8080 while retaining its Host header. The FRP bind port and TCP/UDP pool must be published directly through Docker and the host firewall. `ycy tunnel server` is the only service that may listen on the configured FRP bind and HTTP vhost ports. If startup reports a conflict, stop the old standalone `frps` or other listener, then inspect the configured ports with `lsof -nP -iTCP:<port> -sTCP:LISTEN` or `ss -ltnp 'sport = :<port>'`.
+
+When upgrading from a deployment with a separate `frps`, retain the ycy data directory or Docker volume, stop and remove the old `frps` service, then start the upgraded ycy tunnel service. Retaining the data directory preserves client enrollment and the generated Internal FRP Token when `YCY_TUNNEL_FRP_TOKEN` is not set.
 
 ## Source Ownership
 

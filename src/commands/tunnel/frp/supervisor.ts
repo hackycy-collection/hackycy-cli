@@ -25,6 +25,7 @@ export interface FrpSupervisorOptions {
 
 const sleep = (milliseconds: number): Promise<void> => new Promise(resolve => setTimeout(resolve, milliseconds))
 export const FRP_ACTIVATION_GRACE_MS = 250
+export const FRPS_ACTIVATION_GRACE_MS = 3_000
 
 export class FrpSupervisor {
   private child?: FrpChild
@@ -165,10 +166,13 @@ export class FrpSupervisor {
     }
   }
 
-  start(configPath: string): Promise<void> {
+  start(configPath?: string): Promise<void> {
     return this.enqueue(async () => {
-      const changed = this.configPath !== configPath
-      this.configPath = configPath
+      if (!configPath && !this.configPath)
+        throw new Error(`${this.options.role} has no applied configuration`)
+      const changed = configPath !== undefined && this.configPath !== configPath
+      if (configPath)
+        this.configPath = configPath
       this.desiredRunning = true
       if (this.child && !changed)
         return
@@ -194,7 +198,8 @@ export class FrpSupervisor {
         throw new Error(`${this.options.role} has no applied configuration`)
       this.desiredRunning = true
       await this.stopChild()
-      this.spawn()
+      const child = this.spawn()
+      await this.confirmActivation(child)
     })
   }
 

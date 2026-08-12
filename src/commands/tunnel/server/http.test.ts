@@ -1,5 +1,6 @@
 import type { FrpChild } from '../frp/supervisor'
-import type { ServerTunnelConfig } from '../types'
+import type { FrpProcessState, ServerTunnelConfig } from '../types'
+import type { FrpsAvailability } from './agent-gateway'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { resolveFrpArtifact } from '../frp/manifest'
 import { FrpSupervisor } from '../frp/supervisor'
@@ -22,6 +23,32 @@ class FakeChild implements FrpChild {
   kill(): void {
     this.exit(0)
   }
+
+  crash(code = 1): void {
+    this.exit(code)
+  }
+}
+
+class FakeFrpsAvailability implements FrpsAvailability {
+  private readonly listeners = new Set<(state: { state: FrpProcessState }) => void>()
+
+  constructor(private current: FrpProcessState = 'running') {}
+
+  state(): { state: FrpProcessState } {
+    return { state: this.current }
+  }
+
+  observe(listener: (state: { state: FrpProcessState }) => void): () => void {
+    this.listeners.add(listener)
+    listener(this.state())
+    return () => this.listeners.delete(listener)
+  }
+
+  set(state: FrpProcessState): void {
+    this.current = state
+    for (const listener of this.listeners)
+      listener(this.state())
+  }
 }
 
 interface Fixture {
@@ -29,6 +56,7 @@ interface Fixture {
   controlPlane: TunnelControlPlane
   gateway: AgentGateway
   frps: FrpSupervisor
+  crashNextFrps: () => void
   management: TunnelManagement
   server: ReturnType<typeof startTunnelHttpServer>
 }
@@ -45,11 +73,23 @@ afterEach(async () => {
   }
 })
 
-async function fixture(frpToken?: string): Promise<Fixture> {
+async function fixture(frpToken?: string, availability?: FrpsAvailability): Promise<Fixture> {
   const database = new TunnelDatabase(':memory:')
   const controlPlane = new TunnelControlPlane(database, { start: 20000, end: 20002 })
-  const gateway = new AgentGateway(controlPlane, 7000, undefined, frpToken)
-  const frps = new FrpSupervisor({ binaryPath: '/frps', role: 'frps', spawn: () => new FakeChild() })
+  const gateway = new AgentGateway(controlPlane, 7000, frpToken ?? controlPlane.internalFrpToken(), undefined, availability)
+  let crashNextFrps = false
+  const frps = new FrpSupervisor({
+    binaryPath: '/frps',
+    role: 'frps',
+    activationGraceMs: 10,
+    spawn: () => {
+      const child = new FakeChild()
+      if (crashNextFrps)
+        queueMicrotask(() => child.crash())
+      crashNextFrps = false
+      return child
+    },
+  })
   const config: ServerTunnelConfig = {
     address: '127.0.0.1',
     controlPort: 0,
@@ -63,7 +103,7 @@ async function fixture(frpToken?: string): Promise<Fixture> {
   }
   const management = await TunnelManagement.create({ database, controlPlane, gateway, frps, frpsConfigPath: '/frps.toml', serverConfig: config })
   const server = startTunnelHttpServer({ management, gateway, address: config.address, controlPort: config.controlPort })
-  const result = { database, controlPlane, gateway, frps, management, server }
+  const result = { database, controlPlane, gateway, frps, crashNextFrps: () => crashNextFrps = true, management, server }
   fixtures.push(result)
   return result
 }
@@ -316,6 +356,30 @@ remotePort = 20001
     socket.close()
   })
 
+  test('gates agent handshakes on frps availability and closes sessions when frps stops', async () => {
+    const availability = new FakeFrpsAvailability('stopped')
+    const value = await fixture(undefined, availability)
+    const client = value.controlPlane.createClient('environment-admin', 'FRPS availability')
+
+    const unavailable = await fetch(new URL('/api/agent', value.server.url), { headers: { Authorization: `Bearer ${client.token}` } })
+    expect(unavailable.status).toBe(503)
+    expect(await unavailable.json()).toMatchObject({ error: { code: 'FRPS_UNAVAILABLE' } })
+
+    availability.set('running')
+    const { socket, firstMessage } = await openAgent(value.server, client.token)
+    expect(await firstMessage).toMatchObject({ type: 'welcome' })
+    const closed = new Promise<void>(resolve => socket.addEventListener('close', () => resolve(), { once: true }))
+    availability.set('recovering')
+    await closed
+
+    const rejectedAfterStop = await fetch(new URL('/api/agent', value.server.url), { headers: { Authorization: `Bearer ${client.token}` } })
+    expect(rejectedAfterStop.status).toBe(503)
+    availability.set('running')
+    const reconnected = await openAgent(value.server, client.token)
+    expect(await reconnected.firstMessage).toMatchObject({ type: 'welcome' })
+    reconnected.socket.close()
+  })
+
   test('keeps a failed Desired Revision in Error while the previous child is running', async () => {
     const value = await fixture()
     const cookie = await login(value.server)
@@ -352,6 +416,24 @@ remotePort = 20001
       expect(response.status).toBe(200)
       expect((await response.json()).server.frps.state).toBe(action === 'stop' ? 'stopped' : 'running')
     }
+  })
+
+  test('reports failed frps restarts without claiming that frps is running', async () => {
+    const value = await fixture()
+    const cookie = await login(value.server)
+    expect((await request(value.server, '/api/server/frp/start', cookie, { method: 'POST' })).status).toBe(200)
+    value.crashNextFrps()
+
+    const restarted = await request(value.server, '/api/server/frp/restart', cookie, { method: 'POST' })
+    expect(restarted.status).toBe(500)
+    const failure = await restarted.json()
+    expect(failure).toMatchObject({
+      error: {
+        code: 'ACTIVATION_FAILED',
+        message: expect.stringMatching(/FRP bind 127\.0\.0\.1:7000.*HTTP vhost 127\.0\.0\.1:8080.*frps exited with code 1 during startup.*lsof -nP -iTCP:7000 -sTCP:LISTEN/s),
+      },
+    })
+    expect((await request(value.server, '/api/state', cookie).then(response => response.json())).server.frps.state).toBe('stopped')
   })
 
   test('accepts the external HTTPS origin from a same-host TLS proxy', async () => {

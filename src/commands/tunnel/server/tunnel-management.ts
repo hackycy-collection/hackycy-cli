@@ -1,12 +1,14 @@
-import type { FrpSupervisor } from '../frp/supervisor'
+import type { FrpSupervisorState } from '../frp/supervisor'
 import type { AccountKind, AccountRecord, AccountRole, ClientRecord, PublicTunnelDefinition, ServerTunnelConfig, TunnelDefinition } from '../types'
 import type { AgentGateway } from './agent-gateway'
 import type { TunnelControlPlane, TunnelMutationInput, TunnelPatchInput } from './control-plane'
 import type { TunnelDatabase } from './database'
+import type { FrpsController } from './managed-frps'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { redactTunnelDefinition } from '../definition'
 import { TunnelError } from '../types'
 import { parseFrpcTunnelImport, selectedImportedTunnels, tunnelImportPreview } from './frpc-import'
+import { frpsActivationError } from './frps-activation'
 import { clientView, tunnelState } from './views'
 
 const ENVIRONMENT_ADMIN_ID = 'environment-admin'
@@ -57,7 +59,7 @@ export interface OverviewView {
 }
 
 export interface ServerView {
-  frps: ReturnType<FrpSupervisor['state']>
+  frps: FrpSupervisorState
   settings: Omit<ServerTunnelConfig, 'adminPassword' | 'frpToken'>
 }
 
@@ -65,8 +67,8 @@ export interface TunnelManagementOptions {
   database: TunnelDatabase
   controlPlane: TunnelControlPlane
   gateway: AgentGateway
-  frps: FrpSupervisor
-  frpsConfigPath: string
+  frps: FrpsController
+  frpsConfigPath?: string
   serverConfig: ServerTunnelConfig
   sessionLifetimeMs?: number
 }
@@ -572,12 +574,19 @@ export class TunnelAdministration {
 
   async controlFrps(action: 'start' | 'stop' | 'restart'): Promise<ServerView> {
     void this.account
-    if (action === 'start')
-      await this.options.frps.start(this.options.frpsConfigPath)
-    else if (action === 'stop')
-      await this.options.frps.stop()
-    else
-      await this.options.frps.restart()
+    try {
+      if (action === 'start')
+        await this.options.frps.start(this.options.frpsConfigPath)
+      else if (action === 'stop')
+        await this.options.frps.stop()
+      else
+        await this.options.frps.restart()
+    }
+    catch (cause) {
+      if (cause instanceof TunnelError)
+        throw cause
+      throw frpsActivationError(this.options.serverConfig, cause)
+    }
     return this.serverState()
   }
 }

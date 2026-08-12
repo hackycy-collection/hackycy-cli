@@ -16,6 +16,7 @@ export type TunnelErrorCode
     | 'CLIENT_OFFLINE'
     | 'FORBIDDEN'
     | 'FRP_INSTALL_FAILED'
+    | 'FRPS_UNAVAILABLE'
     | 'INCOMPATIBLE_CLIENT'
     | 'INSTANCE_ACTIVE'
     | 'INVALID_CLIENT_REMARK'

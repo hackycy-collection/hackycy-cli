@@ -81,4 +81,27 @@ describe('FrpSupervisor', () => {
     expect(children).toHaveLength(1)
     expect(supervisor.state().state).toBe('stopped')
   })
+
+  test('rejects a restart when its child exits during the activation grace period', async () => {
+    const children: FakeChild[] = []
+    const supervisor = new FrpSupervisor({
+      binaryPath: '/frps',
+      role: 'frps',
+      backoffMs: [1],
+      activationGraceMs: 10,
+      spawn: () => {
+        const child = new FakeChild(children.length + 1)
+        children.push(child)
+        if (children.length === 2)
+          queueMicrotask(() => child.crash(1))
+        return child
+      },
+    })
+
+    await supervisor.start('/server.toml')
+    await expect(supervisor.restart()).rejects.toThrow('exited with code 1 during startup')
+    await Bun.sleep(15)
+    expect(children).toHaveLength(2)
+    expect(supervisor.state().state).toBe('stopped')
+  })
 })

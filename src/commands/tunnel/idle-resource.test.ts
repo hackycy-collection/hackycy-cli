@@ -106,7 +106,7 @@ describe('Tunnel idle resources', () => {
     `)
     const controlPlane = new TunnelControlPlane(database, { start: 20000, end: 20001 })
     const client = controlPlane.createClient('test-owner')
-    const gateway = new AgentGateway(controlPlane, 7000)
+    const gateway = new AgentGateway(controlPlane, 7000, 'internal')
     const socket = {
       data: { clientId: client.id, requestHost: 'localhost', phase: 'active', awaitingPong: false },
       send: () => {},

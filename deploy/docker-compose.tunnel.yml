@@ -30,9 +30,10 @@ services:
       # in an untracked .env file or the invoking shell, never in this file.
       YCY_TUNNEL_ADMIN_PASSWORD: '${YCY_TUNNEL_ADMIN_PASSWORD:?required}'
 
-      # Optional fixed frpc-to-frps authentication token. Set it only when the
-      # deployment must match an existing frps auth.token; otherwise ycy creates
-      # and persists one. Uncomment together with a value in an untracked .env.
+      # Optional fixed token for ycy's single managed frps and all generated
+      # frpc configurations. This does not connect to an external frps; stop any
+      # old standalone frps first. Otherwise ycy generates and persists one.
+      # Uncomment together with a value in an untracked .env.
       # YCY_TUNNEL_FRP_TOKEN: '${YCY_TUNNEL_FRP_TOKEN:?set when uncommented}'
 
       # Optional server settings. Uncomment only when changing a default.
@@ -69,9 +70,9 @@ services:
       # Use host:port (or [IPv6]:port), without a URL scheme.
       # YCY_TUNNEL_ADVERTISE_FRP_ADDR: tunnel.example.com:7000
     volumes:
-      # Named volume retains the database and internal FRP token across container
-      # replacement. Removing it creates a new control plane and invalidates its
-      # existing client enrollment state.
+      # Retain this volume when upgrading. It preserves the database and internal
+      # FRP token across replacement. Removing it creates a new control plane and
+      # invalidates its existing client enrollment state.
       - tunnel-data:/data
     ports:
       # Native frpc data-plane connections. Publish directly and allow it through

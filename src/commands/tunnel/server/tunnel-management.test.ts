@@ -42,7 +42,7 @@ afterEach(async () => {
 async function fixture(options: { sessionLifetimeMs?: number, adminPassword?: string } = {}): Promise<Fixture> {
   const database = new TunnelDatabase(':memory:')
   const controlPlane = new TunnelControlPlane(database, { start: 20000, end: 20002 })
-  const gateway = new AgentGateway(controlPlane, 7000)
+  const gateway = new AgentGateway(controlPlane, 7000, 'internal')
   const frps = new FrpSupervisor({ binaryPath: '/frps', role: 'frps', spawn: () => new FakeChild() })
   const management = await TunnelManagement.create({
     database,
@@ -237,7 +237,7 @@ describe('TunnelManagement accounts and sessions', () => {
     first.gateway.stop()
 
     const secondControlPlane = new TunnelControlPlane(first.database, { start: 20000, end: 20002 })
-    const secondGateway = new AgentGateway(secondControlPlane, 7000)
+    const secondGateway = new AgentGateway(secondControlPlane, 7000, 'internal')
     const secondFrps = new FrpSupervisor({ binaryPath: '/frps', role: 'frps', spawn: () => new FakeChild() })
     const second = await TunnelManagement.create({
       database: first.database,
@@ -265,7 +265,7 @@ describe('TunnelManagement accounts and sessions', () => {
     await secondFrps.stop()
 
     const thirdControlPlane = new TunnelControlPlane(first.database, { start: 20000, end: 20002 })
-    const thirdGateway = new AgentGateway(thirdControlPlane, 7000)
+    const thirdGateway = new AgentGateway(thirdControlPlane, 7000, 'internal')
     const thirdFrps = new FrpSupervisor({ binaryPath: '/frps', role: 'frps', spawn: () => new FakeChild() })
     await expect(TunnelManagement.create({
       database: first.database,

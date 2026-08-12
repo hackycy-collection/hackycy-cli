@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import type { CurrentAccount } from './api'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Gauge, KeyRound, LogOut, Network, Play, RefreshCw, Server, Shield, Square, Users } from 'lucide-react'
+import { Gauge, KeyRound, LogOut, Network, Play, Power, RefreshCw, Server, Shield, Square, Users } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
@@ -240,6 +240,7 @@ function ServerView({ server, reload }: { server: ServerProjection, reload: () =
     }
     catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
+      await reload().catch(() => {})
     }
     finally {
       setPending(undefined)
@@ -253,7 +254,7 @@ function ServerView({ server, reload }: { server: ServerProjection, reload: () =
           <>
             <IconButton label="Start frps" loading={pending === 'start'} disabled={Boolean(pending)} onClick={() => void action('start')}><Play size={15} /></IconButton>
             <IconButton label="Stop frps" loading={pending === 'stop'} disabled={Boolean(pending)} onClick={() => void action('stop')}><Square size={14} /></IconButton>
-            <IconButton label="Restart frps" loading={pending === 'restart'} disabled={Boolean(pending)} onClick={() => void action('restart')}><RefreshCw size={15} /></IconButton>
+            <IconButton label="Restart frps" loading={pending === 'restart'} disabled={Boolean(pending)} onClick={() => void action('restart')}><Power size={15} /></IconButton>
           </>
         )}
       />
@@ -267,6 +268,7 @@ function ServerView({ server, reload }: { server: ServerProjection, reload: () =
           <dt>Process</dt>
           <dd>{server.frps.pid ? `PID ${server.frps.pid}` : 'Stopped'}</dd>
         </dl>
+        {server.frps.error && <p className="runtime-error">{server.frps.error.message}</p>}
       </section>
       <section className="section-band">
         <div className="section-title"><h2>Deployment settings</h2></div>

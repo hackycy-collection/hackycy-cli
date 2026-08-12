@@ -1,6 +1,6 @@
 import type { ServerWebSocket } from 'bun'
 import type { Buffer } from 'node:buffer'
-import type { AgentHelloMessage, AgentToServerMessage, ClientRuntimeState, ServerToAgentMessage } from '../types'
+import type { AgentHelloMessage, AgentToServerMessage, ClientRuntimeState, FrpProcessState, ServerToAgentMessage } from '../types'
 import type { ControlPlaneEvent, TunnelControlPlane } from './control-plane'
 import { FRP_VERSION, resolveFrpArtifact } from '../frp/manifest'
 import { TUNNEL_PROTOCOL_VERSION, TunnelError } from '../types'
@@ -18,6 +18,11 @@ interface RuntimeEntry extends ClientRuntimeState {
 
 export interface AgentAuthorization {
   data: AgentSocketData
+}
+
+export interface FrpsAvailability {
+  state: () => { state: FrpProcessState }
+  observe: (listener: (state: { state: FrpProcessState }) => void) => () => void
 }
 
 function parseBearer(request: Request): string | undefined {
@@ -55,15 +60,20 @@ export class AgentGateway {
   private readonly pendingConnections = new Set<string>()
   private readonly listeners = new Set<(clientId?: string) => void>()
   private readonly unsubscribe: () => void
+  private readonly unsubscribeFrps: () => void
   private readonly livenessTimer: ReturnType<typeof setInterval>
+  private frpsState: FrpProcessState
 
   constructor(
     private readonly controlPlane: TunnelControlPlane,
     private readonly frpPort: number,
+    private readonly frpToken: string,
     private readonly advertisedAddress?: { host: string, port: number },
-    private readonly frpToken = controlPlane.internalFrpToken(),
+    frps?: FrpsAvailability,
   ) {
     this.unsubscribe = controlPlane.subscribe(event => this.handleControlPlaneEvent(event))
+    this.frpsState = frps?.state().state ?? 'running'
+    this.unsubscribeFrps = frps?.observe(state => this.setFrpsState(state.state)) ?? (() => {})
     this.livenessTimer = setInterval(() => this.checkLiveness(), 30_000)
   }
 
@@ -96,6 +106,8 @@ export class AgentGateway {
   }
 
   authorize(request: Request): AgentAuthorization | Response {
+    if (this.frpsState !== 'running')
+      return Response.json({ version: 1, error: { code: 'FRPS_UNAVAILABLE', message: 'Managed frps is not running' } }, { status: 503 })
     const token = parseBearer(request)
     const client = token ? this.controlPlane.findClientByToken(token) : undefined
     if (!client)
@@ -115,6 +127,10 @@ export class AgentGateway {
 
   open(socket: ServerWebSocket<AgentSocketData>): void {
     this.pendingConnections.delete(socket.data.clientId)
+    if (this.frpsState !== 'running') {
+      socket.close(4503, 'Managed frps is not running')
+      return
+    }
     const existing = this.runtime.get(socket.data.clientId)
     if (existing?.socket) {
       socket.close(4409, 'Client Token already connected')
@@ -182,6 +198,10 @@ export class AgentGateway {
   }
 
   private handshake(socket: ServerWebSocket<AgentSocketData>, hello: AgentHelloMessage): void {
+    if (this.frpsState !== 'running') {
+      socket.close(4503, 'Managed frps is not running')
+      return
+    }
     if (hello.tunnelProtocolVersion !== TUNNEL_PROTOCOL_VERSION) {
       this.incompatible(socket, `Client tunnel protocol ${hello.tunnelProtocolVersion} is incompatible; upgrade ycy`)
       return
@@ -262,6 +282,17 @@ export class AgentGateway {
     this.changed(clientId)
   }
 
+  private setFrpsState(state: FrpProcessState): void {
+    const wasRunning = this.frpsState === 'running'
+    this.frpsState = state
+    if (wasRunning && state !== 'running') {
+      for (const entry of this.runtime.values())
+        entry.socket?.close(4503, 'Managed frps is not running')
+      this.pendingConnections.clear()
+    }
+    this.changed()
+  }
+
   private send(clientId: string, message: ServerToAgentMessage): boolean {
     const socket = this.runtime.get(clientId)?.socket
     if (!socket || socket.data.phase !== 'active')
@@ -306,6 +337,7 @@ export class AgentGateway {
   stop(): void {
     clearInterval(this.livenessTimer)
     this.unsubscribe()
+    this.unsubscribeFrps()
     this.pendingConnections.clear()
     for (const entry of this.runtime.values())
       entry.socket?.close(1001, 'Tunnel server stopping')

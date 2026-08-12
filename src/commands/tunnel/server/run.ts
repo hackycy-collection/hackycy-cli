@@ -1,22 +1,19 @@
+import type { FrpSupervisor, FrpSupervisorOptions } from '../frp/supervisor'
 import type { ServerTunnelConfig } from '../types'
-import path from 'node:path'
 import process from 'node:process'
-import { atomicWrite } from '../atomic-file'
-import { ensureFrpBinary } from '../frp/binary'
-import { renderFrpsConfig, verifyFrpConfiguration } from '../frp/config'
-import { FrpSupervisor } from '../frp/supervisor'
 import { acquireStateDirectoryLock } from '../lock'
-import { TunnelError } from '../types'
 import { AgentGateway } from './agent-gateway'
 import { TunnelControlPlane } from './control-plane'
 import { openTunnelDatabase } from './database'
 import { startTunnelHttpServer } from './http'
+import { ManagedFrpsController } from './managed-frps'
 import { TunnelManagement } from './tunnel-management'
 
 export interface TunnelServerRunOptions {
   signal?: AbortSignal
   ensureFrpsBinary?: (signal: AbortSignal) => Promise<string>
   verifyFrpsConfiguration?: (binaryPath: string, configurationPath: string, signal: AbortSignal) => Promise<void>
+  createFrpsSupervisor?: (options: FrpSupervisorOptions) => FrpSupervisor
 }
 
 export async function runTunnelServer(config: ServerTunnelConfig, options: TunnelServerRunOptions = {}): Promise<void> {
@@ -24,7 +21,7 @@ export async function runTunnelServer(config: ServerTunnelConfig, options: Tunne
   const shutdown = new AbortController()
   let database: ReturnType<typeof openTunnelDatabase> | undefined
   let gateway: AgentGateway | undefined
-  let frps: FrpSupervisor | undefined
+  let frps: ManagedFrpsController | undefined
   let server: ReturnType<typeof startTunnelHttpServer> | undefined
   let management: TunnelManagement | undefined
   const stop = (): void => {
@@ -48,35 +45,25 @@ export async function runTunnelServer(config: ServerTunnelConfig, options: Tunne
     database = openTunnelDatabase(config.dataDir)
     const controlPlane = new TunnelControlPlane(database, config.portRange)
     const frpToken = config.frpToken ?? controlPlane.internalFrpToken()
-    const binaryPath = await (options.ensureFrpsBinary ?? (signal => ensureFrpBinary('frps', { signal })))(shutdown.signal)
+    frps = new ManagedFrpsController({
+      config,
+      frpToken,
+      signal: shutdown.signal,
+      ensureBinary: options.ensureFrpsBinary,
+      verifyConfiguration: options.verifyFrpsConfiguration,
+      createSupervisor: options.createFrpsSupervisor,
+    })
+    gateway = new AgentGateway(controlPlane, config.frpPort, frpToken, config.advertiseFrpAddress, frps)
+    management = await TunnelManagement.create({ database, controlPlane, gateway, frps, serverConfig: config })
     if (shutdown.signal.aborted)
       return
-    const frpsConfigPath = path.join(config.dataDir, 'frps.toml')
-    await atomicWrite(frpsConfigPath, renderFrpsConfig(config, frpToken))
-    if (shutdown.signal.aborted)
-      return
-    try {
-      await (options.verifyFrpsConfiguration ?? ((binary, configuration, signal) => verifyFrpConfiguration(binary, configuration, { signal })))(binaryPath, frpsConfigPath, shutdown.signal)
-    }
-    catch (cause) {
-      if (shutdown.signal.aborted)
-        return
-      throw new TunnelError('CONFIGURATION_FAILED', cause instanceof Error ? cause.message : String(cause))
-    }
-    if (shutdown.signal.aborted)
-      return
-    frps = new FrpSupervisor({ binaryPath, role: 'frps' })
-    gateway = new AgentGateway(controlPlane, config.frpPort, config.advertiseFrpAddress, frpToken)
-    management = await TunnelManagement.create({ database, controlPlane, gateway, frps, frpsConfigPath, serverConfig: config })
     server = startTunnelHttpServer({ management, gateway, address: config.address, controlPort: config.controlPort })
-    await frps.start(frpsConfigPath)
-    if (shutdown.signal.aborted)
-      return
     console.log(`Tunnel control plane: ${server.url}`)
     console.log(`FRP bind: ${config.address}:${config.frpPort}`)
     console.log(`FRP HTTP vhost: ${config.address}:${config.httpPort}`)
     console.log(`Server Port Pool: ${config.portRange.start}-${config.portRange.end} TCP/UDP`)
     console.log(`State directory: ${config.dataDir}`)
+    void frps.start().catch(() => {})
     await server.finished
   }
   catch (cause) {
