@@ -2,11 +2,6 @@ name: Build and Publish Docker Image
 
 on:
   workflow_dispatch:
-    inputs:
-      tag:
-        description: GitHub Release tag and Docker image tag to publish
-        required: true
-        type: string
 
 env:
   GHCR_IMAGE: ghcr.io/hackycy/hackycy-cli
@@ -21,15 +16,21 @@ jobs:
       packages: write
 
     steps:
+      - name: Verify selected ref is a release tag
+        if: github.ref_type != 'tag'
+        run: |
+          echo 'Run this workflow from a release tag, for example v0.0.62.' >&2
+          exit 1
+
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ inputs.tag }}
+          ref: ${{ github.ref }}
 
       - name: Download Linux binaries from GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ inputs.tag }}
+          RELEASE_TAG: ${{ github.ref_name }}
         run: |
           mkdir -p release-assets docker-artifacts/ycy-linux-x64 docker-artifacts/ycy-linux-arm64
           gh release download "$RELEASE_TAG" \
@@ -44,7 +45,7 @@ jobs:
       - name: Resolve image tags
         id: image
         env:
-          TAG: ${{ inputs.tag }}
+          TAG: ${{ github.ref_name }}
           GHCR_IMAGE: ${{ env.GHCR_IMAGE }}
           TENCENT_IMAGE: ${{ env.TENCENT_IMAGE }}
         run: |
