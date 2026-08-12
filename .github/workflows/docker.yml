@@ -4,55 +4,17 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: Docker image tag to publish
+        description: GitHub Release tag and Docker image tag to publish
         required: true
         type: string
 
 env:
-  BUN_VERSION: 1.3.14
   GHCR_IMAGE: ghcr.io/hackycy/hackycy-cli
   TENCENT_IMAGE: ccr.ccs.tencentyun.com/sooosin/hackycy-cli
   PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
-  build:
-    strategy:
-      matrix:
-        include:
-          - target: linux-x64
-            artifact: ycy-linux-x64
-          - target: linux-arm64
-            artifact: ycy-linux-arm64
-
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: ${{ env.BUN_VERSION }}
-
-      - name: Install dependencies
-        run: bun install --frozen-lockfile
-
-      - name: Build binary
-        run: |
-          bun scripts/build.ts \
-            --target bun-${{ matrix.target }} \
-            --outfile ${{ matrix.artifact }}
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.artifact }}
-          path: ${{ matrix.artifact }}
-          if-no-files-found: error
-
   publish:
-    needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -61,36 +23,35 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
-      - name: Download Linux build artifacts
-        uses: actions/download-artifact@v4
         with:
-          pattern: ycy-linux-*
-          path: docker-artifacts
+          ref: ${{ inputs.tag }}
+
+      - name: Download Linux binaries from GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ inputs.tag }}
+        run: |
+          mkdir -p release-assets docker-artifacts/ycy-linux-x64 docker-artifacts/ycy-linux-arm64
+          gh release download "$RELEASE_TAG" \
+            --repo "$GITHUB_REPOSITORY" \
+            --pattern ycy-linux-x64 \
+            --pattern ycy-linux-arm64 \
+            --dir release-assets
+          mv release-assets/ycy-linux-x64 docker-artifacts/ycy-linux-x64/ycy-linux-x64
+          mv release-assets/ycy-linux-arm64 docker-artifacts/ycy-linux-arm64/ycy-linux-arm64
+          chmod +x docker-artifacts/ycy-linux-*/ycy-linux-*
 
       - name: Resolve image tags
         id: image
         env:
-          EVENT_NAME: ${{ github.event_name }}
-          MANUAL_TAG: ${{ inputs.tag }}
-          REF_TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag }}
           GHCR_IMAGE: ${{ env.GHCR_IMAGE }}
           TENCENT_IMAGE: ${{ env.TENCENT_IMAGE }}
         run: |
-          if [ "$EVENT_NAME" = 'workflow_dispatch' ]; then
-            tag="$MANUAL_TAG"
-          else
-            tag="$REF_TAG"
-          fi
-
           {
             echo 'tags<<EOF'
-            echo "$GHCR_IMAGE:$tag"
-            echo "$TENCENT_IMAGE:$tag"
-            if [ "$EVENT_NAME" = 'push' ]; then
-              echo "$GHCR_IMAGE:latest"
-              echo "$TENCENT_IMAGE:latest"
-            fi
+            echo "$GHCR_IMAGE:$TAG"
+            echo "$TENCENT_IMAGE:$TAG"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
