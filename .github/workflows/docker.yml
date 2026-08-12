@@ -11,7 +11,7 @@ on:
 env:
   BUN_VERSION: 1.3.14
   GHCR_IMAGE: ghcr.io/hackycy/hackycy-cli
-  TENCENT_IMAGE: ccr.ccs.tencentyun.com/soosin/hackycy-cli
+  TENCENT_IMAGE: ccr.ccs.tencentyun.com/sooosin/hackycy-cli
   PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
@@ -111,8 +111,8 @@ jobs:
         uses: docker/login-action@v3
         with:
           registry: ccr.ccs.tencentyun.com
-          username: ${{ secrets.USERNAME }}
-          password: ${{ secrets.PASSWORD }}
+          username: ${{ secrets.TENCENT_USERNAME }}
+          password: ${{ secrets.TENCENT_PASSWORD }}
 
       - name: Build and publish image
         uses: docker/build-push-action@v6
