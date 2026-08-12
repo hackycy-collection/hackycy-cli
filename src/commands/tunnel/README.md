@@ -436,8 +436,10 @@ ycy owns all generated TOML. Operators never need to maintain `frps.toml` or `fr
 The generated document is mapped from the typed tunnel model, then passed through
 one TOML codec adapter. Its layout is not a compatibility contract; the codec
 owns both parsing and serialization so a future TOML implementation can replace
-the current one without changing the FRP renderers. Raw FRP configuration is
-still not accepted.
+the current one without changing the FRP renderers. A Control Plane Account may
+use the Client detail `Import configuration` workflow as a one-time migration
+source for supported `[[proxies]]` TOML entries; it is parsed into typed Tunnel
+Definitions and is never executed as raw FRP configuration.
 
 The server configuration is equivalent to:
 
@@ -484,7 +486,7 @@ locations = [ "/service-a" ]
 
 Typed advanced options render per-proxy encryption, compression, bandwidth limits, Proxy Protocol, TCP/HTTP health checks, HTTP Basic Auth, Host Header Rewrite, and request/response header sets. Basic Auth passwords remain recoverable for agent snapshots and generated client configuration, but browser responses expose only the username and a configured marker. The server data directory, backups, and client state directory must therefore be protected as sensitive data.
 
-The typed capability scope and the reasons for deferring advanced FRP features are recorded in [FRP-CAPABILITIES.md](./FRP-CAPABILITIES.md). Raw FRP configuration is not accepted because it would bypass route ownership, collision checks, snapshot compatibility, and rollback.
+The typed capability scope and the reasons for deferring advanced FRP features are recorded in [FRP-CAPABILITIES.md](./FRP-CAPABILITIES.md). Configuration import accepts only the typed HTTP/TCP/UDP fields, ignores unsupported client and proxy settings, creates every selected definition disabled, and still applies route ownership, collision checks, snapshot compatibility, and rollback.
 
 ## Process Supervision
 
@@ -530,6 +532,8 @@ The implementation exposes these versioned routes:
 | `POST` | `/api/clients/:id/rotate` | Replace and reveal the Client Token. |
 | `POST` | `/api/clients/:id/restart` | Ask an online client to restart frpc. |
 | `GET\|POST` | `/api/clients/:id/tunnels` | List or create Tunnel Definitions. |
+| `POST` | `/api/clients/:id/tunnels/import/preview` | Parse a bounded TOML configuration into selectable, redacted tunnel candidates. |
+| `POST` | `/api/clients/:id/tunnels/import` | Atomically create selected candidates as disabled Tunnel Definitions. |
 | `PATCH\|DELETE` | `/api/tunnels/:id` | Edit, enable/disable, or delete a tunnel. |
 | `POST` | `/api/server/frp/:action` | Start, stop, or restart frps. |
 | WebSocket | `/api/agent` | Authenticated native agent control channel. |
@@ -540,7 +544,7 @@ The UI is deliberately limited to:
 - Account login and local-account password change.
 - A scoped Overview for every account; only Administrators see global frps state and deployment settings.
 - Client list with Client Remarks, create/edit, token reveal/copy/rotate, delete, connection state, revision state, and an Administrator-only owner column.
-- Client detail with HTTP/TCP/UDP tunnel CRUD, one row per independently enabled proxy, expandable typed FRP options, last structured error, and frpc restart.
+- Client detail with HTTP/TCP/UDP tunnel CRUD, bounded configuration import preview and selection, one row per independently enabled proxy, expandable typed FRP options, last structured error, and frpc restart.
 - Administrator Accounts view with create, role change, password reset, and empty-account deletion.
 - Administrator Server view with frps controls and read-only deployment settings.
 

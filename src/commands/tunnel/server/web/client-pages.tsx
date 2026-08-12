@@ -1,16 +1,16 @@
 import type { Path, UseFormRegister } from 'react-hook-form'
-import type { ClientView, TunnelView } from './api'
-import type { TunnelEditorStep, TunnelFormValues } from './tunnel-form'
+import type { ClientView, TunnelImportPreview, TunnelView } from './api'
+import type { TunnelEditorSection, TunnelFormValues } from './tunnel-form'
 import type { ConfirmAction } from './ui'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Pencil, Plus, RefreshCw, RotateCcw, Trash2 } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Pencil, Plus, RefreshCw, RotateCcw, Trash2, Upload } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { Controller, useFieldArray, useForm, useWatch } from 'react-hook-form'
 import { z } from 'zod'
 import { apiJson, jsonRequest } from './api'
 import { FormError, FormField, FormMessage } from './form'
-import { DialogShell, FormScrollArea, SegmentedControl, Select, Tabs } from './primitives'
-import { buildTunnelPayload, createTunnelSchema, draftToTunnelForm, stepForTunnelField, tunnelStepFields } from './tunnel-form'
+import { DialogShell, FormScrollArea, SegmentedControl, Select } from './primitives'
+import { buildTunnelPayload, createTunnelSchema, draftToTunnelForm, sectionForTunnelField } from './tunnel-form'
 import { ConfirmationDialog, ErrorState, IconButton, LoadingState, navigate, PageHeader, Spinner, Status, Switch, Token, useFeedback } from './ui'
 
 const clientRemarkSchema = z.object({ remark: z.string().max(100, 'Client remark must be 100 characters or fewer') })
@@ -237,7 +237,7 @@ function TunnelEditor({ clientId, initial, onClose, onSaved }: { clientId: strin
     defaultValues: draftToTunnelForm(initial),
     shouldUnregister: false,
   })
-  const [activeStep, setActiveStep] = useState<TunnelEditorStep>('basics')
+  const [openSections, setOpenSections] = useState<Set<TunnelEditorSection>>(() => new Set(['basics']))
   const { notify } = useFeedback()
   const protocol = useWatch({ control: form.control, name: 'protocol' })
   const customDomains = useFieldArray({ control: form.control, name: 'customDomains' })
@@ -245,24 +245,11 @@ function TunnelEditor({ clientId, initial, onClose, onSaved }: { clientId: strin
   const requestHeaders = useFieldArray({ control: form.control, name: 'requestHeaders' })
   const responseHeaders = useFieldArray({ control: form.control, name: 'responseHeaders' })
   const saving = form.formState.isSubmitting
-  const steps: Array<{ id: TunnelEditorStep, label: string }> = [
-    { id: 'basics', label: 'Basics' },
-    { id: 'transport', label: 'Transport' },
-    { id: 'health', label: 'Health check' },
-    ...(protocol === 'http' ? [{ id: 'http' as const, label: 'HTTP' }] : []),
-  ]
-  const activeStepIndex = steps.findIndex(step => step.id === activeStep)
-  const selectStep = (step: TunnelEditorStep): void => {
-    form.clearErrors('root.server')
-    setActiveStep(step)
-  }
-  const nextStep = async (): Promise<void> => {
-    if (!await form.trigger(tunnelStepFields[activeStep]))
-      return
-    const next = steps[activeStepIndex + 1]
-    if (next)
-      selectStep(next.id)
-  }
+  const setSectionOpen = (section: TunnelEditorSection, open: boolean): void => setOpenSections((value) => {
+    const next = new Set(value)
+    open ? next.add(section) : next.delete(section)
+    return next
+  })
   const submit = form.handleSubmit(async (values) => {
     form.clearErrors('root.server')
     try {
@@ -274,9 +261,9 @@ function TunnelEditor({ clientId, initial, onClose, onSaved }: { clientId: strin
       form.setError('root.server', { message: message(cause) })
     }
   }, (errors) => {
-    const field = Object.keys(errors)[0]
-    if (field)
-      setActiveStep(stepForTunnelField(field))
+    const sections = Object.keys(errors).map(sectionForTunnelField)
+    if (sections.length)
+      setOpenSections(value => new Set([...value, ...sections]))
   })
   const focusNewField = (name: Path<TunnelFormValues>): void => {
     requestAnimationFrame(() => form.setFocus(name))
@@ -284,19 +271,17 @@ function TunnelEditor({ clientId, initial, onClose, onSaved }: { clientId: strin
 
   return (
     <DialogShell open title={initial ? 'Edit Tunnel Definition' : 'New Tunnel Definition'} className="tunnel-modal" busy={saving} onOpenChange={open => !open && onClose()} onSubmit={submit}>
-      <Tabs.Root className="tunnel-tabs" value={activeStep} onValueChange={value => selectStep(value as TunnelEditorStep)}>
-        <Tabs.List className="tunnel-steps" aria-label="Tunnel configuration steps">
-          {steps.map((step, index) => (
-            <Tabs.Trigger value={step.id} disabled={saving} key={step.id}>
-              <span className="step-number">{index + 1}</span>
-              {step.label}
-            </Tabs.Trigger>
-          ))}
-        </Tabs.List>
-
-        <Tabs.Content value="basics" forceMount className="tunnel-step-panel">
-          <FormScrollArea>
-            <div className="step-stack">
+      <FormScrollArea>
+        <div className="tunnel-form-sections">
+          <details className="tunnel-form-section" open={openSections.has('basics')} onToggle={event => setSectionOpen('basics', event.currentTarget.open)}>
+            <summary>
+              <span className="section-heading">
+                <span className="section-index">01</span>
+                <strong>Basics</strong>
+              </span>
+              <ChevronDown className="section-chevron" size={16} aria-hidden="true" />
+            </summary>
+            <div className="tunnel-section-body">
               <FormField label="Display name" error={form.formState.errors.label}>
                 <input {...form.register('label')} maxLength={100} autoFocus aria-invalid={Boolean(form.formState.errors.label)} />
               </FormField>
@@ -341,13 +326,17 @@ function TunnelEditor({ clientId, initial, onClose, onSaved }: { clientId: strin
                 <Controller name="enabled" control={form.control} render={({ field }) => <Switch label="Enable Tunnel Definition" checked={field.value} disabled={saving} onChange={field.onChange} />} />
               </div>
             </div>
-          </FormScrollArea>
-        </Tabs.Content>
+          </details>
 
-        <Tabs.Content value="transport" forceMount className="tunnel-step-panel">
-          <FormScrollArea>
-            <section className="form-section">
-              <h3>Transport</h3>
+          <details className="tunnel-form-section" open={openSections.has('transport')} onToggle={event => setSectionOpen('transport', event.currentTarget.open)}>
+            <summary>
+              <span className="section-heading">
+                <span className="section-index">02</span>
+                <strong>Transport</strong>
+              </span>
+              <ChevronDown className="section-chevron" size={16} aria-hidden="true" />
+            </summary>
+            <div className="tunnel-section-body">
               <div className="setting-row">
                 <span>Encryption</span>
                 <Controller name="useEncryption" control={form.control} render={({ field }) => <Switch label="Use encryption" checked={field.value} disabled={saving} onChange={field.onChange} />} />
@@ -376,15 +365,20 @@ function TunnelEditor({ clientId, initial, onClose, onSaved }: { clientId: strin
               <FormField label="Proxy Protocol" error={form.formState.errors.proxyProtocolVersion}>
                 <Controller name="proxyProtocolVersion" control={form.control} render={({ field }) => <Select label="Proxy Protocol" value={field.value} disabled={saving} onChange={field.onChange} options={[{ value: '', label: 'Off' }, { value: 'v1', label: 'v1' }, { value: 'v2', label: 'v2' }]} />} />
               </FormField>
-            </section>
-          </FormScrollArea>
-        </Tabs.Content>
+            </div>
+          </details>
 
-        <Tabs.Content value="health" forceMount className="tunnel-step-panel">
-          <FormScrollArea>
-            <section className="form-section">
+          <details className="tunnel-form-section" open={openSections.has('health')} onToggle={event => setSectionOpen('health', event.currentTarget.open)}>
+            <summary>
+              <span className="section-heading">
+                <span className="section-index">03</span>
+                <strong>Health check</strong>
+              </span>
+              <ChevronDown className="section-chevron" size={16} aria-hidden="true" />
+            </summary>
+            <div className="tunnel-section-body">
               <div className="setting-row">
-                <h3>Health check</h3>
+                <span>Health check</span>
                 <Controller name="healthEnabled" control={form.control} render={({ field }) => <Switch label="Enable health check" checked={field.value} disabled={saving} onChange={field.onChange} />} />
               </div>
               {form.watch('healthEnabled') && (
@@ -422,15 +416,19 @@ function TunnelEditor({ clientId, initial, onClose, onSaved }: { clientId: strin
                   )}
                 </>
               )}
-            </section>
-          </FormScrollArea>
-        </Tabs.Content>
+            </div>
+          </details>
 
-        {protocol === 'http' && (
-          <Tabs.Content value="http" forceMount className="tunnel-step-panel">
-            <FormScrollArea>
-              <section className="form-section">
-                <h3>HTTP</h3>
+          {protocol === 'http' && (
+            <details className="tunnel-form-section" open={openSections.has('http')} onToggle={event => setSectionOpen('http', event.currentTarget.open)}>
+              <summary>
+                <span className="section-heading">
+                  <span className="section-index">04</span>
+                  <strong>HTTP</strong>
+                </span>
+                <ChevronDown className="section-chevron" size={16} aria-hidden="true" />
+              </summary>
+              <div className="tunnel-section-body">
                 <div className="setting-row">
                   <span>Basic Auth</span>
                   <Controller name="authEnabled" control={form.control} render={({ field }) => <Switch label="Enable HTTP Basic Auth" checked={field.value} disabled={saving} onChange={field.onChange} />} />
@@ -472,36 +470,177 @@ function TunnelEditor({ clientId, initial, onClose, onSaved }: { clientId: strin
                   }}
                   onRemove={responseHeaders.remove}
                 />
-              </section>
-            </FormScrollArea>
-          </Tabs.Content>
-        )}
-      </Tabs.Root>
+              </div>
+            </details>
+          )}
+        </div>
+      </FormScrollArea>
 
       <FormError error={form.formState.errors.root?.server} />
       <div className="modal-actions">
         <button type="button" disabled={saving} onClick={onClose}>Cancel</button>
-        <div className="modal-step-actions">
-          {activeStepIndex > 0 && (
-            <button type="button" disabled={saving} onClick={() => selectStep(steps[activeStepIndex - 1]!.id)}>
-              <ArrowLeft size={15} />
-              Back
-            </button>
+        <button className="primary" type="submit" disabled={saving}>
+          {saving && <Spinner />}
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+      </div>
+    </DialogShell>
+  )
+}
+
+function ImportConfigurationDialog({ clientId, onClose, onImported }: { clientId: string, onClose: () => void, onImported: () => void }): React.JSX.Element {
+  const [source, setSource] = useState('')
+  const [preview, setPreview] = useState<TunnelImportPreview>()
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+  const [error, setError] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [dragging, setDragging] = useState(false)
+  const [fileName, setFileName] = useState('')
+  const { notify } = useFeedback()
+  const selectFile = async (file: File | undefined): Promise<void> => {
+    if (!file)
+      return
+    setLoading(true)
+    setError('')
+    setPreview(undefined)
+    setFileName(file.name)
+    try {
+      const nextSource = await file.text()
+      const nextPreview = await apiJson<TunnelImportPreview>(`/api/clients/${encodeURIComponent(clientId)}/tunnels/import/preview`, jsonRequest('POST', { source: nextSource }))
+      setSource(nextSource)
+      setPreview(nextPreview)
+      setSelected(new Set(nextPreview.candidates.map(candidate => candidate.id)))
+    }
+    catch (cause) {
+      setSource('')
+      setSelected(new Set())
+      setError(message(cause))
+    }
+    finally {
+      setLoading(false)
+    }
+  }
+  const dropFile = (event: React.DragEvent<HTMLLabelElement>): void => {
+    event.preventDefault()
+    setDragging(false)
+    void selectFile(event.dataTransfer.files[0])
+  }
+  const toggle = (id: string): void => setSelected((value) => {
+    const next = new Set(value)
+    next.has(id) ? next.delete(id) : next.add(id)
+    return next
+  })
+  const submit = async (event: React.FormEvent<HTMLFormElement>): Promise<void> => {
+    event.preventDefault()
+    if (!source || !preview || !selected.size)
+      return
+    setLoading(true)
+    setError('')
+    try {
+      const result = await apiJson<{ tunnels: TunnelView[] }>(`/api/clients/${encodeURIComponent(clientId)}/tunnels/import`, jsonRequest('POST', { source, candidateIds: [...selected] }))
+      notify(`${result.tunnels.length} tunnel ${result.tunnels.length === 1 ? 'definition' : 'definitions'} imported disabled`)
+      onImported()
+    }
+    catch (cause) {
+      setError(message(cause))
+    }
+    finally {
+      setLoading(false)
+    }
+  }
+  return (
+    <DialogShell open title="Import tunnel configuration" className="import-modal" busy={loading} onOpenChange={open => !open && onClose()} onSubmit={event => void submit(event)}>
+      <label
+        className={`import-dropzone${dragging ? ' is-dragging' : ''}`}
+        onDragEnter={() => setDragging(true)}
+        onDragOver={event => event.preventDefault()}
+        onDragLeave={(event) => {
+          if (!event.currentTarget.contains(event.relatedTarget as Node))
+            setDragging(false)
+        }}
+        onDrop={dropFile}
+      >
+        <input
+          className="import-file-input"
+          type="file"
+          accept=".toml,text/plain"
+          disabled={loading}
+          onChange={(event) => {
+            const file = event.currentTarget.files?.[0]
+            event.currentTarget.value = ''
+            void selectFile(file)
+          }}
+        />
+        <span className="import-dropzone-icon"><Upload size={20} /></span>
+        <span className="import-file-copy">
+          <strong>{fileName || 'Choose configuration file'}</strong>
+          <span>Drop file here or click to browse</span>
+        </span>
+        <span className="import-dropzone-action">Browse</span>
+      </label>
+      {preview && (
+        <>
+          <div className="import-preview-summary">
+            <strong>
+              {selected.size}
+              {' '}
+              selected
+            </strong>
+            <span>Disabled on import</span>
+          </div>
+          <section className="table-wrap import-preview">
+            <table className="tunnel-table">
+              <thead>
+                <tr>
+                  <th aria-label="Select" />
+                  <th>Name</th>
+                  <th>Public mapping</th>
+                  <th>Local Endpoint</th>
+                  <th>Authentication</th>
+                </tr>
+              </thead>
+              <tbody>
+                {preview.candidates.map(candidate => (
+                  <tr className="tunnel-row" key={candidate.id}>
+                    <td data-label="Select"><input className="import-checkbox" type="checkbox" checked={selected.has(candidate.id)} disabled={loading} aria-label={`Select ${candidate.label || candidate.id}`} onChange={() => toggle(candidate.id)} /></td>
+                    <td data-label="Name"><strong>{candidate.label || 'Unlabeled tunnel'}</strong></td>
+                    <td data-label="Public mapping">
+                      <strong>{candidate.protocol.toUpperCase()}</strong>
+                      {' '}
+                      <span className="mono">{candidate.protocol === 'http' ? candidate.customDomains?.join(', ') : candidate.serverPort}</span>
+                      {candidate.protocol === 'http' && <span className="mono mapping-paths">{candidate.location ?? 'All paths'}</span>}
+                    </td>
+                    <td className="mono" data-label="Local endpoint">
+                      {candidate.localHost}
+                      :
+                      {candidate.localPort}
+                    </td>
+                    <td data-label="Authentication">{candidate.basicAuth ? candidate.basicAuth.username : 'None'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+            {!preview.candidates.length && <div className="empty-row">No tunnel definitions available to import</div>}
+          </section>
+          {!!preview.ignored.length && (
+            <ul className="import-notices">
+              {preview.ignored.map((item, index) => (
+                <li key={`${item.proxy ?? 'configuration'}-${index}`}>
+                  {item.proxy ? `${item.proxy}: ` : ''}
+                  {item.reason}
+                </li>
+              ))}
+            </ul>
           )}
-          {activeStepIndex < steps.length - 1
-            ? (
-                <button className="primary" type="button" disabled={saving} onClick={() => void nextStep()}>
-                  Next
-                  <ArrowRight size={15} />
-                </button>
-              )
-            : (
-                <button className="primary" type="submit" disabled={saving}>
-                  {saving && <Spinner />}
-                  {saving ? 'Saving...' : 'Save'}
-                </button>
-              )}
-        </div>
+        </>
+      )}
+      <FormError error={error ? { message: error } : undefined} />
+      <div className="modal-actions">
+        <button type="button" disabled={loading} onClick={onClose}>Cancel</button>
+        <button className="primary" type="submit" disabled={loading || !selected.size}>
+          {loading && <Spinner />}
+          {loading ? 'Importing...' : 'Import selected'}
+        </button>
       </div>
     </DialogShell>
   )
@@ -546,6 +685,7 @@ export function ClientDetailPage({ id, refreshSequence, showOwner }: { id: strin
   const [client, setClient] = useState<ClientView>()
   const [tunnels, setTunnels] = useState<TunnelView[]>([])
   const [editing, setEditing] = useState<TunnelView | null | undefined>()
+  const [importing, setImporting] = useState(false)
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
@@ -619,6 +759,10 @@ export function ClientDetailPage({ id, refreshSequence, showOwner }: { id: strin
     setEditing(undefined)
     void load()
   }
+  const imported = (): void => {
+    setImporting(false)
+    void load()
+  }
   return (
     <>
       <PageHeader
@@ -637,6 +781,10 @@ export function ClientDetailPage({ id, refreshSequence, showOwner }: { id: strin
             <button className="primary" type="button" onClick={() => setEditing(null)}>
               <Plus size={15} />
               New tunnel
+            </button>
+            <button type="button" onClick={() => setImporting(true)}>
+              <Upload size={15} />
+              Import configuration
             </button>
           </>
         )}
@@ -727,6 +875,7 @@ export function ClientDetailPage({ id, refreshSequence, showOwner }: { id: strin
               </>
             )}
       {editing !== undefined && <TunnelEditor clientId={id} initial={editing ?? undefined} onClose={() => setEditing(undefined)} onSaved={saved} />}
+      {importing && <ImportConfigurationDialog clientId={id} onClose={() => setImporting(false)} onImported={imported} />}
       {confirmation && <ConfirmationDialog request={confirmation} onClose={() => setConfirmation(undefined)} />}
     </>
   )

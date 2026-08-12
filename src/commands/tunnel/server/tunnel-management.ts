@@ -6,6 +6,7 @@ import type { TunnelDatabase } from './database'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { redactTunnelDefinition } from '../definition'
 import { TunnelError } from '../types'
+import { parseFrpcTunnelImport, selectedImportedTunnels, tunnelImportPreview } from './frpc-import'
 import { clientView, tunnelState } from './views'
 
 const ENVIRONMENT_ADMIN_ID = 'environment-admin'
@@ -412,6 +413,17 @@ export class TunnelWorkspace {
   createTunnel(clientId: string, input: TunnelMutationInput): PublicTunnelDefinition {
     this.requireClient(clientId)
     return redactTunnelDefinition(this.options.controlPlane.createTunnel(clientId, input))
+  }
+
+  previewTunnelImport(clientId: string, source: string) {
+    this.requireClient(clientId)
+    return tunnelImportPreview(parseFrpcTunnelImport(source))
+  }
+
+  importTunnels(clientId: string, source: string, candidateIds: string[]): PublicTunnelDefinition[] {
+    this.requireClient(clientId)
+    const imported = parseFrpcTunnelImport(source)
+    return this.options.controlPlane.importTunnels(clientId, selectedImportedTunnels(imported, candidateIds)).map(redactTunnelDefinition)
   }
 
   private requireTunnel(tunnelId: string): TunnelDefinition & { clientId: string } {

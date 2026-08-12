@@ -5,7 +5,7 @@ import { z } from 'zod'
 const valueRowSchema = z.object({ value: z.string() })
 const keyValueRowSchema = z.object({ name: z.string(), value: z.string() })
 
-export type TunnelEditorStep = 'basics' | 'transport' | 'health' | 'http'
+export type TunnelEditorSection = 'basics' | 'transport' | 'health' | 'http'
 
 const baseTunnelSchema = z.object({
   label: z.string().max(100, 'Display name must be 100 characters or fewer'),
@@ -191,7 +191,7 @@ export function buildTunnelPayload(values: TunnelFormValues): {
   }
 }
 
-export function stepForTunnelField(field: string): TunnelEditorStep {
+export function sectionForTunnelField(field: string): TunnelEditorSection {
   if (['useEncryption', 'useCompression', 'bandwidthEnabled', 'bandwidthValue', 'bandwidthUnit', 'bandwidthMode', 'proxyProtocolVersion'].includes(field))
     return 'transport'
   if (['healthEnabled', 'healthType', 'healthInterval', 'healthTimeout', 'healthMaxFailed', 'healthPath', 'healthHeaders'].includes(field))
@@ -199,11 +199,4 @@ export function stepForTunnelField(field: string): TunnelEditorStep {
   if (['authEnabled', 'authUsername', 'authPassword', 'hostHeaderRewrite', 'requestHeaders', 'responseHeaders'].includes(field))
     return 'http'
   return 'basics'
-}
-
-export const tunnelStepFields: Record<TunnelEditorStep, Array<keyof TunnelFormValues>> = {
-  basics: ['label', 'protocol', 'customDomains', 'location', 'serverPort', 'localHost', 'localPort', 'enabled'],
-  transport: ['useEncryption', 'useCompression', 'bandwidthEnabled', 'bandwidthValue', 'bandwidthUnit', 'bandwidthMode', 'proxyProtocolVersion'],
-  health: ['healthEnabled', 'healthType', 'healthInterval', 'healthTimeout', 'healthMaxFailed', 'healthPath', 'healthHeaders'],
-  http: ['authEnabled', 'authUsername', 'authPassword', 'hostHeaderRewrite', 'requestHeaders', 'responseHeaders'],
 }

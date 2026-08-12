@@ -19,7 +19,9 @@ hostnames. It models one optional Location per independently enabled Tunnel
 Definition and renders that value as a zero- or one-element `locations` array.
 Multiple Custom Domains remain aliases on the same definition. A raw TOML
 escape hatch would bypass ownership, collision checking, snapshot validation,
-secret handling, and deterministic rollback.
+secret handling, and deterministic rollback. The one-time configuration import
+workflow is not such an escape hatch: it maps supported proxy fields into
+disabled typed definitions before applying the normal control-plane checks.
 
 ## HTTP Routing Semantics
 
@@ -116,7 +118,9 @@ remain an `http` tunnel and retains locations and HTTP header features.
 ## Deliberately Deferred FRP Features
 
 These should not be represented as free-form fields or raw config. They can be
-added later as typed domain concepts when there is a concrete workflow.
+added later as typed domain concepts when there is a concrete workflow. When
+encountered during configuration import, they are reported as ignored rather
+than being persisted or passed through to FRP.
 
 - **Load-balancer groups (`loadBalancer.group`/`groupKey`)**: useful, but they
   intentionally make several proxies share one HTTP route or TCP port. Correct

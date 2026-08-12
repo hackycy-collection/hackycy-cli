@@ -201,7 +201,63 @@ describe('Tunnel HTTP control plane', () => {
     const detail = await request(value.server, `/api/clients/${client.id}`, cookie).then(response => response.json())
     expect(detail.tunnels[0].options.http.basicAuth).toEqual({ username: 'operator', passwordConfigured: true })
     expect(JSON.stringify(detail)).not.toContain('secret-value')
-    expect(value.controlPlane.snapshot(client.id).tunnels[0]?.options.http?.basicAuth).toEqual({ username: 'operator', password: 'secret-value' })
+    expect(value.controlPlane.snapshot(client.id).tunnels.find(tunnel => tunnel.protocol === 'http')?.options.http?.basicAuth).toEqual({ username: 'operator', password: 'secret-value' })
+  })
+
+  test('previews and imports selected TOML tunnels disabled without exposing credentials', async () => {
+    const value = await fixture()
+    const cookie = await login(value.server)
+    const client = value.controlPlane.createClient('environment-admin', 'Import fixture')
+    const source = `
+serverAddr = "tunnel.example.com"
+
+[[proxies]]
+name = "app"
+type = "http"
+localPort = 3000
+customDomains = ["import.example.com"]
+locations = ["/app", "/admin"]
+httpUser = "operator"
+httpPassword = "secret-value"
+
+[[proxies]]
+name = "database"
+type = "tcp"
+localPort = 5432
+remotePort = 20001
+`
+    const previewResponse = await request(value.server, `/api/clients/${client.id}/tunnels/import/preview`, cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source }),
+    })
+    expect(previewResponse.status).toBe(200)
+    const preview = await previewResponse.json()
+    expect(preview.candidates).toHaveLength(3)
+    expect(preview.candidates.every((candidate: any) => candidate.basicAuth?.password === undefined)).toBe(true)
+    expect(JSON.stringify(preview)).not.toContain('secret-value')
+
+    const importedResponse = await request(value.server, `/api/clients/${client.id}/tunnels/import`, cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, candidateIds: preview.candidates.map((candidate: any) => candidate.id) }),
+    })
+    expect(importedResponse.status).toBe(201)
+    const imported = await importedResponse.json()
+    expect(imported.tunnels).toHaveLength(3)
+    expect(imported.tunnels.every((tunnel: any) => tunnel.enabled === false)).toBe(true)
+    expect(JSON.stringify(imported)).not.toContain('secret-value')
+    expect(value.controlPlane.getClient(client.id).desiredRevision).toBe(1)
+    expect(value.controlPlane.snapshot(client.id).tunnels.find(tunnel => tunnel.protocol === 'http')?.options.http?.basicAuth).toEqual({ username: 'operator', password: 'secret-value' })
+
+    const conflict = await request(value.server, `/api/clients/${client.id}/tunnels/import`, cookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source, candidateIds: [preview.candidates[0].id] }),
+    })
+    expect(conflict.status).toBe(409)
+    expect(value.controlPlane.listTunnels(client.id)).toHaveLength(3)
+    expect(value.controlPlane.getClient(client.id).desiredRevision).toBe(1)
   })
 
   test('authenticates one agent, pushes snapshots, records acknowledgements, and revokes rotation', async () => {
@@ -332,6 +388,11 @@ describe('Tunnel HTTP control plane', () => {
 
     expect((await request(value.server, '/api/clients', bobCookie).then(response => response.json())).clients).toEqual([])
     expect((await request(value.server, `/api/clients/${client.id}`, bobCookie)).status).toBe(404)
+    expect((await request(value.server, `/api/clients/${client.id}/tunnels/import/preview`, bobCookie, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ source: 'proxies = []' }),
+    })).status).toBe(404)
     expect((await request(value.server, `/api/tunnels/${tunnel.id}`, bobCookie, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

@@ -22,6 +22,23 @@ export interface ClientView extends Omit<ClientRecord, 'ownerAccountId'> {
 
 export type TunnelView = PublicTunnelDefinition & { state: TunnelPresentationState }
 
+export interface TunnelImportCandidate {
+  id: string
+  label: string
+  protocol: 'http' | 'tcp' | 'udp'
+  customDomains?: string[]
+  location?: string | null
+  serverPort?: number
+  localHost: string
+  localPort: number
+  basicAuth: { username: string, passwordConfigured: true } | null
+}
+
+export interface TunnelImportPreview {
+  candidates: TunnelImportCandidate[]
+  ignored: Array<{ proxy?: string, reason: string }>
+}
+
 export class ApiError extends Error {
   constructor(public readonly status: number, message: string) {
     super(message)

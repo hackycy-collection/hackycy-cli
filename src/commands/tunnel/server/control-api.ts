@@ -21,6 +21,8 @@ const accountRoleSchema = z.object({ role: z.enum(['admin', 'user']) }).strict()
 const accountPasswordSchema = z.object({ password: z.string() }).strict()
 const clientCreateSchema = z.object({ remark: z.string().optional() }).strict()
 const clientRemarkSchema = z.object({ remark: z.string() }).strict()
+const tunnelImportPreviewSchema = z.object({ source: z.string().min(1).max(1024 * 1024) }).strict()
+const tunnelImportSchema = tunnelImportPreviewSchema.extend({ candidateIds: z.array(z.string()).min(1) }).strict()
 const tunnelHeaderSchema = z.object({ name: z.string(), value: z.string() }).strict()
 const tunnelTransportSchema = z.object({
   useEncryption: z.boolean().optional(),
@@ -317,6 +319,24 @@ export class TunnelControlApi {
       if (restartClientId && request.method === 'POST') {
         workspace.restartClient(restartClientId)
         return json({ version: 1, accepted: true }, 202)
+      }
+      const tunnelImportPreviewClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/tunnels\/import\/preview$/)
+      if (tunnelImportPreviewClientId) {
+        if (request.method !== 'POST')
+          return error('METHOD_NOT_ALLOWED', 'Use POST', 405)
+        const body = await requestJson(request, tunnelImportPreviewSchema)
+        if (body instanceof Response)
+          return body
+        return json({ version: 1, ...workspace.previewTunnelImport(tunnelImportPreviewClientId, body.source) })
+      }
+      const tunnelImportClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/tunnels\/import$/)
+      if (tunnelImportClientId) {
+        if (request.method !== 'POST')
+          return error('METHOD_NOT_ALLOWED', 'Use POST', 405)
+        const body = await requestJson(request, tunnelImportSchema)
+        if (body instanceof Response)
+          return body
+        return json({ version: 1, tunnels: workspace.importTunnels(tunnelImportClientId, body.source, body.candidateIds) }, 201)
       }
       const tunnelsClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/tunnels$/)
       if (tunnelsClientId) {

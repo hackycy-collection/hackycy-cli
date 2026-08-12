@@ -174,6 +174,30 @@ describe('TunnelControlPlane', () => {
     database.close()
   })
 
+  test('imports disabled tunnels atomically with one desired revision and event', () => {
+    const { database, controlPlane, ownerId } = fixture()
+    const client = controlPlane.createClient(ownerId, 'Import target')
+    const events: unknown[] = []
+    controlPlane.subscribe(event => events.push(event))
+
+    const imported = controlPlane.importTunnels(client.id, [
+      { protocol: 'http', customDomains: ['import.example.com'], location: '/app', localPort: 3000, enabled: true },
+      { protocol: 'tcp', serverPort: 20001, localPort: 5432, enabled: true },
+    ])
+    expect(imported).toHaveLength(2)
+    expect(imported.every(tunnel => !tunnel.enabled)).toBe(true)
+    expect(controlPlane.getClient(client.id).desiredRevision).toBe(1)
+    expect(events).toEqual([{ type: 'desired_state', clientId: client.id, ownerAccountId: ownerId }])
+
+    expect(() => controlPlane.importTunnels(client.id, [
+      { protocol: 'http', customDomains: ['import.example.com'], location: '/app', localPort: 3001 },
+      { protocol: 'udp', serverPort: 20002, localPort: 53 },
+    ])).toThrow('already reserved')
+    expect(controlPlane.listTunnels(client.id)).toHaveLength(2)
+    expect(controlPlane.getClient(client.id).desiredRevision).toBe(1)
+    database.close()
+  })
+
   test('increments Desired Revision atomically for every mutation and bounds Applied Revision', () => {
     const { database, controlPlane, ownerId } = fixture()
     const client = controlPlane.createClient(ownerId, 'DNS client')

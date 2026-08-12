@@ -384,6 +384,41 @@ export class TunnelControlPlane {
     return created
   }
 
+  importTunnels(clientId: string, inputs: TunnelMutationInput[]): TunnelDefinition[] {
+    if (!inputs.length)
+      throw new TunnelError('INVALID_TUNNEL', 'Select at least one tunnel configuration to import')
+    let ownerAccountId = ''
+    const imported = this.database.sqlite.transaction(() => {
+      ownerAccountId = this.getClient(clientId).ownerAccountId
+      const created: TunnelDefinition[] = []
+      try {
+        for (const input of inputs) {
+          if (input.protocol !== 'http' && input.serverPort == null)
+            throw new TunnelError('INVALID_TUNNEL', 'Imported TCP and UDP tunnels require a server port')
+          const id = randomUUID()
+          const timestamp = now()
+          const value = this.values({ ...input, enabled: false })
+          this.database.sqlite.query(`
+            INSERT INTO tunnels(id, client_internal_id, label, protocol, custom_domains, location, server_port, local_host, local_port, enabled, options_json, created_at, updated_at)
+            VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          `).run(id, clientId, value.label, value.protocol, value.protocol === 'http' ? JSON.stringify(value.customDomains) : null, value.protocol === 'http' ? value.location : null, value.serverPort, value.localHost, value.localPort, 0, JSON.stringify(value.options), timestamp, timestamp)
+          if (value.protocol === 'http')
+            this.reserveHttpRoutes(id, value.customDomains, value.location)
+          const { clientId: _, ...tunnel } = this.getTunnel(id)
+          created.push(tunnel)
+        }
+      }
+      catch (cause) {
+        constraintError(cause)
+      }
+      this.incrementDesiredRevision(clientId)
+      return created
+    })
+    const created = imported.immediate()
+    this.emit({ type: 'desired_state', clientId, ownerAccountId })
+    return created
+  }
+
   updateTunnel(id: string, patch: TunnelPatchInput): TunnelDefinition {
     let clientId = ''
     const update = this.database.sqlite.transaction(() => {
