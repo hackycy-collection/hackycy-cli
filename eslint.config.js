@@ -4,7 +4,7 @@ import antfu from '@antfu/eslint-config'
 export default antfu(
   {
     type: 'lib',
-    ignores: ['CLAUDE.md', 'src/commands/git/cm/plan.md'],
+    ignores: ['CLAUDE.md', 'mock'],
     rules: {
       'no-console': 'off',
       // Bun adds bun:* to node:module builtinModules, so classify it explicitly
