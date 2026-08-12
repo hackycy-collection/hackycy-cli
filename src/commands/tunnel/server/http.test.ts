@@ -45,10 +45,10 @@ afterEach(async () => {
   }
 })
 
-async function fixture(): Promise<Fixture> {
+async function fixture(frpToken?: string): Promise<Fixture> {
   const database = new TunnelDatabase(':memory:')
   const controlPlane = new TunnelControlPlane(database, { start: 20000, end: 20002 })
-  const gateway = new AgentGateway(controlPlane, 7000)
+  const gateway = new AgentGateway(controlPlane, 7000, undefined, frpToken)
   const frps = new FrpSupervisor({ binaryPath: '/frps', role: 'frps', spawn: () => new FakeChild() })
   const config: ServerTunnelConfig = {
     address: '127.0.0.1',
@@ -56,6 +56,7 @@ async function fixture(): Promise<Fixture> {
     frpPort: 7000,
     httpPort: 8080,
     portRange: { start: 20000, end: 20002 },
+    ...(frpToken ? { frpToken } : {}),
     dataDir: '/data',
     adminUser: 'admin',
     adminPassword: 'admin-secret',
@@ -301,6 +302,18 @@ remotePort = 20001
     expect(rejectedProbe.status).toBe(401)
     const acceptedProbe = await fetch(new URL('/api/agent', value.server.url), { headers: { Authorization: `Bearer ${rotated.token}` } })
     expect(acceptedProbe.status).toBe(426)
+  })
+
+  test('shares a configured FRP token with trusted agents without exposing it to the management API', async () => {
+    const value = await fixture('external-frp-token')
+    const client = value.controlPlane.createClient('environment-admin', 'Configured FRP token')
+    const { socket, firstMessage } = await openAgent(value.server, client.token)
+
+    expect((await firstMessage).internalFrpToken).toBe('external-frp-token')
+    const cookie = await login(value.server)
+    const state = await request(value.server, '/api/state', cookie).then(response => response.json())
+    expect(JSON.stringify(state)).not.toContain('external-frp-token')
+    socket.close()
   })
 
   test('keeps a failed Desired Revision in Error while the previous child is running', async () => {

@@ -58,7 +58,7 @@ export interface OverviewView {
 
 export interface ServerView {
   frps: ReturnType<FrpSupervisor['state']>
-  settings: Omit<ServerTunnelConfig, 'adminPassword'>
+  settings: Omit<ServerTunnelConfig, 'adminPassword' | 'frpToken'>
 }
 
 export interface TunnelManagementOptions {
@@ -381,7 +381,7 @@ export class TunnelWorkspace {
   }
 
   private serverView(): ServerView {
-    const { adminPassword: _, ...settings } = this.options.serverConfig
+    const { adminPassword: _, frpToken: __, ...settings } = this.options.serverConfig
     return { frps: this.options.frps.state(), settings }
   }
 
@@ -566,7 +566,7 @@ export class TunnelAdministration {
 
   serverState(): ServerView {
     void this.account
-    const { adminPassword: _, ...settings } = this.options.serverConfig
+    const { adminPassword: _, frpToken: __, ...settings } = this.options.serverConfig
     return { frps: this.options.frps.state(), settings }
   }
 

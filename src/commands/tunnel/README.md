@@ -152,7 +152,7 @@ TCP/UDP request
   -> configured localHost:localPort
 ```
 
-FRP does not see or validate Client Tokens. A server-generated Internal FRP Token is shared by all trusted agents after ycy authentication and is used only for native frpc-to-frps authentication.
+FRP does not see or validate Client Tokens. Client Tokens authenticate a native agent to ycy only. The separate Internal FRP Token is shared with trusted agents after ycy authentication and is used only for native frpc-to-frps authentication. It is generated and persisted by default, or is the configured `YCY_TUNNEL_FRP_TOKEN` when that environment variable is set.
 
 ## Command Contract
 
@@ -191,8 +191,9 @@ The Deployment Administrator is a stable account configured through environment 
 | --- | --- | --- |
 | Username | `YCY_TUNNEL_ADMIN_USER` | `admin` |
 | Password | `YCY_TUNNEL_ADMIN_PASSWORD` | required |
+| FRP authentication token | `YCY_TUNNEL_FRP_TOKEN` | generated and persisted in the server data directory |
 
-Account usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens and compare case-insensitively. Passwords contain 5-256 characters. The UI displays deployment settings but cannot mutate them. Changing a listener, port pool, Deployment Administrator credential, data directory, or advertised endpoint requires restarting the ycy supervisor through Docker or the host service manager.
+Account usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens and compare case-insensitively. Passwords contain 5-256 characters. `YCY_TUNNEL_FRP_TOKEN` must be non-empty when set; use it when the deployment needs a fixed FRP token, including when matching an existing `frps` `auth.token`. It is not exposed in the management UI or API. The UI displays deployment settings but cannot mutate them. Changing a listener, port pool, Deployment Administrator credential, FRP authentication token, data directory, or advertised endpoint requires restarting the ycy supervisor through Docker or the host service manager.
 
 ### Client
 
@@ -449,7 +450,7 @@ bindPort = 7000
 vhostHTTPPort = 8080
 
 auth.method = "token"
-auth.token = "<internal-frp-token>"
+auth.token = "<configured-or-generated-frp-token>"
 
 allowPorts = [ { start = 20000, end = 20100 } ]
 
@@ -468,7 +469,7 @@ user = "ycy_<internal-client-key>"
 loginFailExit = false
 
 auth.method = "token"
-auth.token = "<internal-frp-token>"
+auth.token = "<configured-or-generated-frp-token>"
 
 log.to = "console"
 log.level = "warn"

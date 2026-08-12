@@ -237,6 +237,7 @@ export interface ServerTunnelConfig {
   httpPort: number
   portRange: { start: number, end: number }
   advertiseFrpAddress?: { host: string, port: number }
+  frpToken?: string
   dataDir: string
   adminUser: string
   adminPassword: string

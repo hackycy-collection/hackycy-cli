@@ -89,6 +89,9 @@ export function resolveServerConfig(input: ServerOptionInput, env: NodeJS.Proces
     throw new TunnelError('INVALID_CONFIG', 'Tunnel server address is required')
   const dataDir = path.resolve(String(option(input.dataDir, env, 'YCY_TUNNEL_DATA_DIR', defaultServerDataDirectory(env))))
   const advertised = option(input.advertiseFrpAddr, env, 'YCY_TUNNEL_ADVERTISE_FRP_ADDR', '')
+  const frpToken = env.YCY_TUNNEL_FRP_TOKEN?.trim()
+  if (env.YCY_TUNNEL_FRP_TOKEN !== undefined && !frpToken)
+    throw new TunnelError('INVALID_CONFIG', 'FRP Token must not be empty')
   const adminUser = env.YCY_TUNNEL_ADMIN_USER ?? 'admin'
   if (!/^[\w.-]{1,64}$/.test(adminUser))
     throw new TunnelError('INVALID_CONFIG', 'Environment administrator username must contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens')
@@ -102,6 +105,7 @@ export function resolveServerConfig(input: ServerOptionInput, env: NodeJS.Proces
     httpPort: port(option(input.httpPort, env, 'YCY_TUNNEL_HTTP_PORT', 8080), 'FRP HTTP port'),
     portRange: parsePortRange(String(option(input.portRange, env, 'YCY_TUNNEL_PORT_RANGE', '20000-20100'))),
     ...(String(advertised).trim() ? { advertiseFrpAddress: parseHostPort(String(advertised).trim()) } : {}),
+    ...(frpToken ? { frpToken } : {}),
     dataDir,
     adminUser,
     adminPassword,

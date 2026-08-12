@@ -47,11 +47,12 @@ export async function runTunnelServer(config: ServerTunnelConfig, options: Tunne
       return
     database = openTunnelDatabase(config.dataDir)
     const controlPlane = new TunnelControlPlane(database, config.portRange)
+    const frpToken = config.frpToken ?? controlPlane.internalFrpToken()
     const binaryPath = await (options.ensureFrpsBinary ?? (signal => ensureFrpBinary('frps', { signal })))(shutdown.signal)
     if (shutdown.signal.aborted)
       return
     const frpsConfigPath = path.join(config.dataDir, 'frps.toml')
-    await atomicWrite(frpsConfigPath, renderFrpsConfig(config, controlPlane.internalFrpToken()))
+    await atomicWrite(frpsConfigPath, renderFrpsConfig(config, frpToken))
     if (shutdown.signal.aborted)
       return
     try {
@@ -65,7 +66,7 @@ export async function runTunnelServer(config: ServerTunnelConfig, options: Tunne
     if (shutdown.signal.aborted)
       return
     frps = new FrpSupervisor({ binaryPath, role: 'frps' })
-    gateway = new AgentGateway(controlPlane, config.frpPort, config.advertiseFrpAddress)
+    gateway = new AgentGateway(controlPlane, config.frpPort, config.advertiseFrpAddress, frpToken)
     management = await TunnelManagement.create({ database, controlPlane, gateway, frps, frpsConfigPath, serverConfig: config })
     server = startTunnelHttpServer({ management, gateway, address: config.address, controlPort: config.controlPort })
     await frps.start(frpsConfigPath)

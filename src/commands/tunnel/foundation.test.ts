@@ -28,6 +28,7 @@ describe('tunnel configuration', () => {
       YCY_TUNNEL_FRP_PORT: '7100',
       YCY_TUNNEL_PORT_RANGE: '30000-30010',
       YCY_TUNNEL_ADVERTISE_FRP_ADDR: '[2001:db8::1]:7001',
+      YCY_TUNNEL_FRP_TOKEN: 'configured-frp-token',
       YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret',
     })
     expect(config.controlPort).toBe(7600)
@@ -35,6 +36,7 @@ describe('tunnel configuration', () => {
     expect(config.httpPort).toBe(8080)
     expect(config.portRange).toEqual({ start: 30000, end: 30010 })
     expect(config.advertiseFrpAddress).toEqual({ host: '2001:db8::1', port: 7001 })
+    expect(config.frpToken).toBe('configured-frp-token')
     expect(config.adminUser).toBe('admin')
     expect(resolveServerConfig({}, { YCY_TUNNEL_ADMIN_USER: '-operator', YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret' }).adminUser).toBe('-operator')
   })
@@ -51,6 +53,7 @@ describe('tunnel configuration', () => {
     expect(() => resolveServerConfig({}, { YCY_TUNNEL_ADMIN_PASSWORD: 'tiny' })).toThrow('5-256')
     expect(resolveServerConfig({}, { YCY_TUNNEL_ADMIN_PASSWORD: '12345' }).adminPassword).toBe('12345')
     expect(() => resolveServerConfig({}, { YCY_TUNNEL_ADMIN_USER: ' admin ', YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret' })).toThrow('1-64')
+    expect(() => resolveServerConfig({}, { YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret', YCY_TUNNEL_FRP_TOKEN: '   ' })).toThrow('FRP Token must not be empty')
     expect(() => resolveServerConfig({ controlPort: 7000, frpPort: 7000 }, environment)).toThrow('must be distinct')
     expect(() => resolveServerConfig({ controlPort: 20000 }, environment)).toThrow('must not include')
   })

@@ -30,6 +30,11 @@ services:
       # in an untracked .env file or the invoking shell, never in this file.
       YCY_TUNNEL_ADMIN_PASSWORD: '${YCY_TUNNEL_ADMIN_PASSWORD:?required}'
 
+      # Optional fixed frpc-to-frps authentication token. Set it only when the
+      # deployment must match an existing frps auth.token; otherwise ycy creates
+      # and persists one. Uncomment together with a value in an untracked .env.
+      # YCY_TUNNEL_FRP_TOKEN: '${YCY_TUNNEL_FRP_TOKEN:?set when uncommented}'
+
       # Optional server settings. Uncomment only when changing a default.
       # Any listener or port-pool change also requires matching changes in
       # "ports" below, plus firewall, reverse-proxy, DNS, and client settings.

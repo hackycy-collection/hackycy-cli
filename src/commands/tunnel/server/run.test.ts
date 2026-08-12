@@ -1,5 +1,5 @@
 import type { ServerTunnelConfig } from '../types'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'bun:test'
@@ -68,6 +68,36 @@ describe('Tunnel server lifecycle', () => {
       await expect(running).rejects.toThrow('invalid server configuration')
       expect(verifications).toBe(1)
       expect(await Bun.file(path.join(dataDir, '.lock', 'owner.json')).exists()).toBe(false)
+    }
+    finally {
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
+  test('renders a configured FRP token into the supervised frps configuration', async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-server-token-'))
+    const shutdown = new AbortController()
+    const config: ServerTunnelConfig = {
+      address: '127.0.0.1',
+      controlPort: 17700,
+      frpPort: 17701,
+      httpPort: 17702,
+      portRange: { start: 20200, end: 20202 },
+      frpToken: 'external-frp-token',
+      dataDir,
+      adminUser: 'admin',
+      adminPassword: 'admin-secret',
+    }
+    try {
+      const running = runTunnelServer(config, {
+        signal: shutdown.signal,
+        ensureFrpsBinary: async () => '/frps',
+        verifyFrpsConfiguration: async (_binary, configurationPath) => {
+          expect(await readFile(configurationPath, 'utf8')).toContain('token = "external-frp-token"')
+          shutdown.abort()
+        },
+      })
+      await running
     }
     finally {
       await rm(dataDir, { recursive: true, force: true })

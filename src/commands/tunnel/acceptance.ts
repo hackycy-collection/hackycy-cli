@@ -209,6 +209,7 @@ test('two trusted clients forward HTTP, TCP, and UDP through real pinned FRP pro
       httpPort,
       portRange: { start: transportPort, end: transportPort },
       advertiseFrpAddress: { host: '127.0.0.1', port: frpPort },
+      frpToken: 'acceptance-frp-token',
       dataDir: path.join(root, 'server'),
       adminUser: 'admin',
       adminPassword: 'acceptance-secret',

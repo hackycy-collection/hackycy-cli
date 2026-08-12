@@ -61,6 +61,7 @@ export class AgentGateway {
     private readonly controlPlane: TunnelControlPlane,
     private readonly frpPort: number,
     private readonly advertisedAddress?: { host: string, port: number },
+    private readonly frpToken = controlPlane.internalFrpToken(),
   ) {
     this.unsubscribe = controlPlane.subscribe(event => this.handleControlPlaneEvent(event))
     this.livenessTimer = setInterval(() => this.checkLiveness(), 30_000)
@@ -212,7 +213,7 @@ export class AgentGateway {
       },
       advertisedFrpHost: advertised.host,
       advertisedFrpPort: advertised.port,
-      internalFrpToken: this.controlPlane.internalFrpToken(),
+      internalFrpToken: this.frpToken,
       snapshot: this.controlPlane.snapshot(socket.data.clientId),
     }
     socket.send(JSON.stringify(welcome))
