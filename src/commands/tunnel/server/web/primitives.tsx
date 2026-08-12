@@ -15,25 +15,27 @@ interface Notification {
   id: number
   kind: 'success' | 'error'
   message: string
+  duration: number
 }
 
 interface Feedback {
-  notify: (message: string, kind?: Notification['kind']) => void
+  notify: (message: string, kind?: Notification['kind'], duration?: number) => void
 }
 
 const FeedbackContext = createContext<Feedback | null>(null)
+const DEFAULT_NOTIFICATION_DURATION = 5_000
 
 export function FeedbackProvider({ children }: { children: ReactNode }): React.JSX.Element {
   const [notifications, setNotifications] = useState<Notification[]>([])
   const dismiss = useCallback((id: number): void => setNotifications(values => values.filter(value => value.id !== id)), [])
-  const notify = useCallback((message: string, kind: Notification['kind'] = 'success'): void => {
+  const notify = useCallback((message: string, kind: Notification['kind'] = 'success', duration = DEFAULT_NOTIFICATION_DURATION): void => {
     const id = Date.now() + Math.random()
-    setNotifications(values => [...values.slice(-3), { id, kind, message }])
+    setNotifications(values => [...values.slice(-3), { id, kind, message, duration }])
   }, [])
 
   return (
     <Tooltip.Provider delayDuration={350}>
-      <Toast.Provider duration={3600} swipeDirection="right">
+      <Toast.Provider duration={DEFAULT_NOTIFICATION_DURATION} swipeDirection="right">
         <FeedbackContext value={{ notify }}>
           {children}
           <Toast.Viewport className="notification-region" />
@@ -42,6 +44,7 @@ export function FeedbackProvider({ children }: { children: ReactNode }): React.J
               className={`notification notification-${notification.kind}`}
               key={notification.id}
               open
+              duration={notification.duration}
               onOpenChange={(open) => {
                 if (!open)
                   dismiss(notification.id)
