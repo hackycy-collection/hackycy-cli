@@ -19,7 +19,7 @@ jobs:
       - name: Verify selected ref is a release tag
         if: github.ref_type != 'tag'
         run: |
-          echo 'Run this workflow from a release tag, for example v0.0.62.' >&2
+          echo 'Run this workflow from a release tag, for example v0.0.x.' >&2
           exit 1
 
       - name: Checkout code
