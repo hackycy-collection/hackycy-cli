@@ -3,7 +3,7 @@ import type { ClientView, TunnelImportPreview, TunnelView } from './api'
 import type { TunnelEditorSection, TunnelFormValues } from './tunnel-form'
 import type { ConfirmAction } from './ui'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Pencil, Plus, RefreshCw, RotateCcw, Trash2, Upload } from 'lucide-react'
+import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Pencil, Plus, Power, RefreshCw, RotateCcw, Trash2, Upload } from 'lucide-react'
 import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { Controller, useFieldArray, useForm, useWatch } from 'react-hook-form'
 import { z } from 'zod'
@@ -775,7 +775,7 @@ export function ClientDetailPage({ id, refreshSequence, showOwner }: { id: strin
             </button>
             <IconButton label="Refresh client" loading={refreshing} onClick={() => void load()}><RefreshCw size={15} /></IconButton>
             <button type="button" disabled={pending.has('restart')} aria-busy={pending.has('restart')} onClick={() => void restart()}>
-              {pending.has('restart') ? <Spinner /> : <RefreshCw size={15} />}
+              {pending.has('restart') ? <Spinner /> : <Power size={15} />}
               Restart frpc
             </button>
             <button className="primary" type="button" onClick={() => setEditing(null)}>
