@@ -53,6 +53,8 @@ jobs:
             echo 'tags<<EOF'
             echo "$GHCR_IMAGE:$TAG"
             echo "$TENCENT_IMAGE:$TAG"
+            echo "$GHCR_IMAGE:latest"
+            echo "$TENCENT_IMAGE:latest"
             echo 'EOF'
           } >> "$GITHUB_OUTPUT"
 
