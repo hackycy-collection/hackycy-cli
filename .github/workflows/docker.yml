@@ -37,7 +37,11 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --pattern ycy-linux-x64 \
             --pattern ycy-linux-arm64 \
+            --pattern SHA256SUMS \
             --dir release-assets
+          cd release-assets
+          grep -E ' (ycy-linux-x64|ycy-linux-arm64)$' SHA256SUMS | sha256sum -c -
+          cd ..
           mv release-assets/ycy-linux-x64 docker-artifacts/ycy-linux-x64/ycy-linux-x64
           mv release-assets/ycy-linux-arm64 docker-artifacts/ycy-linux-arm64/ycy-linux-arm64
           chmod +x docker-artifacts/ycy-linux-*/ycy-linux-*
