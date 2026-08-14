@@ -1,6 +1,7 @@
 import { createRoot } from 'react-dom/client'
 import { App } from './app'
 import { FeedbackProvider } from './ui'
+import '../../../../shared/web/admin/styles.css'
 import './styles.css'
 
 const root = document.querySelector('#root')

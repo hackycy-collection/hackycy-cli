@@ -1,10 +1,11 @@
 import type { ReactNode } from 'react'
 import type { CurrentAccount } from './api'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { Gauge, KeyRound, LogOut, Network, Play, Power, RefreshCw, Server, Shield, Square, Users } from 'lucide-react'
+import { CloudCog, Gauge, KeyRound, LogOut, Play, Power, RefreshCw, Server, Shield, Square, Users } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
+import { AdminLoginShell, AdminPage, AdminShell, AdminSummaryStrip, useAdminTheme } from '../../../../shared/web/admin'
 import { AccountsPage } from './account-pages'
 import { ApiError, apiJson, jsonRequest } from './api'
 import { ClientDetailPage, ClientsPage } from './client-pages'
@@ -61,7 +62,7 @@ function currentPage(): Page {
   return { name: 'overview' }
 }
 
-function Login({ onLogin }: { onLogin: () => void }): React.JSX.Element {
+function Login({ theme, onThemeChange, onLogin }: { theme: 'light' | 'dark', onThemeChange: (theme: 'light' | 'dark') => void, onLogin: () => void }): React.JSX.Element {
   const { notify } = useFeedback()
   const form = useForm<LoginValues>({ resolver: zodResolver(loginSchema), defaultValues: { username: '', password: '' } })
   const submitting = form.formState.isSubmitting
@@ -77,12 +78,8 @@ function Login({ onLogin }: { onLogin: () => void }): React.JSX.Element {
     }
   })
   return (
-    <main className="login-shell">
-      <form className="login-panel" aria-busy={submitting} onSubmit={submit}>
-        <div className="brand">
-          <Network size={18} />
-          <span>HACKYCY TUNNEL</span>
-        </div>
+    <AdminLoginShell brand={{ name: 'HACKYCY TUNNEL', icon: CloudCog }} title="Sign in" description="Use your control plane account to continue." theme={theme} onThemeChange={onThemeChange}>
+      <form className="tunnel-login-form" aria-busy={submitting} onSubmit={submit}>
         <FormField label="Username" error={form.formState.errors.username}>
           <input {...form.register('username')} autoComplete="username" autoFocus disabled={submitting} aria-invalid={Boolean(form.formState.errors.username)} />
         </FormField>
@@ -95,7 +92,7 @@ function Login({ onLogin }: { onLogin: () => void }): React.JSX.Element {
           {submitting ? 'Signing in...' : 'Sign in'}
         </button>
       </form>
-    </main>
+    </AdminLoginShell>
   )
 }
 
@@ -137,60 +134,50 @@ function PasswordEditor({ onClose, onChanged }: { onClose: () => void, onChanged
   )
 }
 
-function Layout({ page, account, children, loggingOut, onLogout, onChangePassword }: { page: Page, account: CurrentAccount, children: ReactNode, loggingOut: boolean, onLogout: () => void, onChangePassword: () => void }): React.JSX.Element {
-  const item = (name: Page['name'], path: string, icon: ReactNode, label: string): React.JSX.Element => (
-    <button
-      type="button"
-      className={page.name === name ? 'nav-item active' : 'nav-item'}
-      aria-label={label}
-      aria-current={page.name === name ? 'page' : undefined}
-      title={label}
-      onClick={() => navigate(path)}
-    >
-      {icon}
-      <span>{label}</span>
-    </button>
-  )
+function Layout({ page, account, children, loggingOut, onLogout, onChangePassword, theme, onThemeChange }: { page: Page, account: CurrentAccount, children: ReactNode, loggingOut: boolean, onLogout: () => void, onChangePassword: () => void, theme: 'light' | 'dark', onThemeChange: (theme: 'light' | 'dark') => void }): React.JSX.Element {
+  const navigation = [
+    { id: 'overview', label: 'Overview', icon: Gauge, onSelect: () => navigate('/') },
+    { id: 'clients', label: 'Clients', icon: Users, onSelect: () => navigate('/clients') },
+    ...(account.role === 'admin' ? [{ id: 'accounts', label: 'Accounts', icon: Shield, onSelect: () => navigate('/accounts') }, { id: 'server', label: 'Server', icon: Server, onSelect: () => navigate('/server') }] : []),
+  ]
+  const pageLabel = page.name === 'overview' ? 'Overview' : page.name === 'client' ? 'Client details' : page.name === 'clients' ? 'Clients' : page.name === 'accounts' ? 'Accounts' : 'Server'
+  const breadcrumbs = page.name === 'client'
+    ? [{ label: 'Clients', onSelect: () => navigate('/clients') }, { label: 'Client details' }]
+    : [{ label: 'Tunnel Control' }, { label: pageLabel }]
   return (
-    <div className="app-shell">
-      <aside>
-        <div className="brand">
-          <Network size={17} />
-          <span>HACKYCY TUNNEL</span>
-        </div>
-        <nav>
-          {item('overview', '/', <Gauge size={16} />, 'Overview')}
-          {item('clients', '/clients', <Users size={16} />, 'Clients')}
-          {account.role === 'admin' && item('accounts', '/accounts', <Shield size={16} />, 'Accounts')}
-          {account.role === 'admin' && item('server', '/server', <Server size={16} />, 'Server')}
-        </nav>
-        <div className="account-block">
-          <div className="account-meta">
-            <strong>{account.username}</strong>
-            <span>{account.role}</span>
-          </div>
+    <AdminShell
+      brand={{ name: 'HACKYCY TUNNEL', icon: CloudCog }}
+      navigation={navigation}
+      activeNavigationId={page.name === 'client' ? 'clients' : page.name}
+      account={{ name: account.username, detail: account.role }}
+      accountActions={(
+        <>
           {!account.managedByEnvironment && <IconButton label="Change password" onClick={onChangePassword}><KeyRound size={15} /></IconButton>}
           <IconButton label="Sign out" loading={loggingOut} onClick={onLogout}><LogOut size={15} /></IconButton>
-        </div>
-      </aside>
-      <div className="content-shell">{children}</div>
-    </div>
+        </>
+      )}
+      breadcrumbs={breadcrumbs}
+      onBack={page.name === 'client' ? () => navigate('/clients') : undefined}
+      theme={theme}
+      onThemeChange={onThemeChange}
+    >
+      <AdminPage>{children}</AdminPage>
+    </AdminShell>
   )
 }
 
 function Overview({ state, refreshing, reload }: { state: StateView, refreshing: boolean, reload: () => void }): React.JSX.Element {
-  const metrics = [['Trusted clients', state.counts.clients], ['Connected', state.counts.connected], ['Tunnel definitions', state.counts.tunnels], ['Pending', state.counts.pending], ['Errors', state.counts.errors]] as const
+  const metrics = [
+    { label: 'Trusted clients', value: state.counts.clients },
+    { label: 'Connected', value: state.counts.connected, detail: `${state.counts.clients ? Math.round((state.counts.connected / state.counts.clients) * 100) : 0}% of trusted clients`, tone: 'success' as const },
+    { label: 'Tunnel definitions', value: state.counts.tunnels },
+    { label: 'Pending', value: state.counts.pending, detail: state.counts.pending ? 'Awaiting client sync' : 'No pending changes', tone: state.counts.pending ? 'warning' as const : 'default' as const },
+    { label: 'Errors', value: state.counts.errors, detail: state.counts.errors ? 'Needs intervention' : 'No reported errors', tone: state.counts.errors ? 'danger' as const : 'success' as const },
+  ]
   return (
     <>
       <PageHeader title="Overview" actions={<IconButton label="Refresh overview" loading={refreshing} onClick={reload}><RefreshCw size={15} /></IconButton>} />
-      <section className="metric-grid">
-        {metrics.map(([label, value]) => (
-          <div className="metric" key={label}>
-            <span>{label}</span>
-            <strong>{value}</strong>
-          </div>
-        ))}
-      </section>
+      <AdminSummaryStrip items={metrics} />
       {state.server && (
         <section className="section-band">
           <div className="section-title">
@@ -321,7 +308,23 @@ export function App(): React.JSX.Element {
   const [stateError, setStateError] = useState('')
   const [eventsConnected, setEventsConnected] = useState<boolean>()
   const [loggingOut, setLoggingOut] = useState(false)
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    try {
+      return localStorage.getItem('ycy-tunnel-admin-theme') === 'dark' ? 'dark' : 'light'
+    }
+    catch {
+      return 'light'
+    }
+  })
   const { notify } = useFeedback()
+  useAdminTheme(theme)
+  const changeTheme = (nextTheme: 'light' | 'dark'): void => {
+    setTheme(nextTheme)
+    try {
+      localStorage.setItem('ycy-tunnel-admin-theme', nextTheme)
+    }
+    catch {}
+  }
   const sessionEnded = useCallback(() => {
     setAuthenticated(false)
     setState(undefined)
@@ -406,7 +409,7 @@ export function App(): React.JSX.Element {
     )
   }
   if (!authenticated)
-    return <Login onLogin={() => void load()} />
+    return <Login theme={theme} onThemeChange={changeTheme} onLogin={() => void load()} />
   if (!state) {
     return (
       <div className="boot">
@@ -416,7 +419,7 @@ export function App(): React.JSX.Element {
     )
   }
   return (
-    <Layout page={page} account={state.account} loggingOut={loggingOut} onLogout={() => void logout()} onChangePassword={() => setChangingPassword(true)}>
+    <Layout page={page} account={state.account} loggingOut={loggingOut} onLogout={() => void logout()} onChangePassword={() => setChangingPassword(true)} theme={theme} onThemeChange={changeTheme}>
       {eventsConnected === false && (
         <div className="sync-banner" role="status">
           <Spinner />

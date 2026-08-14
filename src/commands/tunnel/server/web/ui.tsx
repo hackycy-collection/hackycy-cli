@@ -1,6 +1,7 @@
 import type { ReactNode } from 'react'
 import { Check, Clipboard, RefreshCw, XCircle } from 'lucide-react'
 import { useState } from 'react'
+import { AdminPageHeader } from '../../../../shared/web/admin'
 import { ConfirmDialog, FeedbackProvider, IconButton, Spinner, Switch, useFeedback } from './primitives'
 
 export { FeedbackProvider, IconButton, Spinner, Switch, useFeedback }
@@ -78,12 +79,7 @@ export function ConfirmationDialog({ request, onClose }: { request: ConfirmActio
 }
 
 export function PageHeader({ title, actions }: { title: string, actions?: ReactNode }): React.JSX.Element {
-  return (
-    <header className="page-header">
-      <h1>{title}</h1>
-      <div className="actions">{actions}</div>
-    </header>
-  )
+  return <AdminPageHeader title={title} actions={actions} />
 }
 
 export function Token({ value }: { value: string }): React.JSX.Element {
