@@ -78,7 +78,7 @@ function Login({ theme, onThemeChange, onLogin }: { theme: 'light' | 'dark', onT
     }
   })
   return (
-    <AdminLoginShell brand={{ name: 'HACKYCY TUNNEL', icon: CloudCog }} title="Sign in" description="Use your control plane account to continue." theme={theme} onThemeChange={onThemeChange}>
+    <AdminLoginShell brand={{ name: 'HACKYCY TUNNEL', icon: CloudCog }} title="Sign in" theme={theme} onThemeChange={onThemeChange}>
       <form className="tunnel-login-form" aria-busy={submitting} onSubmit={submit}>
         <FormField label="Username" error={form.formState.errors.username}>
           <input {...form.register('username')} autoComplete="username" autoFocus disabled={submitting} aria-invalid={Boolean(form.formState.errors.username)} />
