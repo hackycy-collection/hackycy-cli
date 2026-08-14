@@ -51,20 +51,91 @@ function snapshot(files: SnapshotFile[]): GitChangeSnapshot {
 }
 
 describe('semantic evidence', () => {
-  test('is byte-stable and represents every cluster in P0', () => {
+  test('is byte-stable and preserves the changed directory hierarchy in P0', () => {
     const files = [
       file({ path: 'src/commands/cm/engine.ts' }),
+      file({ path: 'src/commands/cm/engine.test.ts', role: 'test' }),
       file({ path: 'packages/web/src/view.ts' }),
       file({ path: 'docs/cm.md', role: 'docs' }),
+      file({ path: 'package.json', role: 'dependency' }),
     ]
     const first = compileEvidence(snapshot(files), system)
     const second = compileEvidence(snapshot([...files].reverse()), system)
 
     expect(first.text).toBe(second.text)
     expect(first.coverage).toEqual(second.coverage)
-    expect(first.text).toContain('cluster=src/commands/cm')
-    expect(first.text).toContain('cluster=packages/web')
+    expect(first.text).toContain('DIRECTORY_CONTEXT')
+    expect(first.text).toContain('./ files=1 roles=dependency:1 +1 -0')
+    expect(first.text).toContain('      cm/ files=2 roles=source:1,test:1 +2 -0')
+    expect(first.text).toContain('      src/ files=1 roles=source:1 +1 -0')
+    expect(first.text).not.toContain('cluster=')
     expect(first.coverage.representedClusters).toBe(first.coverage.totalClusters)
+  })
+
+  test('keeps a deep changed directory intact instead of using a shortened cluster root', () => {
+    const compiled = compileEvidence(snapshot([
+      file({ path: 'src/commands/git/cm/engine.ts' }),
+      file({ path: 'src/commands/git/cm/run.ts' }),
+    ]), system)
+
+    expect(compiled.text).toContain('DIRECTORY_CONTEXT')
+    expect(compiled.text).toContain('        cm/ files=2 roles=source:2 +2 -0')
+    expect(compiled.text).not.toContain('cluster=src/commands/git')
+  })
+
+  test('records both sides of an inspectable rename without adding protected directories', () => {
+    const renamed = file({
+      path: 'src/new/location.ts',
+      originalPath: 'src/old/location.ts',
+      indexStatus: 'R',
+      stats: { additions: 3, deletions: 1 },
+    })
+    const sensitive = file({
+      path: 'private/.env.production',
+      role: 'sensitive',
+      contentPolicy: 'redacted',
+    })
+    const generated = file({
+      path: 'dist/app.js',
+      role: 'generated',
+      contentPolicy: 'metadata-only',
+    })
+    const compiled = compileEvidence(snapshot([renamed, sensitive, generated]), system)
+
+    expect(compiled.text).toContain('old/ rename-from=1 rename-to=0')
+    expect(compiled.text).toContain('new/ files=1 roles=source:1 +3 -1 rename-from=0 rename-to=1')
+    expect(compiled.text).not.toContain('private/')
+    expect(compiled.text).not.toContain('dist/')
+  })
+
+  test('compacts scattered directories while retaining an atomic directory context within budget', () => {
+    const files = Array.from({ length: 120 }, (_, index) => file({
+      path: `packages/module-${index}/src/deep/feature-${index}.ts`,
+    }))
+    const first = compileEvidence(snapshot(files), system)
+    const second = compileEvidence(snapshot([...files].reverse()), system)
+
+    expect(first.text).toBe(second.text)
+    expect(first.coverage.contentCompacted).toBe(true)
+    expect(first.text).toContain('DIRECTORY_CONTEXT')
+    expect(first.text).toMatch(/packages\/ files=\d+ roles=source:\d+ \+\d+ -0/)
+    expect(estimateInputTokens(system, first.text)).toBeLessThanOrEqual(MAX_INPUT_TOKENS)
+  })
+
+  test('compacts low-weight branches before the primary source directory', () => {
+    const sourceFiles = Array.from({ length: 20 }, (_, index) => file({
+      path: `src/payments/core/handler-${index}.ts`,
+      stats: { additions: 20, deletions: 0 },
+    }))
+    const documentationFiles = Array.from({ length: 120 }, (_, index) => file({
+      path: `docs/guides/topic-${index}/README.md`,
+      role: 'docs',
+    }))
+    const compiled = compileEvidence(snapshot([...sourceFiles, ...documentationFiles]), system)
+
+    expect(compiled.coverage.contentCompacted).toBe(true)
+    expect(compiled.text).toContain('      core/ files=20 roles=source:20 +400 -0')
+    expect(estimateInputTokens(system, compiled.text)).toBeLessThanOrEqual(MAX_INPUT_TOKENS)
   })
 
   test('extracts package, declaration, test, behavior, and import facts by priority', () => {

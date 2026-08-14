@@ -57,8 +57,11 @@ describe('CommitMessageEngine', () => {
     expect(generated.usage?.promptTokens).toBe(123)
     expect(model.inputs).toHaveLength(1)
     expect(model.inputs[0]?.evidence).toContain('s=all f=1')
+    expect(model.inputs[0]?.evidence).toContain('DIRECTORY_CONTEXT')
     expect(model.inputs[0]?.system).toContain('English only; select evidence type: feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert')
     expect(model.inputs[0]?.system).toContain('feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert')
+    expect(model.inputs[0]?.system).toContain('Infer scope from DIRECTORY_CONTEXT')
+    expect(model.inputs[0]?.system).not.toContain('root file stem')
     expect(model.inputs[0]?.maxOutputTokens).toBe(80)
   })
 

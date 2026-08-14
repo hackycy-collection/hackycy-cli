@@ -19,7 +19,7 @@ Use `--profile <name>` to choose a configured provider profile and `--lang en|zh
 
 ## Generation Guarantees
 
-The command makes one model request per generation. It compiles structured semantic evidence from the complete Git scope instead of truncating a raw diff. Evidence prioritizes scope totals, renames, dependency and configuration changes, public declarations, tests, hunk context, and representative behavior across every change cluster. Facts are included whole or omitted whole.
+The command makes one model request per generation. It compiles structured semantic evidence from the complete Git scope instead of truncating a raw diff. Evidence includes an independent tree of changed, inspectable directories so the model can infer the affected module from nested paths rather than a file stem. The tree is retained when evidence is compacted; low-priority facts are reduced first. Evidence also prioritizes scope totals, renames, dependency and configuration changes, public declarations, tests, hunk context, and representative behavior across every change cluster. Facts are included whole or omitted whole.
 
 Evidence budgeting never changes the files that can be selected, staged, committed, or pushed. `--stage` always lists the full uncommitted file set, including repositories with more than 100 changed files.
 
@@ -29,7 +29,7 @@ The local evidence target is about 2,000 input tokens with a 3,000-token ceiling
 
 ## Content Protection
 
-Sensitive paths such as `.env`, private keys, and certificates, plus binary files, lockfiles, generated output, and large files, remain in the Git scope but are metadata-only or redacted in model evidence. Their contents can contribute to the local snapshot hash but are never sent to the provider. If an extractor cannot inspect one text file, the command falls back to its path, status, hunk context, and change statistics.
+Sensitive paths such as `.env`, private keys, and certificates, plus binary files, lockfiles, generated output, and large files, remain in the Git scope but are metadata-only or redacted in model evidence. They do not add directory entries. Their contents can contribute to the local snapshot hash but are never sent to the provider. If an extractor cannot inspect one text file, the command falls back to its path, status, hunk context, and change statistics.
 
 ## Evaluation
 

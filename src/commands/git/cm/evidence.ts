@@ -10,9 +10,26 @@ import path from 'node:path'
 export const TARGET_INPUT_TOKENS = 2_000
 export const MAX_INPUT_TOKENS = 3_000
 
+const DIRECTORY_CONTEXT_TOKEN_BUDGET = 600
+
 interface ChangeCluster {
   key: string
   files: SnapshotFile[]
+}
+
+interface DirectorySummary {
+  path: string
+  files: number
+  roles: Map<FileRole, number>
+  additions: number
+  deletions: number
+  renamedFrom: number
+  renamedTo: number
+}
+
+interface DirectoryContext {
+  lines: string[]
+  compacted: boolean
 }
 
 type CommitTypeHint = 'build' | 'chore' | 'ci' | 'docs' | 'style' | 'test'
@@ -46,6 +63,159 @@ function directory(filePath: string): string {
   const normalized = filePath.replaceAll('\\', '/')
   const separator = normalized.lastIndexOf('/')
   return separator === -1 ? '.' : normalized.slice(0, separator)
+}
+
+function directoryParent(directoryPath: string): string | undefined {
+  if (directoryPath === '.')
+    return undefined
+  const separator = directoryPath.lastIndexOf('/')
+  return separator === -1 ? '.' : directoryPath.slice(0, separator)
+}
+
+function directoryParts(directoryPath: string): string[] {
+  return directoryPath === '.' ? [] : directoryPath.split('/')
+}
+
+function createDirectorySummary(directoryPath: string): DirectorySummary {
+  return {
+    path: directoryPath,
+    files: 0,
+    roles: new Map(),
+    additions: 0,
+    deletions: 0,
+    renamedFrom: 0,
+    renamedTo: 0,
+  }
+}
+
+function addDirectoryFile(summary: DirectorySummary, file: SnapshotFile, rename: 'from' | 'to' | undefined = undefined): void {
+  summary.files += 1
+  summary.roles.set(file.role, (summary.roles.get(file.role) ?? 0) + 1)
+  summary.additions += file.stats.additions
+  summary.deletions += file.stats.deletions
+  if (rename === 'from')
+    summary.renamedFrom += 1
+  if (rename === 'to')
+    summary.renamedTo += 1
+}
+
+function addRenameSource(summary: DirectorySummary): void {
+  summary.renamedFrom += 1
+}
+
+function mergeDirectorySummary(target: DirectorySummary, source: DirectorySummary): void {
+  target.files += source.files
+  for (const [role, count] of source.roles)
+    target.roles.set(role, (target.roles.get(role) ?? 0) + count)
+  target.additions += source.additions
+  target.deletions += source.deletions
+  target.renamedFrom += source.renamedFrom
+  target.renamedTo += source.renamedTo
+}
+
+function directoryWeight(summary: DirectorySummary): number {
+  const sourceFiles = (summary.roles.get('source') ?? 0) + (summary.roles.get('test') ?? 0)
+  const supportingFiles = summary.files - sourceFiles
+  return sourceFiles * 4 + supportingFiles + Math.ceil((summary.additions + summary.deletions) / 100)
+}
+
+function directoryRoleSummary(summary: DirectorySummary): string {
+  return [...summary.roles]
+    .toSorted(([left], [right]) => left.localeCompare(right))
+    .map(([role, count]) => `${role}:${count}`)
+    .join(',')
+}
+
+function renderDirectorySummary(summary: DirectorySummary): string {
+  const pathLabel = summary.path === '.' ? './' : `${summary.path.slice(summary.path.lastIndexOf('/') + 1)}/`
+  const details = summary.files > 0
+    ? ` files=${summary.files} roles=${directoryRoleSummary(summary)} +${summary.additions} -${summary.deletions}`
+    : ''
+  const renames = summary.renamedFrom || summary.renamedTo
+    ? ` rename-from=${summary.renamedFrom} rename-to=${summary.renamedTo}`
+    : ''
+  return `${pathLabel}${details}${renames}`.trimEnd()
+}
+
+function renderDirectoryLines(summaries: Map<string, DirectorySummary>): string[] {
+  const paths = new Set<string>()
+  for (const directoryPath of summaries.keys()) {
+    let current: string | undefined = directoryPath
+    while (current !== undefined) {
+      paths.add(current)
+      current = directoryParent(current)
+    }
+  }
+  return [...paths]
+    .toSorted((left, right) => directoryParts(left).length - directoryParts(right).length || left.localeCompare(right))
+    .map((directoryPath) => {
+      const indent = '  '.repeat(directoryParts(directoryPath).length)
+      const summary = summaries.get(directoryPath)
+      const segment = directoryPath === '.' ? './' : `${directoryPath.slice(directoryPath.lastIndexOf('/') + 1)}/`
+      return `${indent}${summary ? renderDirectorySummary(summary) : segment}`
+    })
+}
+
+function directoryContextTokens(lines: string[]): number {
+  return estimateTextTokens(lines.join('\n'))
+}
+
+function chooseDirectoryMerge(summaries: Map<string, DirectorySummary>): { parent: string, children: string[] } | undefined {
+  const candidates: Array<{ parent: string, child: string, weight: number, depth: number }> = []
+  for (const directoryPath of summaries.keys()) {
+    const parent = directoryParent(directoryPath)
+    if (parent === undefined)
+      continue
+    candidates.push({
+      parent,
+      child: directoryPath,
+      weight: directoryWeight(summaries.get(directoryPath)!),
+      depth: directoryParts(parent).length,
+    })
+  }
+  candidates.sort((left, right) => left.weight - right.weight || right.depth - left.depth || left.parent.localeCompare(right.parent) || left.child.localeCompare(right.child))
+  const selected = candidates[0]
+  if (!selected)
+    return undefined
+  return { parent: selected.parent, children: [selected.child] }
+}
+
+function compactDirectorySummaries(summaries: Map<string, DirectorySummary>): boolean {
+  let compacted = false
+  while (directoryContextTokens(['DIRECTORY_CONTEXT', ...renderDirectoryLines(summaries)]) > DIRECTORY_CONTEXT_TOKEN_BUDGET) {
+    const merge = chooseDirectoryMerge(summaries)
+    if (!merge)
+      break
+    const parent = summaries.get(merge.parent) ?? createDirectorySummary(merge.parent)
+    for (const child of merge.children) {
+      mergeDirectorySummary(parent, summaries.get(child)!)
+      summaries.delete(child)
+    }
+    summaries.set(merge.parent, parent)
+    compacted = true
+  }
+  return compacted
+}
+
+function buildDirectoryContext(snapshot: GitChangeSnapshot): DirectoryContext {
+  const summaries = new Map<string, DirectorySummary>()
+  const inspectable = snapshot.files.filter(file => file.contentPolicy === 'inspect')
+  for (const file of inspectable) {
+    const targetDirectory = directory(file.path)
+    const target = summaries.get(targetDirectory) ?? createDirectorySummary(targetDirectory)
+    addDirectoryFile(target, file, file.originalPath ? 'to' : undefined)
+    summaries.set(targetDirectory, target)
+    if (file.originalPath) {
+      const originalDirectory = directory(file.originalPath)
+      const original = summaries.get(originalDirectory) ?? createDirectorySummary(originalDirectory)
+      addRenameSource(original)
+      summaries.set(originalDirectory, original)
+    }
+  }
+  const compacted = compactDirectorySummaries(summaries)
+  const lines = ['DIRECTORY_CONTEXT']
+  lines.push(...(summaries.size > 0 ? renderDirectoryLines(summaries) : ['(no inspectable changed directories)']))
+  return { lines, compacted }
 }
 
 function moduleRoot(filePath: string): string | undefined {
@@ -308,14 +478,6 @@ export function extractEvidenceFacts(clusters: ChangeCluster[]): EvidenceFact[] 
       || left.id.localeCompare(right.id))
 }
 
-function renderCluster(cluster: ChangeCluster): string {
-  const stats = cluster.files.reduce((total, file) => ({
-    additions: total.additions + file.stats.additions,
-    deletions: total.deletions + file.stats.deletions,
-  }), { additions: 0, deletions: 0 })
-  return `cluster=${cluster.key} files=${cluster.files.length} +${stats.additions} -${stats.deletions}`
-}
-
 function protectionCounts(snapshot: GitChangeSnapshot): { metadataOnly: number, redacted: number } {
   return {
     metadataOnly: snapshot.files.filter(file => file.contentPolicy === 'metadata-only').length,
@@ -386,28 +548,11 @@ function renderScope(snapshot: GitChangeSnapshot, clusters: ChangeCluster[], con
   return typeHint ? `${summary} type=${typeHint}` : summary
 }
 
-function renderP0(snapshot: GitChangeSnapshot, clusters: ChangeCluster[], compact = false, concise = false): string[] {
-  if (concise) {
-    return [
-      renderScope(snapshot, clusters, true),
-      `c=${clusters.map(cluster => cluster.key).join(' ')}`,
-    ]
-  }
-  const lines = [
-    renderScope(snapshot, clusters),
+function renderP0(snapshot: GitChangeSnapshot, clusters: ChangeCluster[], directoryContext: DirectoryContext, concise = false): string[] {
+  return [
+    renderScope(snapshot, clusters, concise),
+    ...directoryContext.lines,
   ]
-  if (compact) {
-    const prefixes = new Map<string, number>()
-    for (const cluster of clusters) {
-      const prefix = cluster.key.split('/', 1)[0] ?? '.'
-      prefixes.set(prefix, (prefixes.get(prefix) ?? 0) + cluster.files.length)
-    }
-    lines.push(`c-summary ${[...prefixes].toSorted(([left], [right]) => left.localeCompare(right)).map(([key, count]) => `${key}=${count}`).join(' ')}`)
-  }
-  else {
-    lines.push(...clusters.map(renderCluster))
-  }
-  return lines
 }
 
 function sortClustersForFacts(clusters: ChangeCluster[], facts: EvidenceFact[]): ChangeCluster[] {
@@ -472,19 +617,11 @@ function renderFact(item: EvidenceFact, concise = false): string {
 export function compileEvidence(snapshot: GitChangeSnapshot, system: string): CompiledEvidence {
   const clusters = buildChangeClusters(snapshot)
   const facts = extractEvidenceFacts(clusters)
+  const directoryContext = buildDirectoryContext(snapshot)
   const conciseP0 = snapshot.files.length <= 2
   const evidenceHeader = conciseP0 ? [] : ['COMMIT_EVIDENCE v1']
   const renderSelected = (item: EvidenceFact): string => renderFact(item, conciseP0)
-  let p0 = [...evidenceHeader, ...renderP0(snapshot, clusters, false, conciseP0)]
-  let p0Compacted = false
-  if (estimateInputTokens(system, p0.join('\n')) > MAX_INPUT_TOKENS) {
-    p0 = [...evidenceHeader, ...renderP0(snapshot, clusters, true, conciseP0)]
-    p0Compacted = true
-  }
-  while (estimateInputTokens(system, p0.join('\n')) > MAX_INPUT_TOKENS && p0.length > 4) {
-    p0.splice(3, 1)
-    p0Compacted = true
-  }
+  const p0 = [...evidenceHeader, ...renderP0(snapshot, clusters, directoryContext, conciseP0)]
 
   const selected: EvidenceFact[] = []
   const orderedClusters = sortClustersForFacts(clusters, facts)
@@ -521,7 +658,7 @@ export function compileEvidence(snapshot: GitChangeSnapshot, system: string): Co
     totalClusters: clusters.length,
     includedFacts: selected.length,
     omittedFacts: facts.length - selected.length,
-    contentCompacted: p0Compacted || selected.length < facts.length,
+    contentCompacted: directoryContext.compacted || selected.length < facts.length,
   }
   return { text, coverage, facts }
 }
