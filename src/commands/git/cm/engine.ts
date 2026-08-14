@@ -4,8 +4,6 @@ import { captureGitSnapshot } from './changes'
 import { compileEvidence } from './evidence'
 import { CommitMessageError } from './types'
 
-const MAX_SUBJECT_OUTPUT_TOKENS = 80
-const MAX_BODY_OUTPUT_TOKENS = 200
 const COMMIT_TYPES = new Set([
   'feat',
   'fix',
@@ -79,7 +77,6 @@ export function createCommitMessageEngine(dependencies: { model: CommitMessageMo
         response = await dependencies.model.generate({
           system,
           evidence: compiled.text,
-          maxOutputTokens: input.includeBody ? MAX_BODY_OUTPUT_TOKENS : MAX_SUBJECT_OUTPUT_TOKENS,
         })
       }
       catch (error) {

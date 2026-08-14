@@ -7,8 +7,8 @@ import type {
 } from './types'
 import path from 'node:path'
 
-export const TARGET_INPUT_TOKENS = 2_000
-export const MAX_INPUT_TOKENS = 3_000
+export const TARGET_LOCAL_PROMPT_TOKENS = 3_000
+export const MAX_LOCAL_PROMPT_TOKENS = 4_000
 
 const DIRECTORY_CONTEXT_TOKEN_BUDGET = 600
 
@@ -52,7 +52,7 @@ function estimateTextTokens(text: string): number {
   return Math.ceil(ascii / 2) + nonAscii
 }
 
-export function estimateInputTokens(system: string, evidence: string): number {
+export function estimateLocalPromptTokens(system: string, evidence: string): number {
   return estimateTextTokens(JSON.stringify([
     { role: 'system', content: system },
     { role: 'user', content: evidence },
@@ -281,14 +281,6 @@ function roleRank(role: FileRole): number {
   return 5
 }
 
-function statusToken(file: SnapshotFile): string {
-  if (file.indexStatus === '?' && file.worktreeStatus === '?')
-    return 'A'
-  if (file.indexStatus === 'R' || file.indexStatus === 'C')
-    return file.indexStatus
-  return `${file.indexStatus}${file.worktreeStatus}`.trim() || 'M'
-}
-
 function fact(
   priority: EvidenceFact['priority'],
   clusterKey: string,
@@ -346,9 +338,9 @@ function packageFacts(file: SnapshotFile, clusterKey: string): EvidenceFact[] {
   if (!manifest)
     return []
   if (!manifest.before)
-    return [fact(1, clusterKey, file.path, 'package-added', `package manifest added ${file.path}`)]
+    return [fact(1, clusterKey, file.path, 'package-added', 'package manifest added')]
   if (!manifest.after)
-    return [fact(1, clusterKey, file.path, 'package-removed', `package manifest removed ${file.path}`)]
+    return [fact(1, clusterKey, file.path, 'package-removed', 'package manifest removed')]
   try {
     const before = JSON.parse(manifest.before) as Record<string, unknown>
     const after = JSON.parse(manifest.after) as Record<string, unknown>
@@ -393,10 +385,10 @@ function packageFacts(file: SnapshotFile, clusterKey: string): EvidenceFact[] {
         ))
       }
     }
-    return facts.length > 0 ? facts : [fact(1, clusterKey, file.path, 'package-generic', `package manifest changed ${file.path}`)]
+    return facts.length > 0 ? facts : [fact(1, clusterKey, file.path, 'package-generic', 'package manifest changed')]
   }
   catch {
-    return [fact(1, clusterKey, file.path, 'package-unparsed', `package manifest changed ${file.path}`)]
+    return [fact(1, clusterKey, file.path, 'package-unparsed', 'package manifest changed')]
   }
 }
 
@@ -412,7 +404,7 @@ export function extractEvidenceFacts(clusters: ChangeCluster[]): EvidenceFact[] 
         continue
       }
       if (file.originalPath && (file.indexStatus === 'R' || file.indexStatus === 'C')) {
-        facts.push(fact(1, cluster.key, file.path, 'rename', `${file.indexStatus === 'R' ? 'rename' : 'copy'} ${file.originalPath} -> ${file.path}`))
+        facts.push(fact(1, cluster.key, file.path, 'rename', `${file.indexStatus === 'R' ? 'rename' : 'copy'} from ${file.originalPath}`))
       }
       let includedHeading = false
       let includedDeclaration = false
@@ -464,7 +456,7 @@ export function extractEvidenceFacts(clusters: ChangeCluster[]): EvidenceFact[] 
         }
       }
       if (!facts.slice(factsBeforeFile).some(item => item.priority < 3))
-        facts.push(fact(1, cluster.key, file.path, 'file', `file changed ${file.path}`))
+        facts.push(fact(1, cluster.key, file.path, 'file', 'file changed'))
     }
   }
   const unique = new Map<string, EvidenceFact>()
@@ -520,37 +512,16 @@ function commitTypeHint(snapshot: GitChangeSnapshot): CommitTypeHint | undefined
   return undefined
 }
 
-function renderProtection(snapshot: GitChangeSnapshot): string {
-  const { metadataOnly, redacted } = protectionCounts(snapshot)
-  return `protected metadata-only=${metadataOnly} redacted=${redacted}`
-}
-
-function renderScope(snapshot: GitChangeSnapshot, clusters: ChangeCluster[], concise = false): string {
-  const states = new Map<string, number>()
-  for (const file of snapshot.files) {
-    const status = statusToken(file)
-    states.set(status, (states.get(status) ?? 0) + 1)
-  }
-  const stateSummary = [...states]
-    .toSorted(([left], [right]) => left.localeCompare(right))
-    .map(([status, count]) => `${status}=${count}`)
-    .join(' ')
-  const capture = snapshot.scope === 'staged' ? 'index' : 'all-uncommitted'
+function renderScope(snapshot: GitChangeSnapshot): string {
   const typeHint = commitTypeHint(snapshot)
-  if (concise) {
-    const { metadataOnly, redacted } = protectionCounts(snapshot)
-    const conciseStates = snapshot.files.length === 1 ? [...states.keys()][0] : stateSummary
-    const protection = metadataOnly === 0 && redacted === 0 ? 'p=0' : `p=${metadataOnly}/${redacted}`
-    const summary = `s=${capture === 'all-uncommitted' ? 'all' : capture} f=${snapshot.files.length} +${snapshot.totals.additions} -${snapshot.totals.deletions} c=${clusters.length} ${conciseStates} ${protection}`
-    return typeHint ? `${summary} type=${typeHint}` : summary
-  }
-  const summary = `git-change-set=${capture} files=${snapshot.files.length} +${snapshot.totals.additions} -${snapshot.totals.deletions} clusters=${clusters.length} status=${stateSummary} ${renderProtection(snapshot)}`
+  const { metadataOnly, redacted } = protectionCounts(snapshot)
+  const summary = `CHANGE_SUMMARY files=${snapshot.files.length} +${snapshot.totals.additions} -${snapshot.totals.deletions} protected=${metadataOnly}/${redacted}`
   return typeHint ? `${summary} type=${typeHint}` : summary
 }
 
-function renderP0(snapshot: GitChangeSnapshot, clusters: ChangeCluster[], directoryContext: DirectoryContext, concise = false): string[] {
+function renderP0(snapshot: GitChangeSnapshot, directoryContext: DirectoryContext): string[] {
   return [
-    renderScope(snapshot, clusters, concise),
+    renderScope(snapshot),
     ...directoryContext.lines,
   ]
 }
@@ -610,22 +581,46 @@ function orderFactsForCluster(facts: EvidenceFact[]): EvidenceFact[] {
   return ordered
 }
 
-function renderFact(item: EvidenceFact, concise = false): string {
-  return concise ? `${item.filePath}: ${item.text}` : `  ${item.filePath}: ${item.text}`
+function renderSelectedFacts(facts: EvidenceFact[]): string[] {
+  if (facts.length === 0)
+    return []
+
+  const directories = new Map<string, Map<string, EvidenceFact[]>>()
+  for (const item of facts) {
+    const directoryPath = directory(item.filePath)
+    const files = directories.get(directoryPath) ?? new Map<string, EvidenceFact[]>()
+    const fileFacts = files.get(item.filePath) ?? []
+    fileFacts.push(item)
+    files.set(item.filePath, fileFacts)
+    directories.set(directoryPath, files)
+  }
+
+  const lines = ['FACTS']
+  for (const [directoryPath, files] of [...directories].toSorted(([left], [right]) => left.localeCompare(right))) {
+    lines.push(directoryPath === '.' ? './' : `${directoryPath}/`)
+    for (const [filePath, fileFacts] of [...files].toSorted(([left], [right]) => left.localeCompare(right))) {
+      const fileName = filePath.slice(directoryPath === '.' ? 0 : directoryPath.length + 1)
+      if (fileFacts.length === 1) {
+        lines.push(`  ${fileName}: ${fileFacts[0]!.text}`)
+        continue
+      }
+      lines.push(`  ${fileName}:`)
+      lines.push(...fileFacts.map(item => `    ${item.text}`))
+    }
+  }
+  return lines
 }
 
 export function compileEvidence(snapshot: GitChangeSnapshot, system: string): CompiledEvidence {
   const clusters = buildChangeClusters(snapshot)
   const facts = extractEvidenceFacts(clusters)
   const directoryContext = buildDirectoryContext(snapshot)
-  const conciseP0 = snapshot.files.length <= 2
-  const evidenceHeader = conciseP0 ? [] : ['COMMIT_EVIDENCE v1']
-  const renderSelected = (item: EvidenceFact): string => renderFact(item, conciseP0)
-  const p0 = [...evidenceHeader, ...renderP0(snapshot, clusters, directoryContext, conciseP0)]
+  const p0 = renderP0(snapshot, directoryContext)
 
   const selected: EvidenceFact[] = []
   const orderedClusters = sortClustersForFacts(clusters, facts)
-  const fits = (next: EvidenceFact[]): boolean => estimateInputTokens(system, [...p0, ...next.map(renderSelected)].join('\n')) <= MAX_INPUT_TOKENS
+  const renderEvidence = (items: EvidenceFact[]): string => [...p0, ...renderSelectedFacts(items)].join('\n')
+  const fits = (next: EvidenceFact[]): boolean => estimateLocalPromptTokens(system, renderEvidence(next)) <= MAX_LOCAL_PROMPT_TOKENS
   const priorities = [1, 2, 3] as const
   for (const priority of priorities) {
     const pending = new Map<string, EvidenceFact[]>()
@@ -640,10 +635,7 @@ export function compileEvidence(snapshot: GitChangeSnapshot, system: string): Co
         const item = queue.shift()
         if (!item)
           continue
-        const aboveTarget = estimateInputTokens(
-          system,
-          [...p0, ...selected.map(renderSelected)].join('\n'),
-        ) >= TARGET_INPUT_TOKENS
+        const aboveTarget = estimateLocalPromptTokens(system, renderEvidence(selected)) >= TARGET_LOCAL_PROMPT_TOKENS
         if (aboveTarget && priority > 1)
           continue
         if (fits([...selected, item]))
@@ -651,9 +643,9 @@ export function compileEvidence(snapshot: GitChangeSnapshot, system: string): Co
       }
     }
   }
-  const text = [...p0, ...selected.map(renderSelected)].join('\n')
+  const text = renderEvidence(selected)
   const coverage: EvidenceCoverage = {
-    estimatedInputTokens: estimateInputTokens(system, text),
+    estimatedLocalPromptTokens: estimateLocalPromptTokens(system, text),
     representedClusters: clusters.length,
     totalClusters: clusters.length,
     includedFacts: selected.length,

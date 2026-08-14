@@ -14,7 +14,7 @@ const profile: ResolvedCmProfile = {
 }
 
 const completeEvidence = {
-  estimatedInputTokens: 456,
+  estimatedLocalPromptTokens: 456,
   representedClusters: 1,
   totalClusters: 1,
   includedFacts: 4,
@@ -39,8 +39,8 @@ describe('formatGeneratedMessage', () => {
       'feat(cm): streamline generated output',
       '',
       'Profile: deepseek (deepseek-chat)',
-      'Tokens: 1,234 prompt / 42 completion / 1,276 total',
-      'Evidence: ~456 input tokens / 1 of 1 clusters / 4 of 4 facts',
+      'Provider tokens: 1,234 prompt / 42 completion / 1,276 total',
+      'Local evidence estimate: ~456 serialized prompt tokens / 1 of 1 clusters / 4 of 4 facts',
     ].join('\n'))
     expect(output).not.toContain('Changed files')
     expect(output).not.toContain('compacted semantic evidence')
@@ -55,7 +55,7 @@ describe('formatGeneratedMessage', () => {
     ))
 
     expect(output).toContain('fix(cm): preserve commit body\n\nKeep the generated context intact.')
-    expect(output).toContain('Tokens: unavailable')
+    expect(output).toContain('Provider tokens: unavailable')
   })
 
   test('shows unknown partial usage values and semantic evidence compaction', () => {
@@ -64,7 +64,7 @@ describe('formatGeneratedMessage', () => {
       profile,
       { completionTokens: 42 },
       {
-        estimatedInputTokens: 2_000,
+        estimatedLocalPromptTokens: 2_000,
         representedClusters: 2,
         totalClusters: 3,
         includedFacts: 18,
@@ -73,8 +73,8 @@ describe('formatGeneratedMessage', () => {
       },
     ))
 
-    expect(output).toContain('Tokens: unknown prompt / 42 completion / unknown total')
-    expect(output).toContain('Evidence: ~2,000 input tokens / 2 of 3 clusters / 18 of 31 facts')
+    expect(output).toContain('Provider tokens: unknown prompt / 42 completion / unknown total')
+    expect(output).toContain('Local evidence estimate: ~2,000 serialized prompt tokens / 2 of 3 clusters / 18 of 31 facts')
     expect(output).toContain('Commit scope: 3 clusters represented with compacted semantic evidence.')
     expect(output).toContain('This does not affect which files are committed.')
   })

@@ -56,13 +56,12 @@ describe('CommitMessageEngine', () => {
     expect(generated.fileCount).toBe(1)
     expect(generated.usage?.promptTokens).toBe(123)
     expect(model.inputs).toHaveLength(1)
-    expect(model.inputs[0]?.evidence).toContain('s=all f=1')
+    expect(model.inputs[0]?.evidence).toContain('CHANGE_SUMMARY files=1')
     expect(model.inputs[0]?.evidence).toContain('DIRECTORY_CONTEXT')
     expect(model.inputs[0]?.system).toContain('English only; select evidence type: feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert')
     expect(model.inputs[0]?.system).toContain('feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert')
     expect(model.inputs[0]?.system).toContain('Infer scope from DIRECTORY_CONTEXT')
     expect(model.inputs[0]?.system).not.toContain('root file stem')
-    expect(model.inputs[0]?.maxOutputTokens).toBe(80)
   })
 
   test('returns stable errors for no changes, model failures, and invalid output', async () => {
@@ -131,9 +130,8 @@ describe('CommitMessageEngine', () => {
     })
 
     expect(generated.evidence.contentCompacted).toBe(false)
-    expect(model.inputs[0]?.evidence).toContain('p=0/1')
+    expect(model.inputs[0]?.evidence).toContain('protected=0/1')
     expect(model.inputs[0]?.evidence).not.toContain('do-not-send-this-secret')
-    expect(model.inputs[0]?.maxOutputTokens).toBe(200)
     await assertGitSnapshotCurrent(repoRoot, 'all-uncommitted', generated.snapshotId)
   })
 })

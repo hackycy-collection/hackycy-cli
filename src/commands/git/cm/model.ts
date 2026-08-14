@@ -2,10 +2,11 @@ import type { ChatCompletionTokenUsage } from '../../../config/client'
 import type { ResolvedCmProfile } from '../../../config/types'
 import { createChatCompletionWithUsage } from '../../../config/client'
 
+const COMMIT_MESSAGE_MAX_OUTPUT_TOKENS = 4_096
+
 export interface CommitMessageModelInput {
   system: string
   evidence: string
-  maxOutputTokens: number
 }
 
 export interface CommitMessageModelOutput {
@@ -23,7 +24,7 @@ export function createOpenAICompatibleCommitMessageModel(profile: ResolvedCmProf
       return createChatCompletionWithUsage(profile, [
         { role: 'system', content: input.system },
         { role: 'user', content: input.evidence },
-      ], { maxOutputTokens: Math.min(profile.maxOutputTokens, input.maxOutputTokens) })
+      ], { maxOutputTokens: COMMIT_MESSAGE_MAX_OUTPUT_TOKENS })
     },
   }
 }

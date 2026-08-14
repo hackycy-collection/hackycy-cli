@@ -21,7 +21,7 @@ interface EvaluationResult {
   message?: string
   modelOutput?: string
   usage?: ChatCompletionTokenUsage
-  estimatedInputTokens?: number
+  estimatedLocalPromptTokens?: number
   fileCount?: number
   evidence?: string
   latencyMs?: number
@@ -173,7 +173,6 @@ async function createLegacyResult(repoRoot: string, entry: CorpusEntry, model: C
     const result = await model.generate({
       system: 'Return only a concise Angular commit message in type(scope): subject format.',
       evidence,
-      maxOutputTokens: 80,
     })
     return {
       message: result.content,
@@ -222,7 +221,7 @@ async function createSemanticResult(
         message: result.message,
         modelOutput,
         usage: result.usage,
-        estimatedInputTokens: result.evidence.estimatedInputTokens,
+        estimatedLocalPromptTokens: result.evidence.estimatedLocalPromptTokens,
         fileCount,
         evidence: modelInputs[0]?.evidence,
         latencyMs: Math.round(performance.now() - startedAt),
@@ -265,7 +264,7 @@ async function main(): Promise<void> {
     samples,
     notes: [
       'expectedType, expectedScope, and referenceIntent are seed labels parsed from existing subjects and require human review before accuracy claims.',
-      'Provider usage is authoritative. estimatedInputTokens is a local semantic-evidence estimate only.',
+      'Provider usage is authoritative. estimatedLocalPromptTokens is a local serialized-prompt estimate only.',
       'Both legacy and semantic rows issue one provider request per sample when evaluation mode is used.',
     ],
   }

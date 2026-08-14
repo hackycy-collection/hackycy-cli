@@ -33,16 +33,16 @@ function formatTokenCount(value: number | undefined): string {
 
 function formatTokenUsage(usage: ChatCompletionTokenUsage | undefined): string {
   if (!usage)
-    return 'Tokens: unavailable'
+    return 'Provider tokens: unavailable'
   return [
-    `Tokens: ${formatTokenCount(usage.promptTokens)} prompt`,
+    `Provider tokens: ${formatTokenCount(usage.promptTokens)} prompt`,
     `${formatTokenCount(usage.completionTokens)} completion`,
     `${formatTokenCount(usage.totalTokens)} total`,
   ].join(' / ')
 }
 
 function formatEvidenceCoverage(evidence: EvidenceCoverage): string {
-  return `Evidence: ~${evidence.estimatedInputTokens.toLocaleString('en-US')} input tokens / ${evidence.representedClusters} of ${evidence.totalClusters} clusters / ${evidence.includedFacts} of ${evidence.includedFacts + evidence.omittedFacts} facts`
+  return `Local evidence estimate: ~${evidence.estimatedLocalPromptTokens.toLocaleString('en-US')} serialized prompt tokens / ${evidence.representedClusters} of ${evidence.totalClusters} clusters / ${evidence.includedFacts} of ${evidence.includedFacts + evidence.omittedFacts} facts`
 }
 
 export function formatGeneratedMessage(

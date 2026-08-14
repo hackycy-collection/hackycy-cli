@@ -3,9 +3,9 @@ import { describe, expect, test } from 'bun:test'
 import {
   buildChangeClusters,
   compileEvidence,
-  estimateInputTokens,
+  estimateLocalPromptTokens,
   extractEvidenceFacts,
-  MAX_INPUT_TOKENS,
+  MAX_LOCAL_PROMPT_TOKENS,
 } from './evidence'
 
 const system = 'Return a concise Angular commit message.'
@@ -65,10 +65,12 @@ describe('semantic evidence', () => {
     expect(first.text).toBe(second.text)
     expect(first.coverage).toEqual(second.coverage)
     expect(first.text).toContain('DIRECTORY_CONTEXT')
+    expect(first.text).toContain('CHANGE_SUMMARY files=5 +5 -0 protected=0/0')
     expect(first.text).toContain('./ files=1 roles=dependency:1 +1 -0')
     expect(first.text).toContain('      cm/ files=2 roles=source:1,test:1 +2 -0')
     expect(first.text).toContain('      src/ files=1 roles=source:1 +1 -0')
     expect(first.text).not.toContain('cluster=')
+    expect(first.text).not.toContain('COMMIT_EVIDENCE')
     expect(first.coverage.representedClusters).toBe(first.coverage.totalClusters)
   })
 
@@ -81,6 +83,34 @@ describe('semantic evidence', () => {
     expect(compiled.text).toContain('DIRECTORY_CONTEXT')
     expect(compiled.text).toContain('        cm/ files=2 roles=source:2 +2 -0')
     expect(compiled.text).not.toContain('cluster=src/commands/git')
+  })
+
+  test('groups multiple facts under one directory and file path', () => {
+    const compiled = compileEvidence(snapshot([
+      file({
+        path: 'src/commands/git/cm/engine.ts',
+        hunks: [hunk([
+          'export function buildEvidence(): void {}',
+          'throw new Error(\'Evidence is unavailable\')',
+          'const compact = true',
+        ])],
+      }),
+    ]), system)
+
+    const facts = compiled.text.slice(compiled.text.indexOf('FACTS'))
+    expect(facts).toContain('src/commands/git/cm/')
+    expect(facts).toContain('  engine.ts:')
+    expect(facts).toContain('symbol added buildEvidence')
+    expect(facts).toContain('added throw new Error(\'Evidence is unavailable\')')
+    expect(facts.match(/engine\.ts:/g)).toHaveLength(1)
+    expect(facts).not.toContain('src/commands/git/cm/engine.ts:')
+
+    const p0 = compiled.text.slice(0, compiled.text.indexOf('FACTS')).trimEnd()
+    const repeatedPaths = [
+      p0,
+      ...compiled.facts.map(item => `  ${item.filePath}: ${item.text}`),
+    ].join('\n')
+    expect(estimateLocalPromptTokens(system, compiled.text)).toBeLessThan(estimateLocalPromptTokens(system, repeatedPaths))
   })
 
   test('records both sides of an inspectable rename without adding protected directories', () => {
@@ -104,6 +134,7 @@ describe('semantic evidence', () => {
 
     expect(compiled.text).toContain('old/ rename-from=1 rename-to=0')
     expect(compiled.text).toContain('new/ files=1 roles=source:1 +3 -1 rename-from=0 rename-to=1')
+    expect(compiled.text).toContain('location.ts:\n    rename from src/old/location.ts')
     expect(compiled.text).not.toContain('private/')
     expect(compiled.text).not.toContain('dist/')
   })
@@ -119,7 +150,8 @@ describe('semantic evidence', () => {
     expect(first.coverage.contentCompacted).toBe(true)
     expect(first.text).toContain('DIRECTORY_CONTEXT')
     expect(first.text).toMatch(/packages\/ files=\d+ roles=source:\d+ \+\d+ -0/)
-    expect(estimateInputTokens(system, first.text)).toBeLessThanOrEqual(MAX_INPUT_TOKENS)
+    expect(first.coverage.estimatedLocalPromptTokens).toBe(estimateLocalPromptTokens(system, first.text))
+    expect(estimateLocalPromptTokens(system, first.text)).toBeLessThanOrEqual(MAX_LOCAL_PROMPT_TOKENS)
   })
 
   test('compacts low-weight branches before the primary source directory', () => {
@@ -135,7 +167,7 @@ describe('semantic evidence', () => {
 
     expect(compiled.coverage.contentCompacted).toBe(true)
     expect(compiled.text).toContain('      core/ files=20 roles=source:20 +400 -0')
-    expect(estimateInputTokens(system, compiled.text)).toBeLessThanOrEqual(MAX_INPUT_TOKENS)
+    expect(estimateLocalPromptTokens(system, compiled.text)).toBeLessThanOrEqual(MAX_LOCAL_PROMPT_TOKENS)
   })
 
   test('extracts package, declaration, test, behavior, and import facts by priority', () => {
@@ -215,7 +247,7 @@ describe('semantic evidence', () => {
     })
     const compiled = compileEvidence(snapshot([publicFile, sensitiveFile]), system)
 
-    expect(estimateInputTokens(system, compiled.text)).toBeLessThanOrEqual(MAX_INPUT_TOKENS)
+    expect(estimateLocalPromptTokens(system, compiled.text)).toBeLessThanOrEqual(MAX_LOCAL_PROMPT_TOKENS)
     expect(compiled.text).not.toContain('never-send-this')
     expect(compiled.text).not.toContain('x'.repeat(100))
     expect(compiled.coverage.omittedFacts).toBeGreaterThan(0)

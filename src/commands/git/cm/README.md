@@ -25,7 +25,7 @@ Evidence budgeting never changes the files that can be selected, staged, committ
 
 Each generation captures an immutable Git snapshot. Before committing, the command recaptures the same scope and refuses to commit when it has changed. Model output must be a valid Angular message; invalid output is rejected without retrying or committing.
 
-The local evidence target is about 2,000 input tokens with a 3,000-token ceiling. It is an estimate over the serialized system and evidence messages. Provider usage and evidence coverage are shown with the generated message when available.
+The local evidence compiler targets about 3,000 serialized prompt tokens with a 4,000-token ceiling. It groups facts by directory and file so repeated paths are sent once. This local estimate controls evidence selection only. Commit-message output uses a separate hard-coded 4,096-token request budget; neither budget adds a configuration option. Provider usage and the local evidence estimate are shown separately with the generated message when available.
 
 ## Content Protection
 

@@ -89,7 +89,7 @@ export interface EvidenceFact {
 }
 
 export interface EvidenceCoverage {
-  estimatedInputTokens: number
+  estimatedLocalPromptTokens: number
   representedClusters: number
   totalClusters: number
   includedFacts: number
