@@ -21,6 +21,7 @@ const accountRoleSchema = z.object({ role: z.enum(['admin', 'user']) }).strict()
 const accountPasswordSchema = z.object({ password: z.string() }).strict()
 const clientCreateSchema = z.object({ remark: z.string().optional() }).strict()
 const clientRemarkSchema = z.object({ remark: z.string() }).strict()
+const custom404PageSchema = z.object({ content: z.string() }).strict()
 const tunnelImportPreviewSchema = z.object({ source: z.string().min(1).max(1024 * 1024) }).strict()
 const tunnelImportSchema = tunnelImportPreviewSchema.extend({ candidateIds: z.array(z.string()).min(1) }).strict()
 const tunnelHeaderSchema = z.object({ name: z.string(), value: z.string() }).strict()
@@ -74,6 +75,7 @@ const TUNNEL_ERROR_STATUS = {
   INSTANCE_ACTIVE: 409,
   INVALID_ACCOUNT: 400,
   INVALID_CLIENT_REMARK: 400,
+  INVALID_CUSTOM_404_PAGE: 400,
   INVALID_CONFIG: 400,
   INVALID_CURRENT_PASSWORD: 400,
   INVALID_FRP_ARCHIVE: 500,
@@ -364,6 +366,18 @@ export class TunnelControlApi {
           return new Response(null, { status: 204, headers: API_HEADERS })
         }
         return error('METHOD_NOT_ALLOWED', 'Use PATCH or DELETE', 405)
+      }
+      if (url.pathname === '/api/server/frps/config/custom-404-page') {
+        const configuration = workspace.administration().frpsConfiguration()
+        if (request.method === 'GET')
+          return json({ version: 1, ...await configuration.getCustom404Page() })
+        if (request.method === 'PUT') {
+          const body = await requestJson(request, custom404PageSchema)
+          if (body instanceof Response)
+            return body
+          return json({ version: 1, ...await configuration.setCustom404Page(body.content) })
+        }
+        return error('METHOD_NOT_ALLOWED', 'Use GET or PUT', 405)
       }
       const action = /^\/api\/server\/frp\/(start|stop|restart)$/.exec(url.pathname)?.[1] as 'start' | 'stop' | 'restart' | undefined
       if (action && request.method === 'POST')

@@ -103,16 +103,20 @@ async function waitFor(description: string, condition: () => Promise<boolean>, t
   throw new Error(`Timed out waiting for ${description}${lastError instanceof Error ? `: ${lastError.message}` : ''}`)
 }
 
-async function readHttpTunnel(port: number, hostname: string, requestPath = '/'): Promise<string> {
-  return await new Promise<string>((resolve, reject) => {
+async function readHttpResponse(port: number, hostname: string, requestPath = '/'): Promise<{ statusCode: number, body: string }> {
+  return await new Promise<{ statusCode: number, body: string }>((resolve, reject) => {
     const request = httpRequest({ hostname: '127.0.0.1', port, path: requestPath, headers: { Host: hostname } }, (response) => {
       const chunks: Uint8Array[] = []
       response.on('data', chunk => chunks.push(chunk))
-      response.on('end', () => resolve(Buffer.concat(chunks).toString('utf8')))
+      response.on('end', () => resolve({ statusCode: response.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }))
     })
     request.once('error', reject)
     request.end()
   })
+}
+
+async function readHttpTunnel(port: number, hostname: string, requestPath = '/'): Promise<string> {
+  return (await readHttpResponse(port, hostname, requestPath)).body
 }
 
 async function readTcpTunnel(port: number, payload: string): Promise<string> {
@@ -240,6 +244,24 @@ test('two trusted clients forward HTTP, TCP, and UDP through real pinned FRP pro
         throw new Error(`${init.method ?? 'GET'} ${pathname} returned ${response.status}: ${await response.text()}`)
       return await response.json() as T
     }
+    await waitFor('managed frps', async () => (await api<{ server: { frps: { state: string } } }>('/api/state')).server.frps.state === 'running')
+    const initialFrpsPid = (await api<{ server: { frps: { pid?: number } } }>('/api/state')).server.frps.pid
+    const first404 = '<main>custom-404-first</main>'
+    await api('/api/server/frps/config/custom-404-page', { method: 'PUT', body: JSON.stringify({ content: first404 }) })
+    await waitFor('the first custom FRP 404 page', async () => {
+      const response = await readHttpResponse(httpPort, 'missing.acceptance.test')
+      return response.statusCode === 404 && response.body === first404
+    })
+    const second404 = '<main>custom-404-second</main>'
+    await api('/api/server/frps/config/custom-404-page', { method: 'PUT', body: JSON.stringify({ content: second404 }) })
+    await waitFor('the updated custom FRP 404 page', async () => (await readHttpResponse(httpPort, 'missing.acceptance.test')).body === second404)
+    expect((await api<{ server: { frps: { pid?: number } } }>('/api/state')).server.frps.pid).toBe(initialFrpsPid)
+    await api('/api/server/frps/config/custom-404-page', { method: 'PUT', body: JSON.stringify({ content: '' }) })
+    await waitFor('the default FRP 404 page', async () => {
+      const response = await readHttpResponse(httpPort, 'missing.acceptance.test')
+      return response.statusCode === 404 && response.body !== second404
+    })
+
     const clientOne = (await api<{ client: ClientRecord }>('/api/clients', { method: 'POST', body: JSON.stringify({ remark: 'Acceptance client one' }) })).client
     const clientTwo = (await api<{ client: ClientRecord }>('/api/clients', { method: 'POST', body: JSON.stringify({ remark: 'Acceptance client two' }) })).client
 

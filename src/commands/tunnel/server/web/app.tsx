@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react'
 import type { CurrentAccount } from './api'
 import { zodResolver } from '@hookform/resolvers/zod'
-import { CloudCog, Gauge, KeyRound, LogOut, Play, Power, RefreshCw, Server, Shield, Square, Users } from 'lucide-react'
+import { CloudCog, Gauge, KeyRound, LogOut, Play, Power, RefreshCw, RotateCcw, Save, Server, Shield, Square, Users } from 'lucide-react'
 import { useCallback, useEffect, useState } from 'react'
 import { useForm } from 'react-hook-form'
 import { z } from 'zod'
@@ -31,6 +31,10 @@ interface StateView {
   account: CurrentAccount
   counts: { clients: number, connected: number, tunnels: number, pending: number, errors: number }
   server?: ServerProjection
+}
+
+interface Custom404PageView {
+  content: string
 }
 
 type Page = { name: 'overview' | 'clients' | 'accounts' | 'server' } | { name: 'client', id: string }
@@ -213,7 +217,78 @@ function Overview({ state, refreshing, reload }: { state: StateView, refreshing:
   )
 }
 
-function ServerView({ server, reload }: { server: ServerProjection, reload: () => Promise<void> }): React.JSX.Element {
+function Custom404PageEditor({ refreshSequence }: { refreshSequence: number }): React.JSX.Element {
+  const [content, setContent] = useState('')
+  const [savedContent, setSavedContent] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+  const { notify } = useFeedback()
+  const dirty = content !== savedContent
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      const page = await apiJson<Custom404PageView>('/api/server/frps/config/custom-404-page')
+      setContent(page.content)
+      setSavedContent(page.content)
+      setError('')
+    }
+    catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+    finally {
+      setLoading(false)
+    }
+  }, [])
+  useEffect(() => {
+    if (!dirty && !saving)
+      void load()
+  }, [dirty, load, refreshSequence, saving])
+  const save = async (): Promise<void> => {
+    setSaving(true)
+    try {
+      const page = await apiJson<Custom404PageView>('/api/server/frps/config/custom-404-page', jsonRequest('PUT', { content }))
+      setContent(page.content)
+      setSavedContent(page.content)
+      setError('')
+      notify('Custom 404 page saved')
+    }
+    catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    }
+    finally {
+      setSaving(false)
+    }
+  }
+  return (
+    <section className="section-band">
+      <div className="section-title">
+        <h2>Custom 404 page</h2>
+        {loading && <Spinner size={15} />}
+      </div>
+      {error && <p className="runtime-error" role="alert">{error}</p>}
+      <textarea
+        className="custom-404-editor"
+        value={content}
+        rows={16}
+        spellCheck={false}
+        autoCapitalize="off"
+        aria-label="Custom 404 page HTML"
+        disabled={loading || saving}
+        onChange={event => setContent(event.target.value)}
+      />
+      <div className="custom-404-actions">
+        <IconButton label="Restore FRP default 404 page" disabled={loading || saving || !content} onClick={() => setContent('')}><RotateCcw size={15} /></IconButton>
+        <button className="primary" type="button" disabled={loading || saving || !dirty} onClick={() => void save()}>
+          {saving ? <Spinner /> : <Save size={15} />}
+          Save
+        </button>
+      </div>
+    </section>
+  )
+}
+
+function ServerView({ server, reload, refreshSequence }: { server: ServerProjection, reload: () => Promise<void>, refreshSequence: number }): React.JSX.Element {
   const [error, setError] = useState('')
   const [pending, setPending] = useState<'start' | 'stop' | 'restart'>()
   const { notify } = useFeedback()
@@ -294,6 +369,7 @@ function ServerView({ server, reload }: { server: ServerProjection, reload: () =
           <dd>{server.settings.adminUser}</dd>
         </dl>
       </section>
+      <Custom404PageEditor refreshSequence={refreshSequence} />
     </>
   )
 }
@@ -431,7 +507,7 @@ export function App(): React.JSX.Element {
       {page.name === 'clients' && <ClientsPage refreshSequence={refreshSequence} showOwner={state.account.role === 'admin'} />}
       {page.name === 'client' && <ClientDetailPage id={page.id} refreshSequence={refreshSequence} showOwner={state.account.role === 'admin'} />}
       {page.name === 'accounts' && state.account.role === 'admin' && <AccountsPage currentAccountId={state.account.id} refreshSequence={refreshSequence} onSessionEnded={sessionEnded} />}
-      {page.name === 'server' && state.server && <ServerView server={state.server} reload={load} />}
+      {page.name === 'server' && state.server && <ServerView server={state.server} reload={load} refreshSequence={refreshSequence} />}
       {changingPassword && <PasswordEditor onClose={() => setChangingPassword(false)} onChanged={sessionEnded} />}
     </Layout>
   )

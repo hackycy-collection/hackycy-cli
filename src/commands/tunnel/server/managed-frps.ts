@@ -1,9 +1,9 @@
 import type { FrpSupervisorOptions, FrpSupervisorState } from '../frp/supervisor'
 import type { ServerTunnelConfig, StructuredRuntimeError } from '../types'
-import path from 'node:path'
+import type { FrpsConfiguration } from './frps-configuration'
 import { atomicWrite } from '../atomic-file'
 import { ensureFrpBinary } from '../frp/binary'
-import { renderFrpsConfig, verifyFrpConfiguration } from '../frp/config'
+import { verifyFrpConfiguration } from '../frp/config'
 import { FRPS_ACTIVATION_GRACE_MS, FrpSupervisor } from '../frp/supervisor'
 import { TunnelError } from '../types'
 import { frpsActivationError } from './frps-activation'
@@ -18,6 +18,7 @@ export interface FrpsController {
 
 export interface ManagedFrpsControllerOptions {
   config: ServerTunnelConfig
+  configuration: FrpsConfiguration
   frpToken: string
   signal: AbortSignal
   ensureBinary?: (signal: AbortSignal) => Promise<string>
@@ -107,9 +108,9 @@ export class ManagedFrpsController implements FrpsController {
       throw installationError(cause)
     }
 
-    const configurationPath = path.join(this.options.config.dataDir, 'frps.toml')
+    const configurationPath = this.options.configuration.tomlPath
     try {
-      await atomicWrite(configurationPath, renderFrpsConfig(this.options.config, this.options.frpToken))
+      await atomicWrite(configurationPath, this.options.configuration.render(this.options.frpToken))
       await (this.options.verifyConfiguration ?? ((binary, configuration, signal) => verifyFrpConfiguration(binary, configuration, { signal })))(binaryPath, configurationPath, this.options.signal)
     }
     catch (cause) {

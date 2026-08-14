@@ -69,6 +69,7 @@ interface FrpsTomlDocument extends TomlDocument {
   bindAddr: string
   bindPort: number
   vhostHTTPPort: number
+  custom404Page: string
   auth: FrpAuthenticationToml
   allowPorts: FrpPortRangeToml[]
   log: FrpLogToml
@@ -180,11 +181,12 @@ function buildProxy(tunnel: FrpcTunnel): FrpProxyToml {
   return proxy
 }
 
-function buildFrpsDocument(config: ServerTunnelConfig, internalFrpToken: string): FrpsTomlDocument {
+function buildFrpsDocument(config: ServerTunnelConfig, internalFrpToken: string, custom404PagePath: string): FrpsTomlDocument {
   return {
     bindAddr: config.address,
     bindPort: config.frpPort,
     vhostHTTPPort: config.httpPort,
+    custom404Page: custom404PagePath,
     auth: { method: 'token', token: internalFrpToken },
     allowPorts: [{ start: config.portRange.start, end: config.portRange.end }],
     log: { to: 'console', level: 'warn' },
@@ -204,8 +206,8 @@ function buildFrpcDocument(input: FrpcDesiredConfiguration): FrpcTomlDocument {
   }
 }
 
-export function renderFrpsConfig(config: ServerTunnelConfig, internalFrpToken: string): string {
-  return tomlCodec.stringify(buildFrpsDocument(config, internalFrpToken))
+export function renderFrpsConfig(config: ServerTunnelConfig, internalFrpToken: string, custom404PagePath: string): string {
+  return tomlCodec.stringify(buildFrpsDocument(config, internalFrpToken, custom404PagePath))
 }
 
 export function renderFrpcConfig(input: FrpcDesiredConfiguration): string {

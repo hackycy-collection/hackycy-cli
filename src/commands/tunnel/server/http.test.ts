@@ -1,6 +1,9 @@
 import type { FrpChild } from '../frp/supervisor'
 import type { FrpProcessState, ServerTunnelConfig } from '../types'
 import type { FrpsAvailability } from './agent-gateway'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { resolveFrpArtifact } from '../frp/manifest'
 import { FrpSupervisor } from '../frp/supervisor'
@@ -8,6 +11,7 @@ import { TUNNEL_PROTOCOL_VERSION } from '../types'
 import { AgentGateway } from './agent-gateway'
 import { TunnelControlPlane } from './control-plane'
 import { TunnelDatabase } from './database'
+import { FrpsConfiguration } from './frps-configuration'
 import { startTunnelHttpServer } from './http'
 import { TunnelManagement } from './tunnel-management'
 
@@ -59,6 +63,7 @@ interface Fixture {
   crashNextFrps: () => void
   management: TunnelManagement
   server: ReturnType<typeof startTunnelHttpServer>
+  dataDir: string
 }
 
 const fixtures: Fixture[] = []
@@ -70,10 +75,12 @@ afterEach(async () => {
     await fixture.server.stop()
     await fixture.frps.stop()
     fixture.database.close()
+    await rm(fixture.dataDir, { recursive: true, force: true })
   }
 })
 
 async function fixture(frpToken?: string, availability?: FrpsAvailability): Promise<Fixture> {
+  const dataDir = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-http-'))
   const database = new TunnelDatabase(':memory:')
   const controlPlane = new TunnelControlPlane(database, { start: 20000, end: 20002 })
   const gateway = new AgentGateway(controlPlane, 7000, frpToken ?? controlPlane.internalFrpToken(), undefined, availability)
@@ -97,13 +104,13 @@ async function fixture(frpToken?: string, availability?: FrpsAvailability): Prom
     httpPort: 8080,
     portRange: { start: 20000, end: 20002 },
     ...(frpToken ? { frpToken } : {}),
-    dataDir: '/data',
+    dataDir,
     adminUser: 'admin',
     adminPassword: 'admin-secret',
   }
-  const management = await TunnelManagement.create({ database, controlPlane, gateway, frps, frpsConfigPath: '/frps.toml', serverConfig: config })
+  const management = await TunnelManagement.create({ database, controlPlane, gateway, frps, frpsConfiguration: new FrpsConfiguration(config), serverConfig: config })
   const server = startTunnelHttpServer({ management, gateway, address: config.address, controlPort: config.controlPort })
-  const result = { database, controlPlane, gateway, frps, crashNextFrps: () => crashNextFrps = true, management, server }
+  const result = { database, controlPlane, gateway, frps, crashNextFrps: () => crashNextFrps = true, management, server, dataDir }
   fixtures.push(result)
   return result
 }
@@ -418,6 +425,43 @@ remotePort = 20001
     }
   })
 
+  test('lets administrators update the managed custom 404 page without exposing its path', async () => {
+    const value = await fixture()
+    const endpoint = '/api/server/frps/config/custom-404-page'
+    expect((await fetch(new URL(endpoint, value.server.url))).status).toBe(401)
+
+    const cookie = await login(value.server)
+    const empty = await request(value.server, endpoint, cookie)
+    expect(empty.status).toBe(200)
+    expect(await empty.json()).toEqual({ version: 1, content: '' })
+
+    const saved = await request(value.server, endpoint, cookie, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '<main>Configured 404</main>' }),
+    })
+    expect(saved.status).toBe(200)
+    expect(await saved.json()).toEqual({ version: 1, content: '<main>Configured 404</main>' })
+    expect(await Bun.file(path.join(value.dataDir, '404.html')).text()).toBe('<main>Configured 404</main>')
+    expect((await request(value.server, endpoint, cookie, { method: 'POST' })).status).toBe(405)
+
+    const restored = await request(value.server, endpoint, cookie, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '' }),
+    })
+    expect(restored.status).toBe(200)
+    expect(await Bun.file(path.join(value.dataDir, '404.html')).exists()).toBe(false)
+
+    const tooLarge = await request(value.server, endpoint, cookie, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: 'x'.repeat(512 * 1024 + 1) }),
+    })
+    expect(tooLarge.status).toBe(400)
+    expect(await tooLarge.json()).toMatchObject({ error: { code: 'INVALID_CUSTOM_404_PAGE' } })
+  })
+
   test('reports failed frps restarts without claiming that frps is running', async () => {
     const value = await fixture()
     const cookie = await login(value.server)
@@ -495,6 +539,7 @@ remotePort = 20001
     })).status).toBe(404)
     expect((await request(value.server, '/api/accounts', bobCookie)).status).toBe(403)
     expect((await request(value.server, '/api/server/frp/stop', bobCookie, { method: 'POST' })).status).toBe(403)
+    expect((await request(value.server, '/api/server/frps/config/custom-404-page', bobCookie)).status).toBe(403)
     expect((await request(value.server, '/api/state', bobCookie).then(response => response.json())).server).toBeUndefined()
 
     const adminState = await request(value.server, '/api/state', adminCookie).then(response => response.json())

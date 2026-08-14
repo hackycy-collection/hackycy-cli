@@ -261,10 +261,11 @@ describe('FRP foundation', () => {
       { address: '127.0.0.1', frpPort: 7001, httpPort: 8081, portRange: '21000-21005', dataDir: '/tmp/tunnel' },
       { YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret' },
     )
-    expect(tomlCodec.parse(renderFrpsConfig(server, 'internal'))).toEqual({
+    expect(tomlCodec.parse(renderFrpsConfig(server, 'internal', '/tmp/tunnel/404.html'))).toEqual({
       bindAddr: '127.0.0.1',
       bindPort: 7001,
       vhostHTTPPort: 8081,
+      custom404Page: '/tmp/tunnel/404.html',
       auth: { method: 'token', token: 'internal' },
       allowPorts: [{ start: 21000, end: 21005 }],
       log: { to: 'console', level: 'warn' },

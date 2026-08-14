@@ -1,10 +1,12 @@
 import type { FrpChild } from '../frp/supervisor'
+import type { ServerTunnelConfig } from '../types'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { FrpSupervisor } from '../frp/supervisor'
 import { TunnelError } from '../types'
 import { AgentGateway } from './agent-gateway'
 import { TunnelControlPlane } from './control-plane'
 import { TunnelDatabase } from './database'
+import { FrpsConfiguration } from './frps-configuration'
 import { TunnelManagement } from './tunnel-management'
 
 class FakeChild implements FrpChild {
@@ -30,6 +32,20 @@ interface Fixture {
 
 const fixtures: Fixture[] = []
 
+function serverConfig(overrides: Partial<ServerTunnelConfig> = {}): ServerTunnelConfig {
+  return {
+    address: '127.0.0.1',
+    controlPort: 7500,
+    frpPort: 7000,
+    httpPort: 8080,
+    portRange: { start: 20000, end: 20002 },
+    dataDir: '/data',
+    adminUser: 'admin',
+    adminPassword: 'environment-secret',
+    ...overrides,
+  }
+}
+
 afterEach(async () => {
   for (const fixture of fixtures.splice(0)) {
     fixture.management.stop()
@@ -44,23 +60,15 @@ async function fixture(options: { sessionLifetimeMs?: number, adminPassword?: st
   const controlPlane = new TunnelControlPlane(database, { start: 20000, end: 20002 })
   const gateway = new AgentGateway(controlPlane, 7000, 'internal')
   const frps = new FrpSupervisor({ binaryPath: '/frps', role: 'frps', spawn: () => new FakeChild() })
+  const config = serverConfig({ adminPassword: options.adminPassword ?? 'environment-secret' })
   const management = await TunnelManagement.create({
     database,
     controlPlane,
     gateway,
     frps,
-    frpsConfigPath: '/frps.toml',
+    frpsConfiguration: new FrpsConfiguration(config),
     ...(options.sessionLifetimeMs === undefined ? {} : { sessionLifetimeMs: options.sessionLifetimeMs }),
-    serverConfig: {
-      address: '127.0.0.1',
-      controlPort: 7500,
-      frpPort: 7000,
-      httpPort: 8080,
-      portRange: { start: 20000, end: 20002 },
-      dataDir: '/data',
-      adminUser: 'admin',
-      adminPassword: options.adminPassword ?? 'environment-secret',
-    },
+    serverConfig: config,
   })
   const value = { database, gateway, frps, management }
   fixtures.push(value)
@@ -239,22 +247,14 @@ describe('TunnelManagement accounts and sessions', () => {
     const secondControlPlane = new TunnelControlPlane(first.database, { start: 20000, end: 20002 })
     const secondGateway = new AgentGateway(secondControlPlane, 7000, 'internal')
     const secondFrps = new FrpSupervisor({ binaryPath: '/frps', role: 'frps', spawn: () => new FakeChild() })
+    const secondConfig = serverConfig({ adminUser: 'root-admin', adminPassword: 'replacement-environment-secret' })
     const second = await TunnelManagement.create({
       database: first.database,
       controlPlane: secondControlPlane,
       gateway: secondGateway,
       frps: secondFrps,
-      frpsConfigPath: '/frps.toml',
-      serverConfig: {
-        address: '127.0.0.1',
-        controlPort: 7500,
-        frpPort: 7000,
-        httpPort: 8080,
-        portRange: { start: 20000, end: 20002 },
-        dataDir: '/data',
-        adminUser: 'root-admin',
-        adminPassword: 'replacement-environment-secret',
-      },
+      frpsConfiguration: new FrpsConfiguration(secondConfig),
+      serverConfig: secondConfig,
     })
     const renamed = second.resume((await second.signIn({ username: 'ROOT-ADMIN', password: 'replacement-environment-secret' })).token)!
     expect(renamed.account.id).toBe(originalOwnerId)
@@ -267,22 +267,14 @@ describe('TunnelManagement accounts and sessions', () => {
     const thirdControlPlane = new TunnelControlPlane(first.database, { start: 20000, end: 20002 })
     const thirdGateway = new AgentGateway(thirdControlPlane, 7000, 'internal')
     const thirdFrps = new FrpSupervisor({ binaryPath: '/frps', role: 'frps', spawn: () => new FakeChild() })
+    const thirdConfig = serverConfig({ adminUser: 'collision', adminPassword: 'another-environment-secret' })
     await expect(TunnelManagement.create({
       database: first.database,
       controlPlane: thirdControlPlane,
       gateway: thirdGateway,
       frps: thirdFrps,
-      frpsConfigPath: '/frps.toml',
-      serverConfig: {
-        address: '127.0.0.1',
-        controlPort: 7500,
-        frpPort: 7000,
-        httpPort: 8080,
-        portRange: { start: 20000, end: 20002 },
-        dataDir: '/data',
-        adminUser: 'collision',
-        adminPassword: 'another-environment-secret',
-      },
+      frpsConfiguration: new FrpsConfiguration(thirdConfig),
+      serverConfig: thirdConfig,
     })).rejects.toThrow('conflicts with a local account')
     thirdGateway.stop()
     await thirdFrps.stop()
@@ -322,6 +314,11 @@ describe('TunnelManagement projections and events', () => {
     expect((await environment.overview()).server?.frps.state).toBe('running')
     expect(adminEvents.at(-1)).toBe('changed')
     expect(aliceEvents).toHaveLength(2)
+
+    await environment.administration().frpsConfiguration().setCustom404Page('')
+    expect(adminEvents.at(-1)).toBe('changed')
+    expect(aliceEvents).toHaveLength(2)
+    expect(bobEvents).toHaveLength(1)
 
     const aliceAccount = environment.administration().listAccounts().find(account => account.username === 'alice')!
     environment.administration().changeAccountRole(aliceAccount.id, 'admin')

@@ -5,6 +5,7 @@ import { acquireStateDirectoryLock } from '../lock'
 import { AgentGateway } from './agent-gateway'
 import { TunnelControlPlane } from './control-plane'
 import { openTunnelDatabase } from './database'
+import { FrpsConfiguration } from './frps-configuration'
 import { startTunnelHttpServer } from './http'
 import { ManagedFrpsController } from './managed-frps'
 import { TunnelManagement } from './tunnel-management'
@@ -22,6 +23,7 @@ export async function runTunnelServer(config: ServerTunnelConfig, options: Tunne
   let database: ReturnType<typeof openTunnelDatabase> | undefined
   let gateway: AgentGateway | undefined
   let frps: ManagedFrpsController | undefined
+  let frpsConfiguration: FrpsConfiguration | undefined
   let server: ReturnType<typeof startTunnelHttpServer> | undefined
   let management: TunnelManagement | undefined
   const stop = (): void => {
@@ -45,8 +47,10 @@ export async function runTunnelServer(config: ServerTunnelConfig, options: Tunne
     database = openTunnelDatabase(config.dataDir)
     const controlPlane = new TunnelControlPlane(database, config.portRange)
     const frpToken = config.frpToken ?? controlPlane.internalFrpToken()
+    frpsConfiguration = new FrpsConfiguration(config)
     frps = new ManagedFrpsController({
       config,
+      configuration: frpsConfiguration,
       frpToken,
       signal: shutdown.signal,
       ensureBinary: options.ensureFrpsBinary,
@@ -54,7 +58,7 @@ export async function runTunnelServer(config: ServerTunnelConfig, options: Tunne
       createSupervisor: options.createFrpsSupervisor,
     })
     gateway = new AgentGateway(controlPlane, config.frpPort, frpToken, config.advertiseFrpAddress, frps)
-    management = await TunnelManagement.create({ database, controlPlane, gateway, frps, serverConfig: config })
+    management = await TunnelManagement.create({ database, controlPlane, gateway, frps, frpsConfiguration, serverConfig: config })
     if (shutdown.signal.aborted)
       return
     server = startTunnelHttpServer({ management, gateway, address: config.address, controlPort: config.controlPort })

@@ -1578,6 +1578,25 @@ tbody tr:hover td {
   color: var(--admin-danger);
 }
 
+.custom-404-editor {
+  display: block;
+  width: 100%;
+  min-height: 320px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+  tab-size: 2;
+}
+
+.custom-404-actions {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+}
+
 .load-state,
 .error-state,
 .sync-banner {

@@ -3,6 +3,7 @@ import type { AccountKind, AccountRecord, AccountRole, ClientRecord, PublicTunne
 import type { AgentGateway } from './agent-gateway'
 import type { TunnelControlPlane, TunnelMutationInput, TunnelPatchInput } from './control-plane'
 import type { TunnelDatabase } from './database'
+import type { FrpsConfiguration } from './frps-configuration'
 import type { FrpsController } from './managed-frps'
 import { randomBytes, randomUUID } from 'node:crypto'
 import { redactTunnelDefinition } from '../definition'
@@ -68,7 +69,7 @@ export interface TunnelManagementOptions {
   controlPlane: TunnelControlPlane
   gateway: AgentGateway
   frps: FrpsController
-  frpsConfigPath?: string
+  frpsConfiguration: FrpsConfiguration
   serverConfig: ServerTunnelConfig
   sessionLifetimeMs?: number
 }
@@ -465,6 +466,32 @@ export class TunnelWorkspace {
   }
 }
 
+export class FrpsConfigurationAdministration {
+  constructor(
+    private readonly management: TunnelManagement,
+    private readonly options: TunnelManagementOptions,
+    private readonly sessionToken: string,
+    private readonly accountId: string,
+  ) {}
+
+  private requireAdministrator(): void {
+    if (this.management.activeAccount(this.sessionToken, this.accountId).role !== 'admin')
+      throw new TunnelError('FORBIDDEN', 'Administrator role is required')
+  }
+
+  async getCustom404Page(): Promise<{ content: string }> {
+    this.requireAdministrator()
+    return { content: await this.options.frpsConfiguration.getCustom404Page() }
+  }
+
+  async setCustom404Page(content: string): Promise<{ content: string }> {
+    this.requireAdministrator()
+    await this.options.frpsConfiguration.setCustom404Page(content)
+    this.management.notifyAdministrators()
+    return { content }
+  }
+}
+
 export class TunnelAdministration {
   constructor(
     private readonly management: TunnelManagement,
@@ -478,6 +505,11 @@ export class TunnelAdministration {
     if (account.role !== 'admin')
       throw new TunnelError('FORBIDDEN', 'Administrator role is required')
     return account
+  }
+
+  frpsConfiguration(): FrpsConfigurationAdministration {
+    void this.account
+    return new FrpsConfigurationAdministration(this.management, this.options, this.sessionToken, this.accountId)
   }
 
   private localAccount(accountId: string): AccountRow {
@@ -576,7 +608,7 @@ export class TunnelAdministration {
     void this.account
     try {
       if (action === 'start')
-        await this.options.frps.start(this.options.frpsConfigPath)
+        await this.options.frps.start(this.options.frpsConfiguration.tomlPath)
       else if (action === 'stop')
         await this.options.frps.stop()
       else
