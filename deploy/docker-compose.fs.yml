@@ -1,11 +1,11 @@
-# Static file server and browser.
+# File browser.
 #
-# Before starting, set YCY_SERVE_ACCOUNT in the shell or an untracked .env
-# file, then run: docker compose -f docker-compose.serve.yml up -d
-# YCY_SERVE_ACCOUNT uses the format username:password. The account is supplied
+# Before starting, set YCY_FS_ACCOUNT in the shell or an untracked .env
+# file, then run: docker compose -f docker-compose.fs.yml up -d
+# YCY_FS_ACCOUNT uses the format username:password. The account is supplied
 # as a container argument, so keep the Compose project and Docker host private.
 services:
-  serve:
+  fs:
     # Set YCY_VERSION to a released image tag to pin upgrades; omitting it uses
     # the latest image tag. The image entrypoint is already "ycy".
     image: ghcr.io/hackycy/hackycy-cli:${YCY_VERSION:-latest}
@@ -15,14 +15,14 @@ services:
     # Serves the mounted directory through the file browser. Management is
     # enabled for uploads, remote downloads, archive extraction, and file
     # operations. Safe HTML prevents served HTML and XHTML from executing.
-    command: [serve, --address, 0.0.0.0, --port, '1204', --manage, --safe-html, --account, '${YCY_SERVE_ACCOUNT:?required}', /data]
+    command: [fs, --address, 0.0.0.0, --port, '1204', --manage, --safe-html, --account, '${YCY_FS_ACCOUNT:?required}', /data]
     volumes:
-      # Set YCY_SERVE_DIRECTORY to an absolute host path when serving an
-      # existing directory. The default creates ./serve-data beside this file.
+      # Set YCY_FS_DIRECTORY to an absolute host path for an existing
+      # directory. The default creates ./fs-data beside this file.
       # All file-management operations affect this host directory permanently.
-      - '${YCY_SERVE_DIRECTORY:-./serve-data}:/data'
+      - '${YCY_FS_DIRECTORY:-./fs-data}:/data'
     ports:
       # The browser is available at http://localhost:1204 by default. Set
-      # YCY_SERVE_PORT to select another host port. Use a reverse proxy with
+      # YCY_FS_PORT to select another host port. Use a reverse proxy with
       # HTTPS before exposing this service outside a trusted network.
-      - '${YCY_SERVE_PORT:-1204}:1204/tcp'
+      - '${YCY_FS_PORT:-1204}:1204/tcp'

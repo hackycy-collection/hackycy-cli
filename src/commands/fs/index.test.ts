@@ -2,12 +2,14 @@ import { describe, expect, test } from 'bun:test'
 import { Command } from 'commander'
 import { register } from './index'
 
-describe('serve command registration', () => {
+describe('fs command registration', () => {
   test('makes the directory optional and documents its default', () => {
     const program = new Command()
     register(program)
 
     const command = program.commands[0]!
+    expect(command.name()).toBe('fs')
+    expect(program.commands.some(candidate => candidate.name() === 'serve')).toBe(false)
     expect(command.usage()).toBe('[options] [directory]')
     expect(command.description()).toContain('defaults to current directory')
   })

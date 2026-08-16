@@ -1,4 +1,4 @@
-import type { ServeArchiveExtractOptions, ServeArchiveExtractResult, ServeExtractionTask } from './types'
+import type { FsArchiveExtractOptions, FsArchiveExtractResult, FsExtractionTask } from './types'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createExtractionManager, ExtractionError } from './extraction-service'
 
@@ -8,7 +8,7 @@ afterEach(async () => {
   await Promise.all(managers.splice(0).map(manager => manager.close()))
 })
 
-async function waitForTask(manager: { list: () => ServeExtractionTask[] }, id: string): Promise<ServeExtractionTask> {
+async function waitForTask(manager: { list: () => FsExtractionTask[] }, id: string): Promise<FsExtractionTask> {
   for (let index = 0; index < 200; index++) {
     const task = manager.list().find(item => item.id === id)
     if (task && ['done', 'error', 'cancelled'].includes(task.status))
@@ -18,7 +18,7 @@ async function waitForTask(manager: { list: () => ServeExtractionTask[] }, id: s
   throw new Error('Timed out waiting for extraction task')
 }
 
-function result(archivePath: string): ServeArchiveExtractResult {
+function result(archivePath: string): FsArchiveExtractResult {
   return {
     archivePath,
     destinationPath: archivePath.replace(/\.[^.]+$/, ''),
@@ -71,7 +71,7 @@ describe('ExtractionManager', () => {
   test('cancels queued and running tasks and forwards the abort signal', async () => {
     const started: string[] = []
     const manager = createExtractionManager({
-      extractArchive(archivePath, options = {}): Promise<ServeArchiveExtractResult> {
+      extractArchive(archivePath, options = {}): Promise<FsArchiveExtractResult> {
         started.push(archivePath)
         return new Promise((_resolve, reject) => {
           options.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true })
@@ -128,7 +128,7 @@ describe('ExtractionManager', () => {
   test('close cancels the active task and all queued tasks', async () => {
     let activeSignal: AbortSignal | undefined
     const manager = createExtractionManager({
-      extractArchive(_archivePath: string, options?: ServeArchiveExtractOptions): Promise<ServeArchiveExtractResult> {
+      extractArchive(_archivePath: string, options?: FsArchiveExtractOptions): Promise<FsArchiveExtractResult> {
         activeSignal = options?.signal
         return new Promise((_resolve, reject) => {
           options?.signal?.addEventListener('abort', () => reject(options.signal?.reason), { once: true })

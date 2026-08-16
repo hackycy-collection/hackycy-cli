@@ -1,9 +1,9 @@
-import type { ServeWorkspace } from './types'
+import type { FsWorkspace } from './types'
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
-import { createServeWorkspace, MAX_TEXT_PREVIEW_BYTES } from './workspace'
+import { createFsWorkspace, MAX_TEXT_PREVIEW_BYTES } from './workspace'
 
 const temporaryDirectories: string[] = []
 
@@ -11,8 +11,8 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
 })
 
-async function createFixture(): Promise<{ root: string, workspace: ServeWorkspace }> {
-  const fixture = await mkdtemp(path.join(tmpdir(), 'ycy-serve-workspace-'))
+async function createFixture(): Promise<{ root: string, workspace: FsWorkspace }> {
+  const fixture = await mkdtemp(path.join(tmpdir(), 'ycy-fs-workspace-'))
   temporaryDirectories.push(fixture)
   const root = path.join(fixture, 'shared files')
   await mkdir(path.join(root, 'docs'), { recursive: true })
@@ -20,10 +20,10 @@ async function createFixture(): Promise<{ root: string, workspace: ServeWorkspac
     writeFile(path.join(root, 'zeta.txt'), 'zeta'),
     writeFile(path.join(root, 'Alpha.txt'), 'alpha'),
   ])
-  return { root, workspace: await createServeWorkspace(root) }
+  return { root, workspace: await createFsWorkspace(root) }
 }
 
-describe('ServeWorkspace', () => {
+describe('FsWorkspace', () => {
   test('lists one directory with stable browser paths and directories first', async () => {
     const { workspace } = await createFixture()
 
@@ -419,23 +419,23 @@ describe('ServeWorkspace', () => {
 
     expect(await workspace.applyOperation({ action: 'create-directory', parentPath: 'escape', name: 'created' })).toEqual({
       action: 'create-directory',
-      items: [{ status: 'error', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the served directory' } }],
+      items: [{ status: 'error', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the file browser directory' } }],
     })
     expect(await workspace.applyOperation({ action: 'rename', path: 'escape/secret.txt', newName: 'renamed.txt' })).toEqual({
       action: 'rename',
-      items: [{ status: 'error', sourcePath: 'escape/secret.txt', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the served directory' } }],
+      items: [{ status: 'error', sourcePath: 'escape/secret.txt', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the file browser directory' } }],
     })
     expect(await workspace.applyOperation({ action: 'copy', paths: ['Alpha.txt'], destinationPath: 'escape' })).toEqual({
       action: 'copy',
-      items: [{ status: 'error', sourcePath: 'Alpha.txt', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the served directory' } }],
+      items: [{ status: 'error', sourcePath: 'Alpha.txt', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the file browser directory' } }],
     })
     expect(await workspace.applyOperation({ action: 'move', paths: ['Alpha.txt'], destinationPath: 'escape' })).toEqual({
       action: 'move',
-      items: [{ status: 'error', sourcePath: 'Alpha.txt', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the served directory' } }],
+      items: [{ status: 'error', sourcePath: 'Alpha.txt', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the file browser directory' } }],
     })
     expect(await workspace.applyOperation({ action: 'delete', paths: ['escape/secret.txt'] })).toEqual({
       action: 'delete',
-      items: [{ status: 'error', sourcePath: 'escape/secret.txt', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the served directory' } }],
+      items: [{ status: 'error', sourcePath: 'escape/secret.txt', error: { code: 'PATH_FORBIDDEN', message: 'Path escapes the file browser directory' } }],
     })
     expect(await Bun.file(path.join(outside, 'secret.txt')).text()).toBe('secret')
   })
@@ -479,7 +479,7 @@ describe('ServeWorkspace', () => {
         { status: 'ok', sourcePath: 'docs' },
         { status: 'ok', sourcePath: 'outside-link' },
         { status: 'error', sourcePath: 'missing.txt', error: { code: 'NOT_FOUND', message: 'Path does not exist' } },
-        { status: 'error', sourcePath: '', error: { code: 'ROOT_IMMUTABLE', message: 'The served root cannot be changed' } },
+        { status: 'error', sourcePath: '', error: { code: 'ROOT_IMMUTABLE', message: 'The file browser root cannot be changed' } },
       ],
     })
     expect((await workspace.listDirectory('')).entries.map(entry => entry.name)).toEqual(['zeta.txt'])

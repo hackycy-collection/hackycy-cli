@@ -1,10 +1,10 @@
-import type { ServeDownloadTask, ServeWorkspace } from './types'
+import type { FsDownloadTask, FsWorkspace } from './types'
 import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { createRemoteDownloadManager } from './download-service'
-import { createServeWorkspace } from './workspace'
+import { createFsWorkspace } from './workspace'
 
 const temporaryDirectories: string[] = []
 const managers: Array<{ close: () => Promise<void> }> = []
@@ -14,14 +14,14 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
 })
 
-async function createFixture(): Promise<{ workspace: ServeWorkspace, root: string }> {
-  const root = await mkdtemp(path.join(tmpdir(), 'ycy-serve-download-'))
+async function createFixture(): Promise<{ workspace: FsWorkspace, root: string }> {
+  const root = await mkdtemp(path.join(tmpdir(), 'ycy-fs-download-'))
   temporaryDirectories.push(root)
-  const workspace = await createServeWorkspace(root)
+  const workspace = await createFsWorkspace(root)
   return { workspace, root }
 }
 
-async function waitForTask(manager: { list: () => ServeDownloadTask[] }, id: string): Promise<ServeDownloadTask> {
+async function waitForTask(manager: { list: () => FsDownloadTask[] }, id: string): Promise<FsDownloadTask> {
   for (let index = 0; index < 100; index++) {
     const task = manager.list().find(item => item.id === id)
     if (task && ['done', 'error', 'cancelled'].includes(task.status))
@@ -45,7 +45,7 @@ describe('RemoteDownloadManager', () => {
       idleTimeoutMs: 100,
     })
     managers.push(manager)
-    const updates: ServeDownloadTask[][] = []
+    const updates: FsDownloadTask[][] = []
     manager.subscribe(tasks => updates.push(tasks))
 
     const created = await manager.enqueue({ url: 'https://unresolvable.invalid/file', directoryPath: '' })

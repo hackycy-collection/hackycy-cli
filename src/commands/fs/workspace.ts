@@ -1,17 +1,17 @@
 import type { Stats } from 'node:fs'
 import type { ArchiveExtractor } from './archive-extractor'
 import type {
-  ServeDirectoryEntry,
-  ServeDirectoryListing,
-  ServeFile,
-  ServeOperation,
-  ServeOperationItem,
-  ServePreviewKind,
-  ServeStreamWriteOptions,
-  ServeTextPreview,
-  ServeTextSaveResult,
-  ServeUploadResult,
-  ServeWorkspace,
+  FsDirectoryEntry,
+  FsDirectoryListing,
+  FsFile,
+  FsOperation,
+  FsOperationItem,
+  FsPreviewKind,
+  FsStreamWriteOptions,
+  FsTextPreview,
+  FsTextSaveResult,
+  FsUploadResult,
+  FsWorkspace,
 } from './types'
 import { createHash } from 'node:crypto'
 import fs from 'node:fs/promises'
@@ -19,7 +19,7 @@ import path from 'node:path'
 import { getFiletypeFromFileName } from '@pierre/diffs'
 import { createSevenZipArchiveExtractor } from './archive-extractor'
 import { archiveDestinationName, isExtractableArchiveName } from './archive-support'
-import { ServeWorkspaceError } from './types'
+import { FsWorkspaceError } from './types'
 
 const IMAGE_MIME_TYPES = new Map([
   ['.avif', 'image/avif'],
@@ -42,11 +42,11 @@ export const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
 
 function normalizedRelativePath(value: string): string {
   if (value.includes('\0') || value.includes('\\') || value.startsWith('/') || /^[a-z]:/i.test(value))
-    throw new ServeWorkspaceError('INVALID_PATH', 'Path must be relative to the served directory')
+    throw new FsWorkspaceError('INVALID_PATH', 'Path must be relative to the file browser directory')
 
   const segments = value.split('/')
   if (segments.some(segment => segment === '.' || segment === '..'))
-    throw new ServeWorkspaceError('PATH_FORBIDDEN', 'Path escapes the served directory')
+    throw new FsWorkspaceError('PATH_FORBIDDEN', 'Path escapes the file browser directory')
   return segments.filter(Boolean).join('/')
 }
 
@@ -66,20 +66,20 @@ function encodedPath(relativePath: string): string {
 function uploadFilename(value: string): string {
   const filename = value.trim()
   if (!filename || filename === '.' || filename === '..' || filename.includes('/') || filename.includes('\\') || filename.includes('\0'))
-    throw new ServeWorkspaceError('INVALID_UPLOAD', 'Upload filename is invalid')
+    throw new FsWorkspaceError('INVALID_UPLOAD', 'Upload filename is invalid')
   return filename
 }
 
 function operationName(value: string): string {
   if (!value.trim() || value === '.' || value === '..' || value.includes('/') || value.includes('\\') || value.includes('\0'))
-    throw new ServeWorkspaceError('INVALID_NAME', 'Entry name is invalid')
+    throw new FsWorkspaceError('INVALID_NAME', 'Entry name is invalid')
   return value
 }
 
-function operationFailure(cause: unknown, paths: { sourcePath?: string, destinationPath?: string }): ServeOperationItem {
-  const error = cause instanceof ServeWorkspaceError
+function operationFailure(cause: unknown, paths: { sourcePath?: string, destinationPath?: string }): FsOperationItem {
+  const error = cause instanceof FsWorkspaceError
     ? cause
-    : new ServeWorkspaceError('UNAVAILABLE', 'Filesystem operation failed')
+    : new FsWorkspaceError('UNAVAILABLE', 'Filesystem operation failed')
   return {
     status: 'error',
     ...paths,
@@ -91,14 +91,14 @@ async function operationDirectory(root: string, requestedPath: string): Promise<
   const relativePath = normalizedRelativePath(requestedPath)
   const resolved = await resolvedInsideRoot(root, absolutePath(root, relativePath))
   if (!(await fs.stat(resolved)).isDirectory())
-    throw new ServeWorkspaceError('NOT_DIRECTORY', 'Operation target is not a directory')
+    throw new FsWorkspaceError('NOT_DIRECTORY', 'Operation target is not a directory')
   return { relativePath, resolved }
 }
 
 async function operationEntry(root: string, requestedPath: string): Promise<{ relativePath: string, name: string, resolved: string }> {
   const relativePath = normalizedRelativePath(requestedPath)
   if (!relativePath)
-    throw new ServeWorkspaceError('ROOT_IMMUTABLE', 'The served root cannot be changed')
+    throw new FsWorkspaceError('ROOT_IMMUTABLE', 'The file browser root cannot be changed')
   const segments = relativePath.split('/')
   const name = segments.pop()!
   const parent = await operationDirectory(root, segments.join('/'))
@@ -107,7 +107,7 @@ async function operationEntry(root: string, requestedPath: string): Promise<{ re
     await fs.lstat(resolved)
   }
   catch {
-    throw new ServeWorkspaceError('NOT_FOUND', 'Path does not exist')
+    throw new FsWorkspaceError('NOT_FOUND', 'Path does not exist')
   }
   return { relativePath, name, resolved }
 }
@@ -121,7 +121,7 @@ async function requireMissing(candidate: string): Promise<void> {
       return
     throw cause
   }
-  throw new ServeWorkspaceError('ALREADY_EXISTS', 'An entry with that name already exists')
+  throw new FsWorkspaceError('ALREADY_EXISTS', 'An entry with that name already exists')
 }
 
 async function collisionDestination(directory: string, filename: string): Promise<{ filename: string, resolved: string }> {
@@ -137,7 +137,7 @@ async function collisionDestination(directory: string, filename: string): Promis
       throw cause
     }
   }
-  throw new ServeWorkspaceError('NAME_EXHAUSTED', 'Too many entries have the same name')
+  throw new FsWorkspaceError('NAME_EXHAUSTED', 'Too many entries have the same name')
 }
 
 async function collisionDirectoryDestination(directory: string, name: string): Promise<{ name: string, resolved: string }> {
@@ -153,7 +153,7 @@ async function collisionDirectoryDestination(directory: string, name: string): P
       throw cause
     }
   }
-  throw new ServeWorkspaceError('NAME_EXHAUSTED', 'Too many directories have the same name')
+  throw new FsWorkspaceError('NAME_EXHAUSTED', 'Too many directories have the same name')
 }
 
 function collisionFilename(filename: string, index: number): string {
@@ -171,7 +171,7 @@ async function publishTemporaryFile(
   filename: string,
   temporaryPath: string,
   size: number,
-): Promise<ServeUploadResult> {
+): Promise<FsUploadResult> {
   for (let index = 0; index <= 9999; index++) {
     const finalFilename = collisionFilename(filename, index)
     const finalPath = path.join(directory, finalFilename)
@@ -189,7 +189,7 @@ async function publishTemporaryFile(
         throw error
     }
   }
-  throw new ServeWorkspaceError('NAME_EXHAUSTED', 'Too many files have the same name')
+  throw new FsWorkspaceError('NAME_EXHAUSTED', 'Too many files have the same name')
 }
 
 function syntaxLanguage(filename: string): string | undefined {
@@ -203,7 +203,7 @@ function syntaxLanguage(filename: string): string | undefined {
   return lowercase === 'text' ? undefined : lowercase
 }
 
-function previewKind(mimeType: string, language: string | undefined): ServePreviewKind {
+function previewKind(mimeType: string, language: string | undefined): FsPreviewKind {
   const baseMimeType = mimeType.split(';')[0]!.trim().toLowerCase()
   if (baseMimeType.startsWith('image/'))
     return 'image'
@@ -315,7 +315,7 @@ function encodeText(text: string, encoding: DecodedText['encoding'], bom: boolea
 async function readTextBytes(resolved: string): Promise<{ bytes: Uint8Array, size: number, stat: Stats }> {
   const stat = await fs.stat(resolved)
   if (!stat.isFile())
-    throw new ServeWorkspaceError('NOT_FILE', 'Path is not a file')
+    throw new FsWorkspaceError('NOT_FILE', 'Path is not a file')
   if (stat.size > MAX_TEXT_PREVIEW_BYTES)
     return { bytes: new Uint8Array(), size: stat.size, stat }
   const handle = await fs.open(resolved, 'r')
@@ -362,14 +362,14 @@ async function resolvedInsideRoot(root: string, candidate: string): Promise<stri
     resolved = await fs.realpath(candidate)
   }
   catch {
-    throw new ServeWorkspaceError('NOT_FOUND', 'Path does not exist')
+    throw new FsWorkspaceError('NOT_FOUND', 'Path does not exist')
   }
   if (!isWithinRoot(root, resolved))
-    throw new ServeWorkspaceError('PATH_FORBIDDEN', 'Path escapes the served directory')
+    throw new FsWorkspaceError('PATH_FORBIDDEN', 'Path escapes the file browser directory')
   return resolved
 }
 
-async function browserEntry(root: string, directoryPath: string, name: string): Promise<ServeDirectoryEntry> {
+async function browserEntry(root: string, directoryPath: string, name: string): Promise<FsDirectoryEntry> {
   const relativePath = [directoryPath, name].filter(Boolean).join('/')
   const candidate = absolutePath(root, relativePath)
   let linkStat: Stats
@@ -480,58 +480,58 @@ async function validateExtractedTree(root: string): Promise<void> {
       if (stat.isFile())
         continue
       if (!stat.isSymbolicLink())
-        throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive contains an unsupported special filesystem entry')
+        throw new FsWorkspaceError('INVALID_ARCHIVE', 'Archive contains an unsupported special filesystem entry')
       const target = await fs.readlink(candidate)
       if (path.isAbsolute(target))
-        throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive contains an unsafe symbolic link')
+        throw new FsWorkspaceError('INVALID_ARCHIVE', 'Archive contains an unsafe symbolic link')
       const resolved = path.resolve(path.dirname(candidate), target)
       if (!isWithinRoot(root, resolved))
-        throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive contains a symbolic link that escapes its destination')
+        throw new FsWorkspaceError('INVALID_ARCHIVE', 'Archive contains a symbolic link that escapes its destination')
       try {
         if (!isWithinRoot(root, await fs.realpath(candidate)))
-          throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive contains a symbolic link that escapes its destination')
+          throw new FsWorkspaceError('INVALID_ARCHIVE', 'Archive contains a symbolic link that escapes its destination')
       }
       catch (cause) {
-        if (cause instanceof ServeWorkspaceError)
+        if (cause instanceof FsWorkspaceError)
           throw cause
-        throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive contains a broken symbolic link')
+        throw new FsWorkspaceError('INVALID_ARCHIVE', 'Archive contains a broken symbolic link')
       }
     }
   }
   await walk(root)
 }
 
-export interface ServeWorkspaceOptions {
+export interface FsWorkspaceOptions {
   archiveExtractor?: ArchiveExtractor
 }
 
-export async function createServeWorkspace(directory: string, options: ServeWorkspaceOptions = {}): Promise<ServeWorkspace> {
+export async function createFsWorkspace(directory: string, options: FsWorkspaceOptions = {}): Promise<FsWorkspace> {
   let root: string
   try {
     root = await fs.realpath(path.resolve(directory))
   }
   catch {
-    throw new ServeWorkspaceError('NOT_FOUND', `Directory not found: ${path.resolve(directory)}`)
+    throw new FsWorkspaceError('NOT_FOUND', `Directory not found: ${path.resolve(directory)}`)
   }
   const rootStat = await fs.stat(root)
   if (!rootStat.isDirectory())
-    throw new ServeWorkspaceError('NOT_DIRECTORY', `Path is not a directory: ${root}`)
+    throw new FsWorkspaceError('NOT_DIRECTORY', `Path is not a directory: ${root}`)
   const archiveExtractor = options.archiveExtractor ?? createSevenZipArchiveExtractor()
 
   return {
-    async listDirectory(requestedPath): Promise<ServeDirectoryListing> {
+    async listDirectory(requestedPath): Promise<FsDirectoryListing> {
       const relativePath = normalizedRelativePath(requestedPath)
       const resolved = await resolvedInsideRoot(root, absolutePath(root, relativePath))
       const stat = await fs.stat(resolved)
       if (!stat.isDirectory())
-        throw new ServeWorkspaceError('NOT_DIRECTORY', 'Path is not a directory')
+        throw new FsWorkspaceError('NOT_DIRECTORY', 'Path is not a directory')
 
       let names: string[]
       try {
         names = (await fs.readdir(resolved)).filter(name => !DOWNLOAD_TEMPORARY_NAME.test(name) && !EXTRACTION_TEMPORARY_NAME.test(name) && !EDIT_TEMPORARY_NAME.test(name))
       }
       catch {
-        throw new ServeWorkspaceError('UNAVAILABLE', 'Directory cannot be read')
+        throw new FsWorkspaceError('UNAVAILABLE', 'Directory cannot be read')
       }
       const entries = await Promise.all(names.map(name => browserEntry(root, relativePath, name)))
       entries.sort((left, right) => {
@@ -549,12 +549,12 @@ export async function createServeWorkspace(directory: string, options: ServeWork
         entries,
       }
     },
-    async openFile(requestedPath): Promise<ServeFile> {
+    async openFile(requestedPath): Promise<FsFile> {
       const relativePath = normalizedRelativePath(requestedPath)
       const resolved = await resolvedInsideRoot(root, absolutePath(root, relativePath))
       const stat = await fs.stat(resolved)
       if (!stat.isFile())
-        throw new ServeWorkspaceError('NOT_FILE', 'Path is not a file')
+        throw new FsWorkspaceError('NOT_FILE', 'Path is not a file')
       const file = Bun.file(resolved)
       return {
         name: path.basename(relativePath),
@@ -564,7 +564,7 @@ export async function createServeWorkspace(directory: string, options: ServeWork
         body: file,
       }
     },
-    async readTextPreview(requestedPath): Promise<ServeTextPreview> {
+    async readTextPreview(requestedPath): Promise<FsTextPreview> {
       const relativePath = normalizedRelativePath(requestedPath)
       const resolved = await resolvedInsideRoot(root, absolutePath(root, relativePath))
       const { bytes, size } = await readTextBytes(resolved)
@@ -580,7 +580,7 @@ export async function createServeWorkspace(directory: string, options: ServeWork
         ? { status: 'ready', text: decoded.text, encoding: decoded.encoding, size, revision: revision(bytes) }
         : { status: 'binary', size }
     },
-    async saveTextFile(requestedPath, text, expectedRevision): Promise<ServeTextSaveResult> {
+    async saveTextFile(requestedPath, text, expectedRevision): Promise<FsTextSaveResult> {
       const relativePath = normalizedRelativePath(requestedPath)
       const candidate = absolutePath(root, relativePath)
       const resolved = await resolvedInsideRoot(root, candidate)
@@ -590,27 +590,27 @@ export async function createServeWorkspace(directory: string, options: ServeWork
           linkStat = await fs.lstat(candidate)
         }
         catch {
-          throw new ServeWorkspaceError('NOT_FOUND', 'Path does not exist')
+          throw new FsWorkspaceError('NOT_FOUND', 'Path does not exist')
         }
         if (linkStat.isSymbolicLink())
-          throw new ServeWorkspaceError('NOT_FILE', 'Symbolic links are not edit targets')
+          throw new FsWorkspaceError('NOT_FILE', 'Symbolic links are not edit targets')
         if (!linkStat.isFile())
-          throw new ServeWorkspaceError('NOT_FILE', 'Path is not a file')
+          throw new FsWorkspaceError('NOT_FILE', 'Path is not a file')
 
         const source = await readTextBytes(resolved)
         if (source.size > MAX_TEXT_PREVIEW_BYTES)
-          throw new ServeWorkspaceError('TOO_LARGE', 'Text file exceeds the 10 MiB limit')
+          throw new FsWorkspaceError('TOO_LARGE', 'Text file exceeds the 10 MiB limit')
         const decoded = decodeText(source.bytes)
         if (!decoded)
-          throw new ServeWorkspaceError('UNSUPPORTED_TEXT', 'File contents are not supported text')
+          throw new FsWorkspaceError('UNSUPPORTED_TEXT', 'File contents are not supported text')
         const currentRevision = revision(source.bytes)
         if (currentRevision !== expectedRevision)
-          throw new ServeWorkspaceError('REVISION_MISMATCH', 'The file changed while it was being edited')
+          throw new FsWorkspaceError('REVISION_MISMATCH', 'The file changed while it was being edited')
 
         const normalized = normalizeDraft(text, decoded.text)
         const output = encodeText(normalized, decoded.encoding, decoded.bom)
         if (output.byteLength > MAX_TEXT_PREVIEW_BYTES)
-          throw new ServeWorkspaceError('TOO_LARGE', 'Edited text exceeds the 10 MiB limit')
+          throw new FsWorkspaceError('TOO_LARGE', 'Edited text exceeds the 10 MiB limit')
 
         const temporaryPath = path.join(path.dirname(candidate), `.edit-${crypto.randomUUID()}.tmp`)
         try {
@@ -626,12 +626,12 @@ export async function createServeWorkspace(directory: string, options: ServeWork
 
           const finalLinkStat = await fs.lstat(candidate)
           if (!finalLinkStat.isFile() || finalLinkStat.isSymbolicLink())
-            throw new ServeWorkspaceError('NOT_FILE', 'Symbolic links are not edit targets')
+            throw new FsWorkspaceError('NOT_FILE', 'Symbolic links are not edit targets')
           if (await fs.realpath(candidate) !== resolved)
-            throw new ServeWorkspaceError('REVISION_MISMATCH', 'The file changed while it was being edited')
+            throw new FsWorkspaceError('REVISION_MISMATCH', 'The file changed while it was being edited')
           const finalSource = await readTextBytes(resolved)
           if (finalSource.size > MAX_TEXT_PREVIEW_BYTES || revision(finalSource.bytes) !== expectedRevision)
-            throw new ServeWorkspaceError('REVISION_MISMATCH', 'The file changed while it was being edited')
+            throw new FsWorkspaceError('REVISION_MISMATCH', 'The file changed while it was being edited')
           await fs.rename(temporaryPath, candidate)
           const finalStat = await fs.stat(candidate)
           return {
@@ -647,15 +647,15 @@ export async function createServeWorkspace(directory: string, options: ServeWork
         }
       })
     },
-    async uploadFile(requestedDirectory, file): Promise<ServeUploadResult> {
+    async uploadFile(requestedDirectory, file): Promise<FsUploadResult> {
       if (file.size > MAX_UPLOAD_BYTES)
-        throw new ServeWorkspaceError('TOO_LARGE', 'Upload exceeds the 1 GiB file limit')
+        throw new FsWorkspaceError('TOO_LARGE', 'Upload exceeds the 1 GiB file limit')
       const filename = uploadFilename(file.name)
       const directoryPath = normalizedRelativePath(requestedDirectory)
       const directory = await resolvedInsideRoot(root, absolutePath(root, directoryPath))
       const directoryStat = await fs.stat(directory)
       if (!directoryStat.isDirectory())
-        throw new ServeWorkspaceError('NOT_DIRECTORY', 'Upload target is not a directory')
+        throw new FsWorkspaceError('NOT_DIRECTORY', 'Upload target is not a directory')
 
       const temporaryPath = path.join(directory, `.upload-${crypto.randomUUID()}.tmp`)
       try {
@@ -664,18 +664,18 @@ export async function createServeWorkspace(directory: string, options: ServeWork
       }
       catch (error) {
         await fs.unlink(temporaryPath).catch(() => {})
-        if (error instanceof ServeWorkspaceError)
+        if (error instanceof FsWorkspaceError)
           throw error
-        throw new ServeWorkspaceError('UNAVAILABLE', error instanceof Error ? error.message : String(error))
+        throw new FsWorkspaceError('UNAVAILABLE', error instanceof Error ? error.message : String(error))
       }
     },
-    async writeFileStream(requestedDirectory, requestedFilename, stream, options: ServeStreamWriteOptions = {}): Promise<ServeUploadResult> {
+    async writeFileStream(requestedDirectory, requestedFilename, stream, options: FsStreamWriteOptions = {}): Promise<FsUploadResult> {
       const filename = uploadFilename(requestedFilename)
       const directoryPath = normalizedRelativePath(requestedDirectory)
       const directory = await resolvedInsideRoot(root, absolutePath(root, directoryPath))
       const directoryStat = await fs.stat(directory)
       if (!directoryStat.isDirectory())
-        throw new ServeWorkspaceError('NOT_DIRECTORY', 'Download target is not a directory')
+        throw new FsWorkspaceError('NOT_DIRECTORY', 'Download target is not a directory')
 
       const temporaryPath = path.join(directory, `.download-${crypto.randomUUID()}.tmp`)
       const reader = stream.getReader()
@@ -693,12 +693,12 @@ export async function createServeWorkspace(directory: string, options: ServeWork
           if (chunk.done)
             break
           if (!(chunk.value instanceof Uint8Array))
-            throw new ServeWorkspaceError('UNAVAILABLE', 'Download response contained invalid data')
+            throw new FsWorkspaceError('UNAVAILABLE', 'Download response contained invalid data')
           let offset = 0
           while (offset < chunk.value.byteLength) {
             const result = await handle.write(chunk.value, { offset })
             if (result.bytesWritten <= 0)
-              throw new ServeWorkspaceError('UNAVAILABLE', 'Download could not be written')
+              throw new FsWorkspaceError('UNAVAILABLE', 'Download could not be written')
             offset += result.bytesWritten
           }
           size += chunk.value.byteLength
@@ -723,10 +723,10 @@ export async function createServeWorkspace(directory: string, options: ServeWork
     async extractArchive(requestedPath, extractOptions = {}) {
       const source = await operationEntry(root, requestedPath)
       if (!isExtractableArchiveName(source.name))
-        throw new ServeWorkspaceError('UNSUPPORTED_ARCHIVE', 'File type is not supported for extraction')
+        throw new FsWorkspaceError('UNSUPPORTED_ARCHIVE', 'File type is not supported for extraction')
       const sourceResolved = await resolvedInsideRoot(root, source.resolved)
       if (!(await fs.stat(sourceResolved)).isFile())
-        throw new ServeWorkspaceError('NOT_FILE', 'Archive path is not a file')
+        throw new FsWorkspaceError('NOT_FILE', 'Archive path is not a file')
 
       const parentRelativePath = source.relativePath.split('/').slice(0, -1).join('/')
       const parent = await operationDirectory(root, parentRelativePath)
@@ -748,12 +748,12 @@ export async function createServeWorkspace(directory: string, options: ServeWork
       }
       catch (cause) {
         await fs.rm(temporary, { recursive: true, force: true }).catch(() => {})
-        if (cause instanceof ServeWorkspaceError || extractOptions.signal?.aborted)
+        if (cause instanceof FsWorkspaceError || extractOptions.signal?.aborted)
           throw cause
-        throw new ServeWorkspaceError('UNAVAILABLE', 'Archive extraction failed')
+        throw new FsWorkspaceError('UNAVAILABLE', 'Archive extraction failed')
       }
     },
-    async applyOperation(operation: ServeOperation) {
+    async applyOperation(operation: FsOperation) {
       if (operation.action === 'create-directory') {
         let destinationPath: string | undefined
         try {
@@ -765,7 +765,7 @@ export async function createServeWorkspace(directory: string, options: ServeWork
           }
           catch (cause) {
             if ((cause as NodeJS.ErrnoException).code === 'EEXIST')
-              throw new ServeWorkspaceError('ALREADY_EXISTS', 'An entry with that name already exists')
+              throw new FsWorkspaceError('ALREADY_EXISTS', 'An entry with that name already exists')
             throw cause
           }
           return { action: operation.action, items: [{ status: 'ok' as const, destinationPath }] }
@@ -809,7 +809,7 @@ export async function createServeWorkspace(directory: string, options: ServeWork
             items: operation.paths.map(sourcePath => operationFailure(cause, { sourcePath })),
           }
         }
-        const items: ServeOperationItem[] = []
+        const items: FsOperationItem[] = []
         for (const requestedPath of operation.paths) {
           try {
             const source = await operationEntry(root, requestedPath)
@@ -817,7 +817,7 @@ export async function createServeWorkspace(directory: string, options: ServeWork
             if (sourceStat.isDirectory()) {
               const sourceDirectory = await fs.realpath(source.resolved)
               if (isWithinRoot(sourceDirectory, destination.resolved))
-                throw new ServeWorkspaceError('INVALID_OPERATION', 'A directory cannot be copied into itself')
+                throw new FsWorkspaceError('INVALID_OPERATION', 'A directory cannot be copied into itself')
             }
             const target = await collisionDestination(destination.resolved, source.name)
             await fs.cp(source.resolved, target.resolved, {
@@ -850,7 +850,7 @@ export async function createServeWorkspace(directory: string, options: ServeWork
             items: operation.paths.map(sourcePath => operationFailure(cause, { sourcePath })),
           }
         }
-        const items: ServeOperationItem[] = []
+        const items: FsOperationItem[] = []
         for (const requestedPath of operation.paths) {
           let destinationPath: string | undefined
           try {
@@ -859,7 +859,7 @@ export async function createServeWorkspace(directory: string, options: ServeWork
             if (sourceStat.isDirectory()) {
               const sourceDirectory = await fs.realpath(source.resolved)
               if (isWithinRoot(sourceDirectory, destination.resolved))
-                throw new ServeWorkspaceError('INVALID_OPERATION', 'A directory cannot be moved into itself')
+                throw new FsWorkspaceError('INVALID_OPERATION', 'A directory cannot be moved into itself')
             }
             destinationPath = [destination.relativePath, source.name].filter(Boolean).join('/')
             const target = path.join(destination.resolved, source.name)
@@ -875,7 +875,7 @@ export async function createServeWorkspace(directory: string, options: ServeWork
       }
 
       if (operation.action === 'delete') {
-        const items: ServeOperationItem[] = []
+        const items: FsOperationItem[] = []
         for (const requestedPath of operation.paths) {
           try {
             const source = await operationEntry(root, requestedPath)
@@ -890,7 +890,7 @@ export async function createServeWorkspace(directory: string, options: ServeWork
         return { action: operation.action, items }
       }
 
-      throw new ServeWorkspaceError('INVALID_OPERATION', 'Operation is not supported')
+      throw new FsWorkspaceError('INVALID_OPERATION', 'Operation is not supported')
     },
   }
 }

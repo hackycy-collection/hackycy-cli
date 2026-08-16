@@ -4,7 +4,7 @@ import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
 import { afterEach, describe, expect, test } from 'bun:test'
-import { createServeWorkspace } from './workspace'
+import { createFsWorkspace } from './workspace'
 
 const temporaryDirectories: string[] = []
 
@@ -12,15 +12,15 @@ afterEach(async () => {
   await Promise.all(temporaryDirectories.splice(0).map(directory => rm(directory, { recursive: true, force: true })))
 })
 
-async function fixture(extractor: ArchiveExtractor): Promise<{ root: string, archive: string, workspace: Awaited<ReturnType<typeof createServeWorkspace>> }> {
+async function fixture(extractor: ArchiveExtractor): Promise<{ root: string, archive: string, workspace: Awaited<ReturnType<typeof createFsWorkspace>> }> {
   const root = await mkdtemp(path.join(os.tmpdir(), 'ycy-archive-workspace-'))
   temporaryDirectories.push(root)
   const archive = path.join(root, 'backup.tar.gz')
   await writeFile(archive, 'fixture')
-  return { root, archive, workspace: await createServeWorkspace(root, { archiveExtractor: extractor }) }
+  return { root, archive, workspace: await createFsWorkspace(root, { archiveExtractor: extractor }) }
 }
 
-describe('ServeWorkspace archive publication', () => {
+describe('FsWorkspace archive publication', () => {
   test('marks archives, publishes beside the source, and numbers directory collisions', async () => {
     const progress: number[] = []
     const { root, archive, workspace } = await fixture({

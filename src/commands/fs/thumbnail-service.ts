@@ -1,5 +1,5 @@
 import type { ThumbnailWorkerRequest, ThumbnailWorkerResponse } from './thumbnail-worker'
-import type { ServeFile, ServeWorkspace } from './types'
+import type { FsFile, FsWorkspace } from './types'
 import { imageDimensionsFromData } from 'image-dimensions'
 
 export const THUMBNAIL_MAX_INPUT_BYTES = 64 * 1024 * 1024
@@ -92,7 +92,7 @@ class ThumbnailWorkerPool {
 
   private createSlot(): WorkerSlot {
     const slot = {
-      worker: this.options.createWorker?.() ?? new Worker('./src/commands/serve/thumbnail-worker.ts'),
+      worker: this.options.createWorker?.() ?? new Worker('./src/commands/fs/thumbnail-worker.ts'),
     } as WorkerSlot
     slot.worker.onmessage = (event: MessageEvent<ThumbnailWorkerResponse>) => {
       const task = slot.task
@@ -170,7 +170,7 @@ export class ThumbnailService {
   private readonly inFlight = new Map<string, Promise<Uint8Array<ArrayBuffer>>>()
   private cacheBytes = 0
 
-  constructor(private readonly workspace: ServeWorkspace, workerOptions: ThumbnailWorkerPoolOptions = {}) {
+  constructor(private readonly workspace: FsWorkspace, workerOptions: ThumbnailWorkerPoolOptions = {}) {
     this.pool = new ThumbnailWorkerPool(workerOptions)
   }
 
@@ -205,14 +205,14 @@ export class ThumbnailService {
     this.cacheBytes = 0
   }
 
-  private validateFile(file: ServeFile): void {
+  private validateFile(file: FsFile): void {
     if (!SUPPORTED_MIME_TYPES.has(file.mimeType.split(';')[0]!.trim().toLowerCase()))
       throw new ThumbnailError(404, 'Thumbnail format is not supported')
     if (file.size > THUMBNAIL_MAX_INPUT_BYTES)
       throw new ThumbnailError(413, 'Image exceeds the thumbnail size limit')
   }
 
-  private async generate(file: ServeFile): Promise<Uint8Array<ArrayBuffer>> {
+  private async generate(file: FsFile): Promise<Uint8Array<ArrayBuffer>> {
     const bytes = new Uint8Array(await file.body.arrayBuffer())
     const dimensions = imageDimensionsFromData(bytes)
     if (!dimensions)

@@ -1,17 +1,17 @@
-import type { ServeAuthentication } from './authentication'
+import type { FsAuthentication } from './authentication'
 import type { DownloadErrorCode } from './download-service'
 import type { ExtractionErrorCode } from './extraction-service'
-import type { ServeDownloadManager, ServeErrorCode, ServeExtractionManager, ServeWorkspace } from './types'
+import type { FsDownloadManager, FsErrorCode, FsExtractionManager, FsWorkspace } from './types'
 import { isIP } from 'node:net'
 import { z } from 'zod'
 import { createRemoteDownloadManager, DownloadError } from './download-service'
 import { createExtractionManager, ExtractionError } from './extraction-service'
 import { ThumbnailError, ThumbnailService } from './thumbnail-service'
-import { ServeWorkspaceError } from './types'
-import serveWebApp from './web/index.html'
+import { FsWorkspaceError } from './types'
+import fsWebApp from './web/index.html'
 import { MAX_TEXT_PREVIEW_BYTES, MAX_UPLOAD_BYTES } from './workspace'
 
-export interface RunningServeServer {
+export interface RunningFsServer {
   readonly url: URL
   readonly finished: Promise<void>
   stop: () => Promise<void>
@@ -26,7 +26,7 @@ const API_HEADERS = {
 
 const APP_CONTENT_SECURITY_POLICY = 'default-src \'self\'; script-src \'self\'; style-src \'self\' \'unsafe-inline\'; worker-src \'self\'; img-src \'self\' blob: data:; media-src \'self\'; frame-src \'self\'; connect-src \'self\'; object-src \'none\'; base-uri \'none\'; frame-ancestors \'none\''
 const ACTIVE_FILE_CONTENT_SECURITY_POLICY = 'sandbox; default-src \'none\'; style-src \'unsafe-inline\'; img-src data:; object-src \'none\'; base-uri \'none\'; frame-ancestors \'none\''
-const SESSION_COOKIE = 'ycy_serve_session'
+const SESSION_COOKIE = 'ycy_fs_session'
 const SESSION_COOKIE_ATTRIBUTES = 'HttpOnly; SameSite=Strict; Path=/'
 
 const operationPathSchema = z.string().max(4096)
@@ -68,7 +68,7 @@ function configureWebBundleHeaders(bundle: Bun.HTMLBundle): void {
   }
 }
 
-const ERROR_STATUS: Record<ServeErrorCode, number> = {
+const ERROR_STATUS: Record<FsErrorCode, number> = {
   INVALID_PATH: 400,
   INVALID_UPLOAD: 400,
   INVALID_NAME: 400,
@@ -100,7 +100,7 @@ function error(code: string, message: string, status: number): Response {
 }
 
 function workspaceError(cause: unknown): Response {
-  if (cause instanceof ServeWorkspaceError)
+  if (cause instanceof FsWorkspaceError)
     return error(cause.code, cause.message, ERROR_STATUS[cause.code])
   return error('INTERNAL_ERROR', cause instanceof Error ? cause.message : String(cause), 500)
 }
@@ -192,7 +192,7 @@ function requestResourcePath(pathname: string, prefix: string): string {
     return encoded.split('/').filter(Boolean).map(decodeURIComponent).join('/')
   }
   catch {
-    throw new ServeWorkspaceError('INVALID_PATH', 'File path is not valid URL encoding')
+    throw new FsWorkspaceError('INVALID_PATH', 'File path is not valid URL encoding')
   }
 }
 
@@ -272,7 +272,7 @@ function rangeAllowed(request: Request, etag: string, modifiedAt: Date): boolean
   return Number.isFinite(timestamp) && modifiedAt.getTime() < timestamp + 1000
 }
 
-async function serveOriginalFile(request: Request, workspace: ServeWorkspace, corsEnabled: boolean, safeHtml: boolean): Promise<Response> {
+async function streamOriginalFile(request: Request, workspace: FsWorkspace, corsEnabled: boolean, safeHtml: boolean): Promise<Response> {
   if (request.method === 'OPTIONS') {
     return new Response(null, {
       status: 204,
@@ -344,7 +344,7 @@ async function serveOriginalFile(request: Request, workspace: ServeWorkspace, co
     return new Response(body, { headers })
   }
   catch (cause) {
-    if (cause instanceof ServeWorkspaceError && cause.code === 'NOT_FILE') {
+    if (cause instanceof FsWorkspaceError && cause.code === 'NOT_FILE') {
       try {
         const listing = await workspace.listDirectory(relativePath)
         const location = listing.path ? `/browse/${encodedPath(listing.path)}` : '/'
@@ -358,7 +358,7 @@ async function serveOriginalFile(request: Request, workspace: ServeWorkspace, co
   }
 }
 
-async function serveThumbnail(request: Request, thumbnails: ThumbnailService): Promise<Response> {
+async function streamThumbnail(request: Request, thumbnails: ThumbnailService): Promise<Response> {
   if (!['GET', 'HEAD'].includes(request.method))
     return error('METHOD_NOT_ALLOWED', 'Use GET or HEAD', 405)
 
@@ -394,24 +394,24 @@ async function serveThumbnail(request: Request, thumbnails: ThumbnailService): P
   }
 }
 
-export function startServeHttpServer(options: {
-  workspace: ServeWorkspace
+export function startFsHttpServer(options: {
+  workspace: FsWorkspace
   address: string
   port: number
   managementEnabled: boolean
   safeHtml?: boolean
-  authentication?: ServeAuthentication
+  authentication?: FsAuthentication
   thumbnailService?: ThumbnailService
-  downloadManager?: ServeDownloadManager
-  extractionManager?: ServeExtractionManager
-}): RunningServeServer {
-  configureWebBundleHeaders(serveWebApp)
+  downloadManager?: FsDownloadManager
+  extractionManager?: FsExtractionManager
+}): RunningFsServer {
+  configureWebBundleHeaders(fsWebApp)
   const thumbnails = options.thumbnailService ?? new ThumbnailService(options.workspace)
   const downloads = options.downloadManager ?? createRemoteDownloadManager(options.workspace)
   const extractions = options.extractionManager ?? createExtractionManager(options.workspace)
   // Bun accepts an HTMLBundle for a method route, though its ambient type only lists it for whole-route values.
   const appRoute = {
-    GET: serveWebApp as unknown as Response,
+    GET: fsWebApp as unknown as Response,
     POST: () => error('METHOD_NOT_ALLOWED', 'Use GET', 405),
     PUT: () => error('METHOD_NOT_ALLOWED', 'Use GET', 405),
     DELETE: () => error('METHOD_NOT_ALLOWED', 'Use GET', 405),
@@ -516,7 +516,7 @@ export function startServeHttpServer(options: {
       if (url.pathname === '/api/text') {
         if (request.method === 'PUT') {
           if (!options.managementEnabled)
-            return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable filesystem management', 403)
+            return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable filesystem management', 403)
           const invalidOrigin = validateMutationOrigin(request, options.address)
           if (invalidOrigin)
             return invalidOrigin
@@ -587,7 +587,7 @@ export function startServeHttpServer(options: {
         if (invalidMethod)
           return invalidMethod
         if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable filesystem management', 403)
+          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable filesystem management', 403)
         const invalidOrigin = validateMutationOrigin(request, options.address)
         if (invalidOrigin)
           return invalidOrigin
@@ -617,7 +617,7 @@ export function startServeHttpServer(options: {
         if (invalidMethod)
           return invalidMethod
         if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable filesystem management', 403)
+          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable filesystem management', 403)
         const invalidOrigin = validateMutationOrigin(request, options.address)
         if (invalidOrigin)
           return invalidOrigin
@@ -643,7 +643,7 @@ export function startServeHttpServer(options: {
         if (invalidMethod)
           return invalidMethod
         if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable remote downloads', 403)
+          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
         bunServer.timeout(request, 0)
         const encoder = new TextEncoder()
         let unsubscribe: (() => void) | undefined
@@ -688,12 +688,12 @@ export function startServeHttpServer(options: {
       if (url.pathname === '/api/downloads') {
         if (request.method === 'GET') {
           if (!options.managementEnabled)
-            return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable remote downloads', 403)
+            return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
           return json({ version: 1, tasks: downloads.list() })
         }
         if (request.method === 'DELETE') {
           if (!options.managementEnabled)
-            return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable remote downloads', 403)
+            return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
           const invalidOrigin = validateMutationOrigin(request, options.address)
           if (invalidOrigin)
             return invalidOrigin
@@ -706,7 +706,7 @@ export function startServeHttpServer(options: {
         if (invalidMethod)
           return invalidMethod
         if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable remote downloads', 403)
+          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
         const invalidOrigin = validateMutationOrigin(request, options.address)
         if (invalidOrigin)
           return invalidOrigin
@@ -737,7 +737,7 @@ export function startServeHttpServer(options: {
         if (invalidMethod)
           return invalidMethod
         if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable remote downloads', 403)
+          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
         const invalidOrigin = validateMutationOrigin(request, options.address)
         if (invalidOrigin)
           return invalidOrigin
@@ -765,7 +765,7 @@ export function startServeHttpServer(options: {
         if (invalidMethod)
           return invalidMethod
         if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable archive extraction', 403)
+          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
         bunServer.timeout(request, 0)
         const encoder = new TextEncoder()
         let unsubscribe: (() => void) | undefined
@@ -810,12 +810,12 @@ export function startServeHttpServer(options: {
       if (url.pathname === '/api/extractions') {
         if (request.method === 'GET') {
           if (!options.managementEnabled)
-            return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable archive extraction', 403)
+            return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
           return json({ version: 1, tasks: extractions.list() })
         }
         if (request.method === 'DELETE') {
           if (!options.managementEnabled)
-            return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable archive extraction', 403)
+            return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
           const invalidOrigin = validateMutationOrigin(request, options.address)
           if (invalidOrigin)
             return invalidOrigin
@@ -828,7 +828,7 @@ export function startServeHttpServer(options: {
         if (invalidMethod)
           return invalidMethod
         if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable archive extraction', 403)
+          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
         const invalidOrigin = validateMutationOrigin(request, options.address)
         if (invalidOrigin)
           return invalidOrigin
@@ -858,7 +858,7 @@ export function startServeHttpServer(options: {
         if (invalidMethod)
           return invalidMethod
         if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start serve with --manage to enable archive extraction', 403)
+          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
         const invalidOrigin = validateMutationOrigin(request, options.address)
         if (invalidOrigin)
           return invalidOrigin
@@ -882,9 +882,9 @@ export function startServeHttpServer(options: {
         }
       }
       if (url.pathname === '/files' || url.pathname.startsWith('/files/'))
-        return serveOriginalFile(request, options.workspace, !options.authentication, options.safeHtml === true)
+        return streamOriginalFile(request, options.workspace, !options.authentication, options.safeHtml === true)
       if (url.pathname.startsWith('/thumbnails/'))
-        return serveThumbnail(request, thumbnails)
+        return streamThumbnail(request, thumbnails)
       return error('NOT_FOUND', 'Route not found', 404)
     },
   })

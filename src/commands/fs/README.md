@@ -1,14 +1,14 @@
-# Static File Server Command
+# File Browser Command
 
-This directory contains `ycy serve`: a root-confined filesystem workspace, a same-origin HTTP adapter, and an embedded React file browser.
+This directory contains `ycy fs`: a root-confined filesystem workspace, a same-origin HTTP adapter, and an embedded React file browser.
 
 ## Purpose
 
 ```text
-ycy serve [options] [directory]
+ycy fs [options] [directory]
 
 Options:
-  -p, --port <number>       Port to serve on (default: 1204)
+  -p, --port <number>       Port for the file browser (default: 1204)
   -a, --address <string>    Address to bind to (default: 0.0.0.0)
   -m, --manage              Enable uploads, downloads, extraction, and filesystem management
       --safe-html           Disable HTML and XHTML execution and force downloads
@@ -22,7 +22,7 @@ HTML and XHTML files are executable same-origin pages by default, similar to a c
 Passing one or more accounts enables login mode:
 
 ```bash
-ycy serve --account 'alice:password123' --account 'bob:another-password' ./shared
+ycy fs --account 'alice:password123' --account 'bob:another-password' ./shared
 ```
 
 The first colon separates the username from the password, so the password may contain additional colons. Usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens and are matched without case sensitivity. Passwords contain 5-256 characters. Duplicate usernames stop startup. Account specifications are process arguments and may be visible in shell history and process inspection tools.
@@ -32,9 +32,9 @@ The first colon separates the username from the password, so the password may co
 ```text
 CLI registration (index.ts)
   -> process composition (run.ts)
-     -> ServeWorkspace (workspace.ts)
-     -> ServeAuthentication (authentication.ts, when accounts are configured)
-     -> ServeHttpServer (server.ts)
+     -> FsWorkspace (workspace.ts)
+     -> FsAuthentication (authentication.ts, when accounts are configured)
+     -> FsHttpServer (server.ts)
         -> JSON and file HTTP adapter
         -> RemoteDownloadManager with a bounded process-local queue
         -> ExtractionManager with a single-worker process-local queue
@@ -49,7 +49,7 @@ CLI registration (index.ts)
 - `archive-extractor.ts` owns 7-Zip inspection, capacity checks, multi-layer TAR extraction, process cancellation, and normalized failures. `workspace.ts` owns staging, output validation, collision-safe naming, and atomic publication. `extraction-service.ts` owns the bounded single-worker queue.
 - `thumbnail-service.ts` owns input limits, request coalescing, the bounded worker queue, and the session-only LRU. `thumbnail-worker.ts` performs WASM decoding and WebP conversion off the HTTP thread.
 - `web/` owns directory History navigation, sorting, virtualization, preview state, theme, one syntax-highlighting worker, and the three-worker upload queue. It never constructs absolute filesystem paths.
-- Shared Radix/Tailwind primitives live under `src/shared/web` and are consumed by both `serve` and `diff`.
+- Shared Radix/Tailwind primitives live under `src/shared/web` and are consumed by both `fs` and `diff`.
 
 ## HTTP Interface
 
@@ -72,7 +72,7 @@ CLI registration (index.ts)
 | `GET\|HEAD /files/*` | Original file bytes; `?download=1` forces attachment. |
 | `GET\|HEAD /thumbnails/*` | 160×160 WebP thumbnail for JPEG, PNG, WebP, AVIF, or GIF input. |
 
-The former direct file URL shape is intentionally not retained. A served path such as `docs/readme.txt` is available at `/files/docs/readme.txt`; `/browse/docs` is the browser route.
+The former direct file URL shape is intentionally not retained. A file browser path such as `docs/readme.txt` is available at `/files/docs/readme.txt`; `/browse/docs` is the browser route.
 
 Errors use `{ version: 1, error: { code, message } }`. Directory and text responses are not cacheable. Original files support ETag, Last-Modified, HEAD, and one byte range. Thumbnail responses support ETag, Last-Modified, and conditional 304 responses. Only `/files/*` enables wildcard CORS, and only when login mode is disabled.
 
@@ -93,7 +93,7 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 - Sessions use random process-local tokens in an `HttpOnly`, `SameSite=Strict` cookie. They expire after 12 hours, do not survive a restart, and are bounded to eight per account and 128 for the server.
 - Logging out, session expiry, or bounded-session eviction revokes the token and closes its active remote-download event stream.
 - All configured accounts have the same read and management permissions. There is no registration, role, password-change, or persistent account interface.
-- Authentication does not add TLS. Passwords and session cookies travel over the HTTP connection exposed by `serve`.
+- Authentication does not add TLS. Passwords and session cookies travel over the HTTP connection exposed by `fs`.
 
 ## Filesystem And Management Invariants
 
@@ -102,7 +102,7 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 - Text preview checks the 10 MiB size limit before reading and treats invalid supported encodings as binary.
 - Thumbnail input is capped at 64 MiB and 50 million pixels. SVG is never sent to the raster converter. Failed or oversized thumbnails remain file icons in the main browser and never trigger an original-image fallback.
 - Thumbnail conversion uses two persistent workers, at most 128 queued tasks, a five-second task timeout, and replacement of a timed-out worker. Concurrent requests for the same file revision share one conversion.
-- Thumbnail output stays in a process-local LRU keyed by path, size, and modification time. The cache holds at most 1000 entries or 32 MiB, writes nothing to the served directory, and is discarded when the server stops.
+- Thumbnail output stays in a process-local LRU keyed by path, size, and modification time. The cache holds at most 1000 entries or 32 MiB, writes nothing to the file browser directory, and is discarded when the server stops.
 - Each upload is capped at 1 GiB, written to a temporary file in the destination directory, then published atomically with a hard link.
 - Remote downloads have no upload-size cap. Response bodies are streamed through bounded chunks into hidden destination-local temporary files, then published atomically with the same collision-safe naming rules as uploads.
 - At most two remote downloads run concurrently, at most 100 wait in the queue, and terminal task records are pruned to a bounded history. Cancelling a task or stopping the server aborts the request and removes its temporary file.
@@ -114,7 +114,7 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 - Archive extraction uses 7-Zip's default symbolic-link policy. Versioned link chains used by some macOS `.app` Framework bundles are not a compatibility guarantee and may cause extraction to fail.
 - Exactly one archive is extracted at a time. At most 100 tasks wait and at most 100 task records are retained. Cancellation or server shutdown terminates the child process and removes staging content; old hidden staging directories are removed on a later extraction after 24 hours.
 - Existing names are never overwritten. Collisions receive `name (1).ext` through `name (9999).ext`.
-- The served root cannot be renamed, moved, copied, or deleted. Directories cannot be copied or moved into themselves.
+- The file browser root cannot be renamed, moved, copied, or deleted. Directories cannot be copied or moved into themselves.
 - Rename and move reject collisions. Copy and upload choose collision-safe numbered names. Recursive copy does not dereference symbolic links.
 - Delete is permanent and operates on the final directory entry itself, so deleting a symbolic link never deletes its target.
 - All management requests require an exact same Origin and a hostname permitted by the active binding. Batch operations accept at most 1000 paths and report partial results per item.
@@ -137,8 +137,8 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 ## Verification
 
 ```bash
-bun test src/commands/serve
-bun run test:serve:performance
+bun test src/commands/fs
+bun run test:fs:performance
 bun test src/commands/diff
 bun run typecheck
 bun run lint --no-cache

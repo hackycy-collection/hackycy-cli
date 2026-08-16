@@ -1,10 +1,10 @@
-import type { SevenZipArtifact, SevenZipTarget } from '../src/commands/serve/archive-manifest'
+import type { SevenZipArtifact, SevenZipTarget } from '../src/commands/fs/archive-manifest'
 import { createHash } from 'node:crypto'
 import { access, chmod, copyFile, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises'
 import os from 'node:os'
 import path from 'node:path'
 import process from 'node:process'
-import { SEVEN_ZIP_ARTIFACTS, SEVEN_ZIP_RELEASE_BASE_URL, sevenZipTarget } from '../src/commands/serve/archive-manifest'
+import { SEVEN_ZIP_ARTIFACTS, SEVEN_ZIP_RELEASE_BASE_URL, sevenZipTarget } from '../src/commands/fs/archive-manifest'
 
 const CACHE_ROOT = path.resolve('.tmp', '7zip')
 const WINDOWS_EXTRACTOR = {

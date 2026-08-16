@@ -146,7 +146,7 @@ export async function apiJson<T>(url: string, init?: RequestInit): Promise<T> {
   const body = response.status === 204 ? undefined : await response.json() as T & ErrorBody
   if (!response.ok) {
     if (response.status === 401 && url !== '/api/session')
-      window.dispatchEvent(new Event('serve-authentication-required'))
+      window.dispatchEvent(new Event('fs-authentication-required'))
     throw new ApiError(response.status, body?.error?.message ?? `Request failed (${response.status})`)
   }
   return body as T
@@ -219,7 +219,7 @@ export function uploadFile(
         return
       }
       if (request.status === 401)
-        window.dispatchEvent(new Event('serve-authentication-required'))
+        window.dispatchEvent(new Event('fs-authentication-required'))
       const body = request.response as ErrorBody | null
       reject(new Error(body?.error?.message ?? `Upload failed (${request.status})`))
     }

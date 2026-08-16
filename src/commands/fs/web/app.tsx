@@ -164,7 +164,7 @@ function Login({ onLogin }: { onLogin: (session: Extract<SessionState, { authent
             <span className="app-icon"><HardDrive className="size-4" /></span>
             <div>
               <div className="brand-label">HACKYCY CLI</div>
-              <strong>File Server</strong>
+              <strong>File Browser</strong>
             </div>
           </div>
           <label className="login-field">
@@ -187,7 +187,7 @@ function Login({ onLogin }: { onLogin: (session: Extract<SessionState, { authent
 }
 
 export function App(): React.JSX.Element {
-  const [theme, setTheme] = useStoredValue<'light' | 'dark'>('ycy-serve-theme', () => matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
+  const [theme, setTheme] = useStoredValue<'light' | 'dark'>('ycy-fs-theme', () => matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light')
   const [session, setSession] = useState<SessionState>()
   const [sessionError, setSessionError] = useState<string>()
   const loadSession = useCallback(async (): Promise<void> => {
@@ -208,8 +208,8 @@ export function App(): React.JSX.Element {
 
   useEffect(() => {
     const sessionEnded = (): void => setSession({ version: 1, authenticationEnabled: true, authenticated: false })
-    window.addEventListener('serve-authentication-required', sessionEnded)
-    return () => window.removeEventListener('serve-authentication-required', sessionEnded)
+    window.addEventListener('fs-authentication-required', sessionEnded)
+    return () => window.removeEventListener('fs-authentication-required', sessionEnded)
   }, [])
 
   if (!session) {
@@ -279,9 +279,9 @@ function ExplorerApp({
   const [loadError, setLoadError] = useState<string>()
   const [loading, setLoading] = useState(true)
   const [reloadVersion, setReloadVersion] = useState(0)
-  const [viewMode, setViewMode] = useStoredValue<ViewMode>('ycy-serve-view', () => 'list')
-  const [sortKey, setSortKey] = useStoredValue<SortKey>('ycy-serve-sort', () => 'name')
-  const [sortDirection, setSortDirection] = useStoredValue<SortDirection>('ycy-serve-sort-direction', () => 'asc')
+  const [viewMode, setViewMode] = useStoredValue<ViewMode>('ycy-fs-view', () => 'list')
+  const [sortKey, setSortKey] = useStoredValue<SortKey>('ycy-fs-sort', () => 'name')
+  const [sortDirection, setSortDirection] = useStoredValue<SortDirection>('ycy-fs-sort-direction', () => 'asc')
   const [query, setQuery] = useState('')
   const [selection, setSelection] = useState<ExplorerSelection>({ paths: [] })
   const [clipboard, setClipboard] = useState<ExplorerClipboard>()
@@ -339,10 +339,10 @@ function ExplorerApp({
   }, [editorDirty])
 
   useEffect(() => {
-    history.replaceState({ serveCursor: 0 }, '', window.location.href)
+    history.replaceState({ fsCursor: 0 }, '', window.location.href)
     const popstate = (event: PopStateEvent): void => {
       const next = routeState()
-      const cursor = typeof event.state?.serveCursor === 'number' ? event.state.serveCursor : undefined
+      const cursor = typeof event.state?.fsCursor === 'number' ? event.state.fsCursor : undefined
       if (revertingPopStateRef.current) {
         revertingPopStateRef.current = false
       }
@@ -358,7 +358,7 @@ function ExplorerApp({
             const restoreUrl = new URL(browserUrl(current.directoryPath), window.location.origin)
             if (current.previewPath)
               restoreUrl.searchParams.set('preview', current.previewPath)
-            history.replaceState({ serveCursor: navigationRef.current.cursor }, '', restoreUrl)
+            history.replaceState({ fsCursor: navigationRef.current.cursor }, '', restoreUrl)
           }
           return
         }
@@ -442,7 +442,7 @@ function ExplorerApp({
         events.onerror = () => {
           void apiJson<SessionState>('/api/session').then((session) => {
             if (session.authenticationEnabled && !session.authenticated)
-              window.dispatchEvent(new Event('serve-authentication-required'))
+              window.dispatchEvent(new Event('fs-authentication-required'))
           }).catch(() => {})
         }
       })
@@ -490,7 +490,7 @@ function ExplorerApp({
         events.onerror = () => {
           void apiJson<SessionState>('/api/session').then((session) => {
             if (session.authenticationEnabled && !session.authenticated)
-              window.dispatchEvent(new Event('serve-authentication-required'))
+              window.dispatchEvent(new Event('fs-authentication-required'))
           }).catch(() => {})
         }
       })
@@ -520,7 +520,7 @@ function ExplorerApp({
     if (editorDirty && !window.confirm('Discard unsaved changes?'))
       return
     const next = pushNavigation(navigationRef.current, path)
-    history.pushState({ serveCursor: next.cursor }, '', browserUrl(path))
+    history.pushState({ fsCursor: next.cursor }, '', browserUrl(path))
     setNavigation(next)
     setDirectoryPath(path)
     setPreviewPath(undefined)
@@ -554,7 +554,7 @@ function ExplorerApp({
       return
     const url = new URL(window.location.href)
     url.searchParams.set('preview', entry.path)
-    history.replaceState({ serveCursor: navigationRef.current.cursor }, '', url)
+    history.replaceState({ fsCursor: navigationRef.current.cursor }, '', url)
     setPreviewPath(entry.path)
     if (entry.path !== previewPath) {
       setEditingTarget(undefined)
@@ -580,7 +580,7 @@ function ExplorerApp({
     const next = pushNavigation(navigationRef.current, parentPath)
     const previewUrl = new URL(browserUrl(parentPath), window.location.origin)
     previewUrl.searchParams.set('preview', entry.path)
-    history.pushState({ serveCursor: next.cursor }, '', previewUrl)
+    history.pushState({ fsCursor: next.cursor }, '', previewUrl)
     setNavigation(next)
     setDirectoryPath(parentPath)
     setPreviewPath(entry.path)
@@ -601,7 +601,7 @@ function ExplorerApp({
       return
     const url = new URL(window.location.href)
     url.searchParams.delete('preview')
-    history.replaceState({ serveCursor: navigationRef.current.cursor }, '', url)
+    history.replaceState({ fsCursor: navigationRef.current.cursor }, '', url)
     setPreviewPath(undefined)
     setEditingTarget(undefined)
     setEditorDirty(false)
@@ -1051,8 +1051,8 @@ function ExplorerApp({
         <Button className="mobile-nav-trigger command-button" size="icon" variant="ghost" aria-label="Open folder navigation" onClick={() => setMobileNavigation(true)}><Menu className="size-4" /></Button>
         <span className="app-icon"><HardDrive className="size-4" /></span>
         <div className="min-w-0">
-          <div className="brand-label">HACKYCY CLI · FILE SERVER</div>
-          <div className="truncate text-xs font-semibold" title={listing?.rootName}>{listing?.rootName ?? 'File Server'}</div>
+          <div className="brand-label">HACKYCY CLI · FILE BROWSER</div>
+          <div className="truncate text-xs font-semibold" title={listing?.rootName}>{listing?.rootName ?? 'File Browser'}</div>
         </div>
         <span className={cn('mode-badge', managementEnabled && 'manage')}>{managementEnabled ? 'MANAGEMENT' : 'READ ONLY'}</span>
         <Tooltip label={`Use ${theme === 'light' ? 'dark' : 'light'} theme`}>

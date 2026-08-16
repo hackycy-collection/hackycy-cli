@@ -4,10 +4,10 @@ import { version } from '../package.json'
 import { register as registerConfig } from './commands/config'
 import { register as registerDiff } from './commands/diff'
 import { register as registerExport } from './commands/export'
+import { register as registerFs } from './commands/fs'
 import { register as registerGit } from './commands/git'
 import { register as registerRm } from './commands/rm'
 import { register as registerRun } from './commands/run'
-import { register as registerServe } from './commands/serve'
 import { register as registerTunnel } from './commands/tunnel'
 import { register as registerUpgrade } from './commands/upgrade'
 import { consumeUpdateState, formatUpdateState, INTERNAL_UPDATE_COMMAND, INTERNAL_UPDATE_VERIFY_ENV, runInternalUpdater } from './commands/upgrade/updater'
@@ -59,7 +59,7 @@ else {
     registerConfig(program)
     registerGit(program)
     registerRm(program)
-    registerServe(program)
+    registerFs(program)
     registerTunnel(program)
     registerZip(program)
     registerRun(program)

@@ -5,7 +5,7 @@ const MAX_ACCOUNT_SESSIONS = 8
 const MAX_SESSIONS = 128
 const PASSWORD_ALGORITHM = { algorithm: 'argon2id', memoryCost: 65_536, timeCost: 3 } as const
 
-interface ServeAccount {
+interface FsAccount {
   username: string
   key: string
   passwordHash: string
@@ -16,16 +16,16 @@ interface SessionEntry {
   expiresAt: number
 }
 
-export interface ServeSession {
+export interface FsSession {
   account: { username: string }
   expiresAt: string
 }
 
-export interface ServeSessionGrant extends ServeSession {
+export interface FsSessionGrant extends FsSession {
   token: string
 }
 
-export interface ServeAuthenticationOptions {
+export interface FsAuthenticationOptions {
   sessionLifetimeMs?: number
   maxAccountSessions?: number
   maxSessions?: number
@@ -51,18 +51,18 @@ function usernameKey(value: string): string | undefined {
   return /^[\w.-]{1,64}$/.test(value) ? value.toLowerCase() : undefined
 }
 
-export class ServeAuthentication {
+export class FsAuthentication {
   private readonly sessions = new Map<string, SessionEntry>()
   private readonly observers = new Map<string, Set<() => void>>()
   private expirationTimer: ReturnType<typeof setTimeout> | undefined
   private closed = false
 
   private constructor(
-    private readonly accounts: Map<string, ServeAccount>,
-    private readonly options: Required<ServeAuthenticationOptions>,
+    private readonly accounts: Map<string, FsAccount>,
+    private readonly options: Required<FsAuthenticationOptions>,
   ) {}
 
-  static async create(specifications: string[], options: ServeAuthenticationOptions = {}): Promise<ServeAuthentication | undefined> {
+  static async create(specifications: string[], options: FsAuthenticationOptions = {}): Promise<FsAuthentication | undefined> {
     if (specifications.length === 0)
       return undefined
 
@@ -74,7 +74,7 @@ export class ServeAuthentication {
       keys.add(account.key)
     }
 
-    const accounts = new Map<string, ServeAccount>()
+    const accounts = new Map<string, FsAccount>()
     for (const account of parsedAccounts) {
       accounts.set(account.key, {
         username: account.username,
@@ -83,7 +83,7 @@ export class ServeAuthentication {
       })
     }
 
-    return new ServeAuthentication(accounts, {
+    return new FsAuthentication(accounts, {
       sessionLifetimeMs: Math.max(1, options.sessionLifetimeMs ?? SESSION_LIFETIME_MS),
       maxAccountSessions: Math.max(1, options.maxAccountSessions ?? MAX_ACCOUNT_SESSIONS),
       maxSessions: Math.max(1, options.maxSessions ?? MAX_SESSIONS),
@@ -132,7 +132,7 @@ export class ServeAuthentication {
     this.expirationTimer.unref?.()
   }
 
-  private createSession(account: ServeAccount): ServeSessionGrant {
+  private createSession(account: FsAccount): FsSessionGrant {
     this.clearExpiredSessions()
     const accountSessions = [...this.sessions].filter(([, session]) => session.accountKey === account.key)
     while (accountSessions.length >= this.options.maxAccountSessions) {
@@ -150,7 +150,7 @@ export class ServeAuthentication {
     return { token, expiresAt: new Date(expiresAt).toISOString(), account: { username: account.username } }
   }
 
-  async signIn(input: { username: string, password: string }): Promise<ServeSessionGrant | undefined> {
+  async signIn(input: { username: string, password: string }): Promise<FsSessionGrant | undefined> {
     if (this.closed)
       return undefined
     const account = this.accounts.get(usernameKey(input.username) ?? '')
@@ -159,7 +159,7 @@ export class ServeAuthentication {
     return account && verified ? this.createSession(account) : undefined
   }
 
-  resume(token: string | undefined): ServeSession | undefined {
+  resume(token: string | undefined): FsSession | undefined {
     if (this.closed || !token)
       return undefined
     this.clearExpiredSessions()
@@ -203,4 +203,4 @@ export class ServeAuthentication {
   }
 }
 
-export const createServeAuthentication = ServeAuthentication.create
+export const createFsAuthentication = FsAuthentication.create

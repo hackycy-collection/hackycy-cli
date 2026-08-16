@@ -4,7 +4,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { ensureSevenZipRuntime } from './archive-runtime'
 import { isLayeredTarArchiveName } from './archive-support'
-import { ServeWorkspaceError } from './types'
+import { FsWorkspaceError } from './types'
 
 export interface ArchiveInspection {
   uncompressedBytes: number
@@ -26,28 +26,28 @@ export interface SevenZipArchiveExtractorOptions {
   statfs?: (target: string) => Promise<StatsFs>
 }
 
-function archiveFailure(exitCode: number, output: string): ServeWorkspaceError {
+function archiveFailure(exitCode: number, output: string): FsWorkspaceError {
   const normalized = output.toLowerCase()
   const options = { cause: new Error(`7-Zip exited with code ${exitCode}${output ? `\n${output}` : ''}`) }
   if (normalized.includes('wrong password') || normalized.includes('enter password') || normalized.includes('encrypted'))
-    return new ServeWorkspaceError('ENCRYPTED_ARCHIVE', 'Encrypted archives are not supported', options)
+    return new FsWorkspaceError('ENCRYPTED_ARCHIVE', 'Encrypted archives are not supported', options)
   if (/no space left|not enough space on the disk|disk full/.test(normalized))
-    return new ServeWorkspaceError('INSUFFICIENT_SPACE', 'Archive extraction ran out of disk space', options)
+    return new FsWorkspaceError('INSUFFICIENT_SPACE', 'Archive extraction ran out of disk space', options)
   if (/dangerous link|incorrect link path|empty link/.test(normalized))
-    return new ServeWorkspaceError('UNAVAILABLE', '7-Zip rejected an unsafe symbolic link', options)
+    return new FsWorkspaceError('UNAVAILABLE', '7-Zip rejected an unsafe symbolic link', options)
   if (/crc failed|data error|headers error|unexpected end|is not archive|can not open .* as \[.*\] archive|unsupported method/.test(normalized))
-    return new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive is invalid, damaged, or unsupported', options)
+    return new FsWorkspaceError('INVALID_ARCHIVE', 'Archive is invalid, damaged, or unsupported', options)
   if (/system error|i\/o error|input\/output error|permission denied|access is denied/.test(normalized))
-    return new ServeWorkspaceError('UNAVAILABLE', '7-Zip could not access the archive or destination', options)
+    return new FsWorkspaceError('UNAVAILABLE', '7-Zip could not access the archive or destination', options)
   if (exitCode === 1)
-    return new ServeWorkspaceError('UNAVAILABLE', '7-Zip reported warnings; extracted output was not published', options)
+    return new FsWorkspaceError('UNAVAILABLE', '7-Zip reported warnings; extracted output was not published', options)
   if (exitCode === 7)
-    return new ServeWorkspaceError('UNAVAILABLE', '7-Zip command invocation failed', options)
+    return new FsWorkspaceError('UNAVAILABLE', '7-Zip command invocation failed', options)
   if (exitCode === 8)
-    return new ServeWorkspaceError('UNAVAILABLE', '7-Zip ran out of memory', options)
+    return new FsWorkspaceError('UNAVAILABLE', '7-Zip ran out of memory', options)
   if (exitCode === 255)
-    return new ServeWorkspaceError('UNAVAILABLE', '7-Zip was interrupted', options)
-  return new ServeWorkspaceError('UNAVAILABLE', '7-Zip could not process the archive', options)
+    return new FsWorkspaceError('UNAVAILABLE', '7-Zip was interrupted', options)
+  return new FsWorkspaceError('UNAVAILABLE', '7-Zip could not process the archive', options)
 }
 
 async function readError(stream: ReadableStream<Uint8Array>): Promise<string> {
@@ -77,12 +77,12 @@ async function inspectArchive(executable: string, source: string, signal?: Abort
     }
     if (current.Encrypted === '+') {
       child.kill()
-      throw new ServeWorkspaceError('ENCRYPTED_ARCHIVE', 'Encrypted archives are not supported')
+      throw new FsWorkspaceError('ENCRYPTED_ARCHIVE', 'Encrypted archives are not supported')
     }
     const size = Number(current.Size ?? 0)
     if (!Number.isSafeInteger(size) || size < 0 || uncompressedBytes + size > Number.MAX_SAFE_INTEGER) {
       child.kill()
-      throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Archive reports an invalid unpacked size')
+      throw new FsWorkspaceError('INVALID_ARCHIVE', 'Archive reports an invalid unpacked size')
     }
     uncompressedBytes += size
     entryCount++
@@ -102,7 +102,7 @@ async function inspectArchive(executable: string, source: string, signal?: Abort
       const value = line.slice(separator + 3).replace(/\r$/, '')
       if ((key === 'Type' && value === 'Split') || (key === 'Volumes' && Number(value) > 1)) {
         child.kill()
-        throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Multi-volume archives are not supported')
+        throw new FsWorkspaceError('INVALID_ARCHIVE', 'Multi-volume archives are not supported')
       }
       return
     }
@@ -154,11 +154,11 @@ async function requireCapacity(target: string, inspection: ArchiveInspection, st
   const availableBytes = filesystem.bavail * filesystem.bsize
   const reservedBytes = Math.min(1024 ** 3, Math.floor(availableBytes * 0.1))
   if (inspection.uncompressedBytes > availableBytes - reservedBytes)
-    throw new ServeWorkspaceError('INSUFFICIENT_SPACE', 'Archive does not fit in the available disk space')
+    throw new FsWorkspaceError('INSUFFICIENT_SPACE', 'Archive does not fit in the available disk space')
   if (filesystem.ffree > 0) {
     const reservedEntries = Math.min(1024, Math.floor(filesystem.ffree * 0.1))
     if (inspection.entryCount > filesystem.ffree - reservedEntries)
-      throw new ServeWorkspaceError('INSUFFICIENT_SPACE', 'Archive does not fit in the available filesystem entries')
+      throw new FsWorkspaceError('INSUFFICIENT_SPACE', 'Archive does not fit in the available filesystem entries')
   }
 }
 
@@ -229,7 +229,7 @@ async function onlyExtractedTar(directory: string): Promise<string> {
   const entries = await fs.readdir(directory, { recursive: true, withFileTypes: true })
   const files = entries.filter(entry => entry.isFile())
   if (files.length !== 1 || path.extname(files[0]!.name).toLowerCase() !== '.tar')
-    throw new ServeWorkspaceError('INVALID_ARCHIVE', 'Compressed TAR archive did not contain one TAR stream')
+    throw new FsWorkspaceError('INVALID_ARCHIVE', 'Compressed TAR archive did not contain one TAR stream')
   return path.join(files[0]!.parentPath, files[0]!.name)
 }
 

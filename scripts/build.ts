@@ -28,7 +28,7 @@ const sevenZipEntrypoints = await prepareSevenZipRuntime(options.target)
 const result = await Bun.build({
   entrypoints: [
     path.resolve('src/cli.ts'),
-    path.resolve('src/commands/serve/thumbnail-worker.ts'),
+    path.resolve('src/commands/fs/thumbnail-worker.ts'),
     ...sevenZipEntrypoints,
   ],
   naming: {

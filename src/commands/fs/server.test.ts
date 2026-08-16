@@ -1,20 +1,20 @@
-import type { RunningServeServer } from './server'
+import type { RunningFsServer } from './server'
 import type { ThumbnailWorkerRequest } from './thumbnail-worker'
-import type { ServeDownloadManager, ServeExtractionManager } from './types'
+import type { FsDownloadManager, FsExtractionManager } from './types'
 import { Buffer } from 'node:buffer'
 import { mkdtemp, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
-import { createServeAuthentication } from './authentication'
+import { createFsAuthentication } from './authentication'
 import { createRemoteDownloadManager } from './download-service'
 import { createExtractionManager } from './extraction-service'
-import { startServeHttpServer } from './server'
+import { startFsHttpServer } from './server'
 import { THUMBNAIL_MAX_INPUT_BYTES, ThumbnailService } from './thumbnail-service'
-import { createServeWorkspace, MAX_TEXT_PREVIEW_BYTES, MAX_UPLOAD_BYTES } from './workspace'
+import { createFsWorkspace, MAX_TEXT_PREVIEW_BYTES, MAX_UPLOAD_BYTES } from './workspace'
 
 const temporaryDirectories: string[] = []
-const servers: RunningServeServer[] = []
+const servers: RunningFsServer[] = []
 
 function onePixelPng(): Buffer {
   return Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
@@ -39,17 +39,17 @@ afterEach(async () => {
 
 async function startFixtureServer(
   managementEnabled = false,
-  createThumbnailService?: (workspace: Awaited<ReturnType<typeof createServeWorkspace>>) => ThumbnailService,
-  createDownloadManager?: (workspace: Awaited<ReturnType<typeof createServeWorkspace>>) => ServeDownloadManager,
-  authentication?: Awaited<ReturnType<typeof createServeAuthentication>>,
-  createArchiveExtractionManager?: (workspace: Awaited<ReturnType<typeof createServeWorkspace>>) => ServeExtractionManager,
+  createThumbnailService?: (workspace: Awaited<ReturnType<typeof createFsWorkspace>>) => ThumbnailService,
+  createDownloadManager?: (workspace: Awaited<ReturnType<typeof createFsWorkspace>>) => FsDownloadManager,
+  authentication?: Awaited<ReturnType<typeof createFsAuthentication>>,
+  createArchiveExtractionManager?: (workspace: Awaited<ReturnType<typeof createFsWorkspace>>) => FsExtractionManager,
   safeHtml = false,
-): Promise<{ server: RunningServeServer, root: string }> {
-  const root = await mkdtemp(path.join(tmpdir(), 'ycy-serve-http-'))
+): Promise<{ server: RunningFsServer, root: string }> {
+  const root = await mkdtemp(path.join(tmpdir(), 'ycy-fs-http-'))
   temporaryDirectories.push(root)
   await writeFile(path.join(root, 'hello.txt'), 'hello world')
-  const workspace = await createServeWorkspace(root)
-  const server = startServeHttpServer({
+  const workspace = await createFsWorkspace(root)
+  const server = startFsHttpServer({
     workspace,
     address: '127.0.0.1',
     port: 0,
@@ -64,7 +64,7 @@ async function startFixtureServer(
   return { server, root }
 }
 
-async function login(server: RunningServeServer, username = 'alice', password = 'password123'): Promise<{ response: Response, cookie?: string }> {
+async function login(server: RunningFsServer, username = 'alice', password = 'password123'): Promise<{ response: Response, cookie?: string }> {
   const response = await fetch(new URL('/api/session', server.url), {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'Origin': server.url.origin },
@@ -73,7 +73,7 @@ async function login(server: RunningServeServer, username = 'alice', password = 
   return { response, cookie: response.headers.get('set-cookie')?.split(';')[0] }
 }
 
-describe('ServeHttpServer', () => {
+describe('FsHttpServer', () => {
   test('reports disabled authentication without changing existing access', async () => {
     const { server } = await startFixtureServer()
 
@@ -85,7 +85,7 @@ describe('ServeHttpServer', () => {
   })
 
   test('requires a valid account session for every file and data route', async () => {
-    const authentication = await createServeAuthentication(['Alice:password123'])
+    const authentication = await createFsAuthentication(['Alice:password123'])
     const { server } = await startFixtureServer(true, undefined, undefined, authentication)
     const protectedRequests = [
       fetch(new URL('/api/directory', server.url)),
@@ -126,7 +126,7 @@ describe('ServeHttpServer', () => {
 
     const signedIn = await login(server, 'ALICE')
     expect(signedIn.response.status).toBe(200)
-    expect(signedIn.cookie).toStartWith('ycy_serve_session=')
+    expect(signedIn.cookie).toStartWith('ycy_fs_session=')
     expect(signedIn.response.headers.get('set-cookie')).toContain('HttpOnly; SameSite=Strict; Path=/; Max-Age=43200')
 
     const session = await fetch(new URL('/api/session', server.url), { headers: { Cookie: signedIn.cookie! } })
@@ -156,7 +156,7 @@ describe('ServeHttpServer', () => {
   })
 
   test('closes an authenticated download event stream when its session expires', async () => {
-    const authentication = await createServeAuthentication(['alice:password123'], { sessionLifetimeMs: 40 })
+    const authentication = await createFsAuthentication(['alice:password123'], { sessionLifetimeMs: 40 })
     const { server } = await startFixtureServer(true, undefined, undefined, authentication)
     const signedIn = await login(server)
     const response = await fetch(new URL('/api/downloads/events', server.url), { headers: { Cookie: signedIn.cookie! } })
@@ -564,7 +564,7 @@ describe('ServeHttpServer', () => {
   test('applies validated filesystem operations only in same-origin management mode', async () => {
     const disabledFixture = await startFixtureServer(false)
     const enabledFixture = await startFixtureServer(true)
-    const request = (server: RunningServeServer, body: unknown, origin = server.url.origin): Promise<Response> => fetch(new URL('/api/operations', server.url), {
+    const request = (server: RunningFsServer, body: unknown, origin = server.url.origin): Promise<Response> => fetch(new URL('/api/operations', server.url), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Origin': origin },
       body: JSON.stringify(body),
@@ -768,6 +768,7 @@ describe('ServeHttpServer', () => {
     expect(root.status).toBe(200)
     const html = await root.text()
     expect(html).toContain('<div id="root"></div>')
+    expect(html).toContain('<title>HACKYCY CLI - FILE BROWSER</title>')
     expect(html).toContain('http-equiv="Content-Security-Policy"')
     expect(html).toContain('default-src \'self\'')
     expect(html).toContain('worker-src \'self\'')

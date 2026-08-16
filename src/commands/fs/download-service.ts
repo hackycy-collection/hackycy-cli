@@ -1,8 +1,8 @@
 import type {
-  ServeDownloadManager,
-  ServeDownloadRequest,
-  ServeDownloadTask,
-  ServeWorkspace,
+  FsDownloadManager,
+  FsDownloadRequest,
+  FsDownloadTask,
+  FsWorkspace,
 } from './types'
 import { isIP } from 'node:net'
 
@@ -38,7 +38,7 @@ export interface RemoteDownloadManagerOptions {
   fetchImpl?: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response>
 }
 
-interface InternalTask extends ServeDownloadTask {
+interface InternalTask extends FsDownloadTask {
   controller?: AbortController
 }
 
@@ -274,15 +274,15 @@ function idleTimeoutStream(stream: ReadableStream<Uint8Array>, signal: AbortSign
   })
 }
 
-function publicTask(task: InternalTask): ServeDownloadTask {
+function publicTask(task: InternalTask): FsDownloadTask {
   const { controller: _controller, ...result } = task
   return { ...result }
 }
 
 export function createRemoteDownloadManager(
-  workspace: ServeWorkspace,
+  workspace: FsWorkspace,
   options: RemoteDownloadManagerOptions = {},
-): ServeDownloadManager {
+): FsDownloadManager {
   const maxConcurrent = Math.max(1, options.maxConcurrent ?? DEFAULT_MAX_CONCURRENT)
   const maxQueued = Math.max(1, options.maxQueued ?? DEFAULT_MAX_QUEUED)
   const maxTasks = Math.max(maxQueued, options.maxTasks ?? DEFAULT_MAX_TASKS)
@@ -292,11 +292,11 @@ export function createRemoteDownloadManager(
   const queue: string[] = []
   const active = new Map<string, AbortController>()
   const runs = new Set<Promise<void>>()
-  const listeners = new Set<(tasks: ServeDownloadTask[]) => void>()
+  const listeners = new Set<(tasks: FsDownloadTask[]) => void>()
   let closed = false
   let lastEmit = 0
 
-  const list = (): ServeDownloadTask[] => [...tasks.values()].reverse().map(publicTask)
+  const list = (): FsDownloadTask[] => [...tasks.values()].reverse().map(publicTask)
   const emit = (force = false): void => {
     const now = performance.now()
     if (!force && now - lastEmit < 250)
@@ -411,7 +411,7 @@ export function createRemoteDownloadManager(
     }
   }
 
-  const enqueue = async (request: ServeDownloadRequest): Promise<ServeDownloadTask> => {
+  const enqueue = async (request: FsDownloadRequest): Promise<FsDownloadTask> => {
     if (closed)
       throw new DownloadError('DOWNLOAD_SERVICE_STOPPED', 'Download service is stopped')
     if (queue.length >= maxQueued)

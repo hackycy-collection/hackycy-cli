@@ -222,7 +222,7 @@ function MonacoEditor({ value, language, theme, onChange, onSave }: { value: str
         callbacks.current.onChange(model.getValue())
     })
     editor.addAction({
-      id: 'serve.save-text-file',
+      id: 'fs.save-text-file',
       label: 'Save file',
       keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS],
       run: () => {

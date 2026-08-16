@@ -1,4 +1,4 @@
-export const NAVIGATION_PANEL_WIDTH_STORAGE_KEY = 'ycy-serve-navigation-width'
+export const NAVIGATION_PANEL_WIDTH_STORAGE_KEY = 'ycy-fs-navigation-width'
 export const NAVIGATION_PANEL_DEFAULT_WIDTH = 400
 export const NAVIGATION_PANEL_MIN_WIDTH = 180
 export const NAVIGATION_PANEL_MAX_WIDTH = 560

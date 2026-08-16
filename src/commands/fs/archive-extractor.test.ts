@@ -8,7 +8,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { strToU8, zipSync } from 'fflate'
 import { prepareSevenZipRuntime } from '../../../scripts/prepare-seven-zip'
 import { createSevenZipArchiveExtractor } from './archive-extractor'
-import { createServeWorkspace } from './workspace'
+import { createFsWorkspace } from './workspace'
 
 const RAR_FIXTURE = 'UmFyIRoHAM+QcwAADQAAAAAAAACEUnQgkDIAFAAAABQAAAADQqLIvrd22j4UMAgApIEAAHRlc3QudHh0gAi3dto+t3baPnRlc3QgdGV4dCBkb2N1bWVudA0KnS90IJAyAAgAAAAIAAAAA3tEybbRTNg+FDAIAP+hAAB0ZXN0bGlua8AI0UzYPlBf2j50ZXN0LnR4dM3gdCCQOgAUAAAAFAAAAANCosi+Y3faPhQwEACkgQAAdGVzdGRpclx0ZXN0LnR4dMDMY3faPmN32j50ZXN0IHRleHQgZG9jdW1lbnQNCqHIdOCQMQAAAAAAAAAAAAMAAAAAY3faPhQwBwDtQQAAdGVzdGRpcsDMY3faPmR32j7m53TgkDYAAAAAAAAAAAADAAAAAJ2r1T4UMAwA7UEAAHRlc3RlbXB0eWRpcoDMnavVPsVd2j7EPXsAQAcA'
 const temporaryDirectories: string[] = []
@@ -99,7 +99,7 @@ describe('SevenZipArchiveExtractor', () => {
       runSevenZip(['a', '-txz', 'xz.tar.xz', '--', 'payload.tar'], root),
     ])
 
-    const workspace = await createServeWorkspace(root, {
+    const workspace = await createFsWorkspace(root, {
       archiveExtractor: createSevenZipArchiveExtractor({ executable: async () => sevenZip }),
     })
     const archivePaths = ['plain.7z', 'payload.tar', 'gzip.tar.gz', 'bzip.tar.bz2', 'xz.tar.xz', 'zstd.tar.zst']
@@ -124,7 +124,7 @@ describe('SevenZipArchiveExtractor', () => {
   test('lets 7-Zip handle archive entries that use backslash separators', async () => {
     const root = await temporaryRoot()
     await writeFile(path.join(root, 'backslash.zip'), zipSync({ 'nested\\file.txt': strToU8('backslash') }))
-    const workspace = await createServeWorkspace(root, {
+    const workspace = await createFsWorkspace(root, {
       archiveExtractor: createSevenZipArchiveExtractor({ executable: async () => sevenZip }),
     })
 
@@ -141,7 +141,7 @@ describe('SevenZipArchiveExtractor', () => {
     await writeFile(path.join(root, 'secret.txt'), 'secret')
     await runSevenZip(['a', '-tzip', '-psecret', '-mem=AES256', 'encrypted.zip', '--', 'secret.txt'], root)
     await writeFile(path.join(root, 'damaged.zip'), 'not an archive')
-    const workspace = await createServeWorkspace(root, {
+    const workspace = await createFsWorkspace(root, {
       archiveExtractor: createSevenZipArchiveExtractor({ executable: async () => sevenZip }),
     })
 
@@ -157,7 +157,7 @@ describe('SevenZipArchiveExtractor', () => {
       '/absolute.txt': strToU8('absolute'),
       'C:/drive.txt': strToU8('drive'),
     }))
-    const workspace = await createServeWorkspace(root, {
+    const workspace = await createFsWorkspace(root, {
       archiveExtractor: createSevenZipArchiveExtractor({ executable: async () => sevenZip }),
     })
 

@@ -1,4 +1,4 @@
-import type { ServeExtractionManager, ServeExtractionTask, ServeWorkspace } from './types'
+import type { FsExtractionManager, FsExtractionTask, FsWorkspace } from './types'
 
 const DEFAULT_MAX_QUEUED = 100
 const DEFAULT_MAX_TASKS = 100
@@ -24,11 +24,11 @@ export interface ExtractionManagerOptions {
   maxTasks?: number
 }
 
-interface InternalTask extends ServeExtractionTask {
+interface InternalTask extends FsExtractionTask {
   controller?: AbortController
 }
 
-function publicTask(task: InternalTask): ServeExtractionTask {
+function publicTask(task: InternalTask): FsExtractionTask {
   const { controller: _controller, ...result } = task
   return { ...result }
 }
@@ -44,20 +44,20 @@ function validatePaths(paths: string[]): string[] {
 }
 
 export function createExtractionManager(
-  workspace: Pick<ServeWorkspace, 'extractArchive'>,
+  workspace: Pick<FsWorkspace, 'extractArchive'>,
   options: ExtractionManagerOptions = {},
-): ServeExtractionManager {
+): FsExtractionManager {
   const maxQueued = Math.max(1, options.maxQueued ?? DEFAULT_MAX_QUEUED)
   const maxTasks = Math.max(1, options.maxTasks ?? DEFAULT_MAX_TASKS)
   const tasks = new Map<string, InternalTask>()
   const queue: string[] = []
   const runs = new Set<Promise<void>>()
-  const listeners = new Set<(tasks: ServeExtractionTask[]) => void>()
+  const listeners = new Set<(tasks: FsExtractionTask[]) => void>()
   let active: InternalTask | undefined
   let closed = false
   let lastEmit = 0
 
-  const list = (): ServeExtractionTask[] => [...tasks.values()].reverse().map(publicTask)
+  const list = (): FsExtractionTask[] => [...tasks.values()].reverse().map(publicTask)
   const emit = (force = false): void => {
     const now = performance.now()
     if (!force && now - lastEmit < 250)
@@ -141,7 +141,7 @@ export function createExtractionManager(
     }
   }
 
-  const enqueue = async (paths: string[]): Promise<ServeExtractionTask[]> => {
+  const enqueue = async (paths: string[]): Promise<FsExtractionTask[]> => {
     if (closed)
       throw new ExtractionError('EXTRACTION_SERVICE_STOPPED', 'Extraction service is stopped')
     const archivePaths = validatePaths(paths)

@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'bun:test'
 import { navigationPanelWidth } from './layout-state'
 
-describe('serve layout state', () => {
+describe('fs layout state', () => {
   test('uses a wide default and clamps persisted navigation widths', () => {
     expect(navigationPanelWidth(null)).toBe(400)
     expect(navigationPanelWidth('not-json')).toBe(400)

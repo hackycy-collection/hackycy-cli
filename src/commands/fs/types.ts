@@ -1,4 +1,4 @@
-export interface ServeOptions {
+export interface FsOptions {
   directory: string
   port: number
   address: string
@@ -7,18 +7,18 @@ export interface ServeOptions {
   accounts: string[]
 }
 
-export type ServeEntryKind = 'directory' | 'file' | 'unavailable'
-export type ServePreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'none'
+export type FsEntryKind = 'directory' | 'file' | 'unavailable'
+export type FsPreviewKind = 'image' | 'video' | 'audio' | 'pdf' | 'text' | 'none'
 
-export interface ServeDirectoryEntry {
+export interface FsDirectoryEntry {
   name: string
   path: string
-  kind: ServeEntryKind
+  kind: FsEntryKind
   isSymlink: boolean
   size?: number
   modifiedAt?: string
   mimeType?: string
-  previewKind: ServePreviewKind
+  previewKind: FsPreviewKind
   syntaxLanguage?: string
   browseUrl?: string
   fileUrl?: string
@@ -27,14 +27,14 @@ export interface ServeDirectoryEntry {
   extractable: boolean
 }
 
-export interface ServeDirectoryListing {
+export interface FsDirectoryListing {
   rootName: string
   path: string
   parentPath?: string
-  entries: ServeDirectoryEntry[]
+  entries: FsDirectoryEntry[]
 }
 
-export interface ServeFile {
+export interface FsFile {
   name: string
   size: number
   modifiedAt: Date
@@ -42,48 +42,48 @@ export interface ServeFile {
   body: Blob
 }
 
-export type ServeTextPreview
+export type FsTextPreview
   = | { status: 'ready', text: string, encoding: 'utf-8' | 'utf-16le' | 'utf-16be', size: number, revision: string }
     | { status: 'too_large', size: number, maxBytes: number }
     | { status: 'binary', size: number }
 
-export interface ServeTextSaveResult {
+export interface FsTextSaveResult {
   revision: string
   size: number
   modifiedAt: Date
   encoding: 'utf-8' | 'utf-16le' | 'utf-16be'
 }
 
-export interface ServeUploadResult {
+export interface FsUploadResult {
   filename: string
   path: string
   size: number
 }
 
-export interface ServeStreamWriteOptions {
+export interface FsStreamWriteOptions {
   signal?: AbortSignal
   onProgress?: (bytesWritten: number) => void
 }
 
-export interface ServeArchiveExtractOptions {
+export interface FsArchiveExtractOptions {
   signal?: AbortSignal
   onProgress?: (progress: number) => void
   onInspect?: (details: { uncompressedBytes: number, entryCount: number }) => void
 }
 
-export interface ServeArchiveExtractResult {
+export interface FsArchiveExtractResult {
   archivePath: string
   destinationPath: string
   uncompressedBytes: number
   entryCount: number
 }
 
-export type ServeExtractionStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
+export type FsExtractionStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 
-export interface ServeExtractionTask {
+export interface FsExtractionTask {
   id: string
   archivePath: string
-  status: ServeExtractionStatus
+  status: FsExtractionStatus
   progress?: number
   uncompressedBytes?: number
   entryCount?: number
@@ -94,30 +94,30 @@ export interface ServeExtractionTask {
   error?: string
 }
 
-export interface ServeExtractionManager {
-  list: () => ServeExtractionTask[]
-  enqueue: (paths: string[]) => Promise<ServeExtractionTask[]>
-  cancel: (id: string) => ServeExtractionTask | undefined
-  retry: (id: string) => Promise<ServeExtractionTask>
+export interface FsExtractionManager {
+  list: () => FsExtractionTask[]
+  enqueue: (paths: string[]) => Promise<FsExtractionTask[]>
+  cancel: (id: string) => FsExtractionTask | undefined
+  retry: (id: string) => Promise<FsExtractionTask>
   clearTerminal: () => void
-  subscribe: (listener: (tasks: ServeExtractionTask[]) => void) => () => void
+  subscribe: (listener: (tasks: FsExtractionTask[]) => void) => () => void
   close: () => Promise<void>
 }
 
-export type ServeDownloadStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
+export type FsDownloadStatus = 'queued' | 'running' | 'done' | 'error' | 'cancelled'
 
-export interface ServeDownloadRequest {
+export interface FsDownloadRequest {
   url: string
   directoryPath: string
   filename?: string
 }
 
-export interface ServeDownloadTask {
+export interface FsDownloadTask {
   id: string
   url: string
   directoryPath: string
   filename?: string
-  status: ServeDownloadStatus
+  status: FsDownloadStatus
   bytesDownloaded: number
   totalBytes?: number
   progress?: number
@@ -129,24 +129,24 @@ export interface ServeDownloadTask {
   error?: string
 }
 
-export interface ServeDownloadManager {
-  list: () => ServeDownloadTask[]
-  enqueue: (request: ServeDownloadRequest) => Promise<ServeDownloadTask>
-  cancel: (id: string) => ServeDownloadTask | undefined
-  retry: (id: string) => Promise<ServeDownloadTask>
+export interface FsDownloadManager {
+  list: () => FsDownloadTask[]
+  enqueue: (request: FsDownloadRequest) => Promise<FsDownloadTask>
+  cancel: (id: string) => FsDownloadTask | undefined
+  retry: (id: string) => Promise<FsDownloadTask>
   clearTerminal: () => void
-  subscribe: (listener: (tasks: ServeDownloadTask[]) => void) => () => void
+  subscribe: (listener: (tasks: FsDownloadTask[]) => void) => () => void
   close: () => Promise<void>
 }
 
-export type ServeOperation
+export type FsOperation
   = | { action: 'create-directory', parentPath: string, name: string }
     | { action: 'rename', path: string, newName: string }
     | { action: 'copy', paths: string[], destinationPath: string }
     | { action: 'move', paths: string[], destinationPath: string }
     | { action: 'delete', paths: string[] }
 
-export type ServeOperationItem
+export type FsOperationItem
   = | {
     status: 'ok'
     sourcePath?: string
@@ -156,26 +156,26 @@ export type ServeOperationItem
     status: 'error'
     sourcePath?: string
     destinationPath?: string
-    error: { code: ServeErrorCode, message: string }
+    error: { code: FsErrorCode, message: string }
   }
 
-export interface ServeOperationResult {
-  action: ServeOperation['action']
-  items: ServeOperationItem[]
+export interface FsOperationResult {
+  action: FsOperation['action']
+  items: FsOperationItem[]
 }
 
-export interface ServeWorkspace {
-  listDirectory: (relativePath: string) => Promise<ServeDirectoryListing>
-  openFile: (relativePath: string) => Promise<ServeFile>
-  readTextPreview: (relativePath: string) => Promise<ServeTextPreview>
-  saveTextFile: (relativePath: string, text: string, revision: string) => Promise<ServeTextSaveResult>
-  uploadFile: (directoryPath: string, file: File) => Promise<ServeUploadResult>
-  writeFileStream: (directoryPath: string, filename: string, stream: ReadableStream<Uint8Array>, options?: ServeStreamWriteOptions) => Promise<ServeUploadResult>
-  extractArchive: (archivePath: string, options?: ServeArchiveExtractOptions) => Promise<ServeArchiveExtractResult>
-  applyOperation: (operation: ServeOperation) => Promise<ServeOperationResult>
+export interface FsWorkspace {
+  listDirectory: (relativePath: string) => Promise<FsDirectoryListing>
+  openFile: (relativePath: string) => Promise<FsFile>
+  readTextPreview: (relativePath: string) => Promise<FsTextPreview>
+  saveTextFile: (relativePath: string, text: string, revision: string) => Promise<FsTextSaveResult>
+  uploadFile: (directoryPath: string, file: File) => Promise<FsUploadResult>
+  writeFileStream: (directoryPath: string, filename: string, stream: ReadableStream<Uint8Array>, options?: FsStreamWriteOptions) => Promise<FsUploadResult>
+  extractArchive: (archivePath: string, options?: FsArchiveExtractOptions) => Promise<FsArchiveExtractResult>
+  applyOperation: (operation: FsOperation) => Promise<FsOperationResult>
 }
 
-export type ServeErrorCode
+export type FsErrorCode
   = | 'INVALID_PATH'
     | 'INVALID_UPLOAD'
     | 'INVALID_NAME'
@@ -197,13 +197,13 @@ export type ServeErrorCode
     | 'ENCRYPTED_ARCHIVE'
     | 'INSUFFICIENT_SPACE'
 
-export class ServeWorkspaceError extends Error {
+export class FsWorkspaceError extends Error {
   constructor(
-    readonly code: ServeErrorCode,
+    readonly code: FsErrorCode,
     message: string,
     options?: ErrorOptions,
   ) {
     super(message, options)
-    this.name = 'ServeWorkspaceError'
+    this.name = 'FsWorkspaceError'
   }
 }

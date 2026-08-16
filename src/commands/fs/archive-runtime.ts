@@ -4,7 +4,7 @@ import path from 'node:path'
 import process from 'node:process'
 import { embeddedFiles } from 'bun'
 import { SEVEN_ZIP_ARTIFACTS, SEVEN_ZIP_VERSION, sevenZipTarget } from './archive-manifest'
-import { ServeWorkspaceError } from './types'
+import { FsWorkspaceError } from './types'
 
 function stateRoot(): string {
   if (process.platform === 'win32')
@@ -51,12 +51,12 @@ async function publishRuntimeFile(target: string, bytes: Uint8Array, metadata: {
 export async function ensureSevenZipRuntime(): Promise<string> {
   const key = sevenZipTarget(process.platform, process.arch)
   if (!key)
-    throw new ServeWorkspaceError('UNAVAILABLE', `7-Zip is not available for ${process.platform}-${process.arch}`)
+    throw new FsWorkspaceError('UNAVAILABLE', `7-Zip is not available for ${process.platform}-${process.arch}`)
   const files = SEVEN_ZIP_ARTIFACTS[key].files
 
   const embedded = files.map(file => ({ metadata: file, blob: embeddedBlob(file.embeddedName) }))
   if (embedded.some(item => item.blob) && !embedded.every(item => item.blob))
-    throw new ServeWorkspaceError('UNAVAILABLE', 'Embedded 7-Zip runtime is incomplete')
+    throw new FsWorkspaceError('UNAVAILABLE', 'Embedded 7-Zip runtime is incomplete')
   if (embedded.every(item => item.blob)) {
     const directory = path.join(stateRoot(), 'ycy', '7zip', SEVEN_ZIP_VERSION)
     await mkdir(directory, { recursive: true })
@@ -71,5 +71,5 @@ export async function ensureSevenZipRuntime(): Promise<string> {
   const systemRuntime = Bun.which('7zz') ?? Bun.which('7z')
   if (systemRuntime)
     return systemRuntime
-  throw new ServeWorkspaceError('UNAVAILABLE', '7-Zip runtime is unavailable; install 7zz or build with an embedded runtime')
+  throw new FsWorkspaceError('UNAVAILABLE', '7-Zip runtime is unavailable; install 7zz or build with an embedded runtime')
 }

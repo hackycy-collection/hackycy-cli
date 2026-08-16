@@ -1,9 +1,9 @@
 import { describe, expect, test } from 'bun:test'
-import { createServeAuthentication } from './authentication'
+import { createFsAuthentication } from './authentication'
 
-describe('ServeAuthentication', () => {
+describe('FsAuthentication', () => {
   test('parses account specifications and matches usernames without case sensitivity', async () => {
-    const authentication = (await createServeAuthentication(['Alice:password:with-colon']))!
+    const authentication = (await createFsAuthentication(['Alice:password:with-colon']))!
 
     const grant = await authentication.signIn({ username: 'ALICE', password: 'password:with-colon' })
 
@@ -13,21 +13,21 @@ describe('ServeAuthentication', () => {
   })
 
   test('accepts a five-character account password', async () => {
-    const authentication = (await createServeAuthentication(['alice:12345']))!
+    const authentication = (await createFsAuthentication(['alice:12345']))!
 
     expect((await authentication.signIn({ username: 'alice', password: '12345' }))?.account).toEqual({ username: 'alice' })
     authentication.close()
   })
 
   test('rejects invalid or duplicate account specifications before startup', async () => {
-    await expect(createServeAuthentication(['alice-password123'])).rejects.toThrow('must use')
-    await expect(createServeAuthentication(['bad name:password123'])).rejects.toThrow('Username must contain')
-    await expect(createServeAuthentication(['alice:tiny'])).rejects.toThrow('Password must contain 5-256 characters')
-    await expect(createServeAuthentication(['Alice:password123', 'alice:password456'])).rejects.toThrow('specified more than once')
+    await expect(createFsAuthentication(['alice-password123'])).rejects.toThrow('must use')
+    await expect(createFsAuthentication(['bad name:password123'])).rejects.toThrow('Username must contain')
+    await expect(createFsAuthentication(['alice:tiny'])).rejects.toThrow('Password must contain 5-256 characters')
+    await expect(createFsAuthentication(['Alice:password123', 'alice:password456'])).rejects.toThrow('specified more than once')
   })
 
   test('returns the same failure for an unknown username or wrong password', async () => {
-    const authentication = (await createServeAuthentication(['alice:password123']))!
+    const authentication = (await createFsAuthentication(['alice:password123']))!
 
     expect(await authentication.signIn({ username: 'alice', password: 'incorrect-password' })).toBeUndefined()
     expect(await authentication.signIn({ username: 'missing', password: 'password123' })).toBeUndefined()
@@ -35,7 +35,7 @@ describe('ServeAuthentication', () => {
   })
 
   test('expires sessions and notifies active observers', async () => {
-    const authentication = (await createServeAuthentication(['alice:password123'], { sessionLifetimeMs: 20 }))!
+    const authentication = (await createFsAuthentication(['alice:password123'], { sessionLifetimeMs: 20 }))!
     const grant = (await authentication.signIn({ username: 'alice', password: 'password123' }))!
     let revoked = false
     authentication.observe(grant.token, () => {
@@ -50,7 +50,7 @@ describe('ServeAuthentication', () => {
   })
 
   test('evicts least-recently-used sessions at account and process limits', async () => {
-    const authentication = (await createServeAuthentication(
+    const authentication = (await createFsAuthentication(
       ['alice:password123', 'bob:password456'],
       { maxAccountSessions: 2, maxSessions: 3 },
     ))!
