@@ -14,8 +14,10 @@
 | `ycy git cm --push [remote]` | Push after the applicable commit flow; defaults to `origin`. |
 | `ycy git cm --stage-push [remote]` | Select, stage, commit, then push; defaults to `origin`. |
 | `ycy git cm --body` | Allow a short validated body below the subject. |
+| `ycy git cm --timeout-ms <milliseconds>` | Set the provider request timeout for this invocation. |
 
 Use `--profile <name>` to choose a configured provider profile and `--lang en|zh` to select the output language.
+Provider request timeouts use milliseconds and default to `300000` (five minutes). A command-line override takes precedence over `YCY_CM_TIMEOUT_MS`, the selected profile's `timeoutMs`, and the default.
 
 ## Generation Guarantees
 

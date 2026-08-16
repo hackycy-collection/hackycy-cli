@@ -4,7 +4,7 @@ import { decrypt, deriveKey, encrypt } from './crypto'
 import { readConfig, updateConfig } from './store'
 
 const DEFAULT_TEMPERATURE = 0.2
-const DEFAULT_TIMEOUT_MS = 30_000
+const DEFAULT_TIMEOUT_MS = 300_000
 const DEFAULT_MAX_OUTPUT_TOKENS = 1000
 
 const ENV_PROFILE = 'YCY_CM_PROFILE'
@@ -145,7 +145,7 @@ export async function listCmProfiles(): Promise<CmConfig> {
   return readCmConfig()
 }
 
-export async function resolveCmProfile(profileName?: string): Promise<ResolvedCmProfile> {
+export async function resolveCmProfile(profileName?: string, timeoutOverrideMs?: number): Promise<ResolvedCmProfile> {
   const config = await readConfig()
   const cm = config.cm ?? emptyCmConfig()
   const env = process.env
@@ -181,7 +181,7 @@ export async function resolveCmProfile(profileName?: string): Promise<ResolvedCm
     model,
     apiKey,
     temperature: parseNumberEnv(env[ENV_TEMPERATURE]) ?? defaults.temperature,
-    timeoutMs: parseNumberEnv(env[ENV_TIMEOUT_MS]) ?? defaults.timeoutMs,
+    timeoutMs: timeoutOverrideMs ?? parseNumberEnv(env[ENV_TIMEOUT_MS]) ?? defaults.timeoutMs,
     maxOutputTokens: parseNumberEnv(env[ENV_MAX_OUTPUT_TOKENS]) ?? defaults.maxOutputTokens,
   }
 }

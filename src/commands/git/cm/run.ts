@@ -182,7 +182,7 @@ export async function runGitCm(options: CmOptions): Promise<void> {
 
   let profile: ResolvedCmProfile
   try {
-    profile = await resolveCmProfile(options.profile)
+    profile = await resolveCmProfile(options.profile, options.timeoutMs)
   }
   catch (error) {
     p.log.error((error as Error).message)

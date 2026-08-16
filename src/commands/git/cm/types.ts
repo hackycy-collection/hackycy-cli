@@ -19,6 +19,7 @@ export type ContentPolicy = 'inspect' | 'metadata-only' | 'redacted'
 
 export interface CmOptions {
   profile?: string
+  timeoutMs?: number
   lang?: CommitLanguage
   staged?: boolean
   stage?: boolean

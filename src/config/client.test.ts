@@ -32,4 +32,21 @@ describe('createChatCompletionWithUsage', () => {
 
     expect(requests.map(request => request.max_tokens)).toEqual([321, 80])
   })
+
+  test('reports the effective timeout when the provider request is aborted', async () => {
+    globalThis.fetch = (async (_input: string | URL | Request, init: RequestInit | undefined) => {
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => {
+          const error = new Error('aborted')
+          error.name = 'AbortError'
+          reject(error)
+        }, { once: true })
+      })
+    }) as unknown as typeof fetch
+
+    await expect(createChatCompletionWithUsage(
+      { ...profile, timeoutMs: 1_000 },
+      [{ role: 'system', content: 'Return ok' }],
+    )).rejects.toThrow('Provider request timed out after 1000ms')
+  })
 })
