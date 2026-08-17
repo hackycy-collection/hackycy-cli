@@ -5,7 +5,9 @@ import type { TunnelControlPlane, TunnelMutationInput, TunnelPatchInput } from '
 import type { TunnelDatabase } from './database'
 import type { FrpsConfiguration } from './frps-configuration'
 import type { FrpsController } from './managed-frps'
-import { randomBytes, randomUUID } from 'node:crypto'
+import { randomUUID } from 'node:crypto'
+import path from 'node:path'
+import { FileSessionError, FileSessionManager } from '../../../shared/file-session'
 import { redactTunnelDefinition } from '../definition'
 import { TunnelError } from '../types'
 import { parseFrpcTunnelImport, selectedImportedTunnels, tunnelImportPreview } from './frpc-import'
@@ -13,9 +15,6 @@ import { frpsActivationError } from './frps-activation'
 import { clientView, tunnelState } from './views'
 
 const ENVIRONMENT_ADMIN_ID = 'environment-admin'
-const SESSION_LIFETIME_MS = 12 * 60 * 60 * 1000
-const MAX_ACCOUNT_SESSIONS = 8
-const MAX_SESSIONS = 128
 const PASSWORD_ALGORITHM = { algorithm: 'argon2id', memoryCost: 65_536, timeCost: 3 } as const
 
 interface AccountRow {
@@ -27,11 +26,6 @@ interface AccountRow {
   password_hash: string | null
   created_at: string
   updated_at: string
-}
-
-interface SessionEntry {
-  accountId: string
-  expiresAt: number
 }
 
 export interface CurrentAccount extends AccountRecord {
@@ -72,6 +66,7 @@ export interface TunnelManagementOptions {
   frpsConfiguration: FrpsConfiguration
   serverConfig: ServerTunnelConfig
   sessionLifetimeMs?: number
+  sessionDirectory?: string
 }
 
 function username(value: string): { display: string, key: string } {
@@ -103,19 +98,39 @@ function isUniqueConstraint(cause: unknown): boolean {
 }
 
 export class TunnelManagement {
-  private readonly sessions = new Map<string, SessionEntry>()
   private readonly observers = new Map<string, Set<(event: WorkspaceEvent) => void>>()
+  private readonly sessionObserverStops = new Map<string, () => void>()
   private readonly unsubscribers: Array<() => void> = []
   private environmentPasswordHash = ''
-  private expirationTimer: ReturnType<typeof setTimeout> | undefined
 
-  private constructor(private readonly options: TunnelManagementOptions) {}
+  private constructor(
+    private readonly options: TunnelManagementOptions,
+    private readonly sessions: FileSessionManager,
+  ) {}
 
   static async create(options: TunnelManagementOptions): Promise<TunnelManagement> {
-    const management = new TunnelManagement(options)
-    await management.initializeEnvironmentAdministrator()
-    management.connectEvents()
-    return management
+    let sessions: FileSessionManager
+    try {
+      sessions = await FileSessionManager.open({
+        directory: options.sessionDirectory ?? path.join(options.serverConfig.dataDir, 'sessions'),
+        idleLifetimeMs: options.sessionLifetimeMs ?? options.serverConfig.sessionIdleLifetimeMs,
+      })
+    }
+    catch (cause) {
+      if (cause instanceof FileSessionError)
+        throw new TunnelError('SESSION_UNAVAILABLE', 'Session storage is unavailable')
+      throw cause
+    }
+    const management = new TunnelManagement(options, sessions)
+    try {
+      await management.initializeEnvironmentAdministrator()
+      management.connectEvents()
+      return management
+    }
+    catch (cause) {
+      sessions.close()
+      throw cause
+    }
   }
 
   private connectEvents(): void {
@@ -161,53 +176,41 @@ export class TunnelManagement {
   }
 
   private account(id: string): CurrentAccount {
-    const row = this.options.database.sqlite.query<AccountRow, [string]>('SELECT * FROM accounts WHERE internal_id = ?').get(id)
+    const row = this.accountRow(id)
     if (!row)
       throw new TunnelError('AUTHENTICATION_REQUIRED', 'Authenticated session is required')
     return accountRecord(row)
+  }
+
+  private accountRow(id: string): AccountRow | undefined {
+    return this.options.database.sqlite.query<AccountRow, [string]>('SELECT * FROM accounts WHERE internal_id = ?').get(id) ?? undefined
   }
 
   private accountByUsername(key: string): AccountRow | undefined {
     return this.options.database.sqlite.query<AccountRow, [string]>('SELECT * FROM accounts WHERE username_key = ?').get(key) ?? undefined
   }
 
-  private clearExpiredSessions(): void {
-    const timestamp = Date.now()
-    for (const [token, session] of this.sessions) {
-      if (session.expiresAt <= timestamp)
-        this.revokeSession(token, false)
+  private sessionOperation<T>(operation: () => T): T {
+    try {
+      return operation()
     }
-    this.scheduleSessionExpiration()
+    catch (cause) {
+      if (cause instanceof FileSessionError)
+        throw new TunnelError('SESSION_UNAVAILABLE', 'Session storage is unavailable')
+      throw cause
+    }
   }
 
-  private scheduleSessionExpiration(): void {
-    clearTimeout(this.expirationTimer)
-    this.expirationTimer = undefined
-    let nextExpiration = Number.POSITIVE_INFINITY
-    for (const session of this.sessions.values())
-      nextExpiration = Math.min(nextExpiration, session.expiresAt)
-    if (!Number.isFinite(nextExpiration))
-      return
-    this.expirationTimer = setTimeout(() => {
-      this.expirationTimer = undefined
-      this.clearExpiredSessions()
-    }, Math.max(0, nextExpiration - Date.now()))
-    this.expirationTimer.unref?.()
+  private sessionRevision(account: AccountRow): string {
+    const credential = account.kind === 'environment'
+      ? this.options.serverConfig.adminPassword
+      : account.password_hash!
+    return this.sessions.credentialRevision(`${account.internal_id}\0${account.username_key}\0${account.role}\0${credential}`)
   }
 
-  private createSession(accountId: string): { token: string, expiresAt: string, account: CurrentAccount } {
-    this.clearExpiredSessions()
-    for (const [token, session] of this.sessions) {
-      if (session.accountId === accountId && [...this.sessions.values()].filter(value => value.accountId === accountId).length >= MAX_ACCOUNT_SESSIONS)
-        this.revokeSession(token)
-    }
-    while (this.sessions.size >= MAX_SESSIONS)
-      this.revokeSession(this.sessions.keys().next().value!)
-    const token = randomBytes(32).toString('base64url')
-    const expiresAt = Date.now() + (this.options.sessionLifetimeMs ?? SESSION_LIFETIME_MS)
-    this.sessions.set(token, { accountId, expiresAt })
-    this.scheduleSessionExpiration()
-    return { token, expiresAt: new Date(expiresAt).toISOString(), account: this.account(accountId) }
+  private createSession(account: AccountRow): { token: string, expiresAt: string, account: CurrentAccount } {
+    const session = this.sessionOperation(() => this.sessions.issue(account.internal_id, this.sessionRevision(account)))
+    return { token: session.token, expiresAt: session.expiresAt, account: accountRecord(account) }
   }
 
   async signIn(input: { username: string, password: string }): Promise<{ token: string, expiresAt: string, account: CurrentAccount }> {
@@ -221,47 +224,46 @@ export class TunnelManagement {
     const verified = await Bun.password.verify(input.password, hash)
     if (!row || !verified)
       throw new TunnelError('AUTHENTICATION_FAILED', 'Account credentials are invalid')
-    return this.createSession(row.internal_id)
+    return this.createSession(row)
+  }
+
+  private currentSession(token: string | undefined) {
+    return this.sessionOperation(() => this.sessions.resume(token, (accountId) => {
+      const account = this.accountRow(accountId)
+      return account ? this.sessionRevision(account) : undefined
+    }))
   }
 
   resume(token: string | undefined): TunnelWorkspace | undefined {
-    this.clearExpiredSessions()
-    const session = token ? this.sessions.get(token) : undefined
+    const session = this.currentSession(token)
     if (!token || !session)
       return undefined
-    this.sessions.delete(token)
-    this.sessions.set(token, session)
     try {
-      return new TunnelWorkspace(this, this.options, token, session.accountId)
+      return new TunnelWorkspace(this, this.options, token, session.subject, session.expiresAt)
     }
     catch {
-      this.sessions.delete(token)
+      this.sessionOperation(() => this.sessions.revoke(token))
       return undefined
     }
   }
 
   signOut(token: string | undefined): void {
-    if (token)
-      this.revokeSession(token)
+    this.sessionOperation(() => this.sessions.revoke(token))
   }
 
   revokeAccountSessions(accountId: string): void {
-    for (const [token, session] of this.sessions) {
-      if (session.accountId === accountId)
-        this.revokeSession(token)
-    }
+    this.sessionOperation(() => this.sessions.revokeSubject(accountId))
   }
 
-  private revokeSession(token: string, scheduleExpiration = true): void {
-    this.sessions.delete(token)
+  private sessionRevoked(token: string): void {
     const listeners = this.observers.get(token)
+    this.observers.delete(token)
+    this.sessionObserverStops.get(token)?.()
+    this.sessionObserverStops.delete(token)
     if (listeners) {
-      for (const listener of listeners)
+      for (const listener of [...listeners])
         listener('session_revoked')
-      this.observers.delete(token)
     }
-    if (scheduleExpiration)
-      this.scheduleSessionExpiration()
   }
 
   private notifyResource(ownerAccountId: string): void {
@@ -274,7 +276,10 @@ export class TunnelManagement {
         }
       }
       catch {
-        this.revokeSession(token)
+        try {
+          this.signOut(token)
+        }
+        catch {}
       }
     }
   }
@@ -288,7 +293,10 @@ export class TunnelManagement {
         }
       }
       catch {
-        this.revokeSession(token)
+        try {
+          this.signOut(token)
+        }
+        catch {}
       }
     }
   }
@@ -298,28 +306,33 @@ export class TunnelManagement {
     const listeners = this.observers.get(token) ?? new Set()
     listeners.add(listener)
     this.observers.set(token, listeners)
+    if (!this.sessionObserverStops.has(token))
+      this.sessionObserverStops.set(token, this.sessions.observe(token, () => this.sessionRevoked(token)))
     return () => {
       listeners.delete(listener)
-      if (!listeners.size)
+      if (!listeners.size) {
         this.observers.delete(token)
+        this.sessionObserverStops.get(token)?.()
+        this.sessionObserverStops.delete(token)
+      }
     }
   }
 
   activeAccount(token: string, expectedAccountId?: string): CurrentAccount {
-    this.clearExpiredSessions()
-    const session = this.sessions.get(token)
-    if (!session || (expectedAccountId && session.accountId !== expectedAccountId))
+    const session = this.currentSession(token)
+    if (!session || (expectedAccountId && session.subject !== expectedAccountId))
       throw new TunnelError('AUTHENTICATION_REQUIRED', 'Authenticated session is required')
-    return this.account(session.accountId)
+    return this.account(session.subject)
   }
 
   stop(): void {
     for (const unsubscribe of this.unsubscribers.splice(0))
       unsubscribe()
-    this.sessions.clear()
+    for (const unsubscribe of this.sessionObserverStops.values())
+      unsubscribe()
+    this.sessionObserverStops.clear()
     this.observers.clear()
-    clearTimeout(this.expirationTimer)
-    this.expirationTimer = undefined
+    this.sessions.close()
   }
 }
 
@@ -329,6 +342,7 @@ export class TunnelWorkspace {
     private readonly options: TunnelManagementOptions,
     private readonly sessionToken: string,
     private readonly accountId: string,
+    readonly sessionExpiresAt: string,
   ) {}
 
   get account(): CurrentAccount {

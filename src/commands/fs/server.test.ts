@@ -16,6 +16,12 @@ import { createFsWorkspace, MAX_TEXT_PREVIEW_BYTES, MAX_UPLOAD_BYTES } from './w
 const temporaryDirectories: string[] = []
 const servers: RunningFsServer[] = []
 
+async function createSessionDirectory(): Promise<string> {
+  const directory = await mkdtemp(path.join(tmpdir(), 'ycy-fs-session-'))
+  temporaryDirectories.push(directory)
+  return directory
+}
+
 function onePixelPng(): Buffer {
   return Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=', 'base64')
 }
@@ -85,7 +91,7 @@ describe('FsHttpServer', () => {
   })
 
   test('requires a valid account session for every file and data route', async () => {
-    const authentication = await createFsAuthentication(['Alice:password123'])
+    const authentication = await createFsAuthentication(['Alice:password123'], { directory: await createSessionDirectory() })
     const { server } = await startFixtureServer(true, undefined, undefined, authentication)
     const protectedRequests = [
       fetch(new URL('/api/directory', server.url)),
@@ -127,7 +133,7 @@ describe('FsHttpServer', () => {
     const signedIn = await login(server, 'ALICE')
     expect(signedIn.response.status).toBe(200)
     expect(signedIn.cookie).toStartWith('ycy_fs_session=')
-    expect(signedIn.response.headers.get('set-cookie')).toContain('HttpOnly; SameSite=Strict; Path=/; Max-Age=43200')
+    expect(signedIn.response.headers.get('set-cookie')).toContain('HttpOnly; SameSite=Strict; Path=/; Max-Age=604800')
 
     const session = await fetch(new URL('/api/session', server.url), { headers: { Cookie: signedIn.cookie! } })
     expect(await session.json()).toEqual({
@@ -136,7 +142,9 @@ describe('FsHttpServer', () => {
       authenticated: true,
       account: { username: 'Alice' },
     })
-    expect((await fetch(new URL('/api/directory', server.url), { headers: { Cookie: signedIn.cookie! } })).status).toBe(200)
+    const directory = await fetch(new URL('/api/directory', server.url), { headers: { Cookie: signedIn.cookie! } })
+    expect(directory.status).toBe(200)
+    expect(directory.headers.get('set-cookie')).toContain('Max-Age=604800')
 
     const file = await fetch(new URL('/files/hello.txt', server.url), { headers: { Cookie: signedIn.cookie! } })
     expect(file.status).toBe(200)
@@ -156,7 +164,7 @@ describe('FsHttpServer', () => {
   })
 
   test('closes an authenticated download event stream when its session expires', async () => {
-    const authentication = await createFsAuthentication(['alice:password123'], { sessionLifetimeMs: 40 })
+    const authentication = await createFsAuthentication(['alice:password123'], { directory: await createSessionDirectory(), sessionLifetimeMs: 40 })
     const { server } = await startFixtureServer(true, undefined, undefined, authentication)
     const signedIn = await login(server)
     const response = await fetch(new URL('/api/downloads/events', server.url), { headers: { Cookie: signedIn.cookie! } })
@@ -165,6 +173,23 @@ describe('FsHttpServer', () => {
     expect(response.status).toBe(200)
     expect((await reader.read()).done).toBe(false)
     expect((await reader.read()).done).toBe(true)
+  })
+
+  test('returns a storage error instead of renewing an undurable authenticated session', async () => {
+    const directory = await createSessionDirectory()
+    const authentication = await createFsAuthentication(['alice:password123'], { directory })
+    const { server } = await startFixtureServer(true, undefined, undefined, authentication)
+    const signedIn = await login(server)
+    await rm(directory, { recursive: true, force: true })
+    await writeFile(directory, 'unavailable')
+
+    const response = await fetch(new URL('/api/directory', server.url), { headers: { Cookie: signedIn.cookie! } })
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({
+      version: 1,
+      error: { code: 'SESSION_UNAVAILABLE', message: 'Session storage is unavailable' },
+    })
   })
 
   test('serves a versioned directory listing with API security headers', async () => {

@@ -212,6 +212,16 @@ export function App(): React.JSX.Element {
     return () => window.removeEventListener('fs-authentication-required', sessionEnded)
   }, [])
 
+  useEffect(() => {
+    if (!session?.authenticationEnabled || !session.authenticated)
+      return
+    const refresh = (): void => {
+      void apiJson<SessionState>('/api/session').then(setSession).catch(() => {})
+    }
+    const interval = window.setInterval(refresh, 24 * 60 * 60 * 1000)
+    return () => window.clearInterval(interval)
+  }, [session])
+
   if (!session) {
     return (
       <div className="auth-shell">

@@ -5,6 +5,8 @@ export interface FsOptions {
   manage: boolean
   safeHtml: boolean
   accounts: string[]
+  sessionDir?: string
+  sessionIdleDays?: number
 }
 
 export type FsEntryKind = 'directory' | 'file' | 'unavailable'

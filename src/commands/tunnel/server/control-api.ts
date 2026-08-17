@@ -93,6 +93,7 @@ const TUNNEL_ERROR_STATUS = {
   PORT_OUTSIDE_POOL: 400,
   PORT_POOL_EXHAUSTED: 409,
   RESOURCE_RESERVED: 409,
+  SESSION_UNAVAILABLE: 503,
   UNSUPPORTED_PLATFORM: 500,
   USERNAME_TAKEN: 409,
 } as const satisfies Record<TunnelErrorCode, number>
@@ -152,8 +153,9 @@ function cookie(request: Request): string | undefined {
   return request.headers.get('Cookie')?.split(';').map(value => value.trim()).find(value => value.startsWith(`${SESSION_COOKIE}=`))?.slice(SESSION_COOKIE.length + 1)
 }
 
-function sessionCookie(token: string): string {
-  return `${SESSION_COOKIE}=${token}; ${SESSION_COOKIE_ATTRIBUTES}; Max-Age=43200`
+function sessionCookie(token: string, expiresAt: string): string {
+  const maxAge = Math.max(1, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000))
+  return `${SESSION_COOKIE}=${token}; ${SESSION_COOKIE_ATTRIBUTES}; Max-Age=${maxAge}`
 }
 
 function expiredSessionCookie(): string {
@@ -198,7 +200,7 @@ export class TunnelControlApi {
         return body
       try {
         const grant = await this.options.management.signIn(body)
-        return json({ version: 1, authenticated: true, account: grant.account }, 200, { 'Set-Cookie': sessionCookie(grant.token) })
+        return json({ version: 1, authenticated: true, account: grant.account }, 200, { 'Set-Cookie': sessionCookie(grant.token, grant.expiresAt) })
       }
       catch (cause) {
         return errorResponse(cause)
@@ -207,186 +209,201 @@ export class TunnelControlApi {
 
     if (!url.pathname.startsWith('/api/'))
       return error('NOT_FOUND', 'Route not found', 404)
-    const workspace = this.workspace(request)
+    const token = cookie(request)
+    let workspace: TunnelWorkspace | Response
+    try {
+      workspace = this.workspace(request)
+    }
+    catch (cause) {
+      return errorResponse(cause)
+    }
     if (workspace instanceof Response)
       return workspace
     if (!['GET', 'HEAD'].includes(request.method) && !sameOrigin(request))
       return error('ORIGIN_FORBIDDEN', 'Mutation requests must be same-origin', 403)
 
-    try {
-      if (url.pathname === '/api/session' && request.method === 'DELETE') {
-        this.options.management.signOut(cookie(request))
-        return new Response(null, { status: 204, headers: { ...API_HEADERS, 'Set-Cookie': expiredSessionCookie() } })
-      }
-      if (url.pathname === '/api/session/password' && request.method === 'PUT') {
-        const body = await requestJson(request, passwordChangeSchema)
-        if (body instanceof Response)
-          return body
-        await workspace.changePassword(body)
-        return new Response(null, { status: 204, headers: { ...API_HEADERS, 'Set-Cookie': expiredSessionCookie() } })
-      }
-      if (url.pathname === '/api/events' && request.method === 'GET') {
-        server.timeout(request, 0)
-        const encoder = new TextEncoder()
-        let dispose: (() => void) | undefined
-        const stream = new ReadableStream<Uint8Array>({
-          start: (controller) => {
-            const publish = (event: 'changed' | 'session_revoked'): void => {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ version: 1, event })}\n\n`))
-              if (event === 'session_revoked')
-                controller.close()
-            }
-            dispose = workspace.observe(publish)
-            publish('changed')
-          },
-          cancel() {
-            dispose?.()
-          },
-        })
-        return new Response(stream, { headers: { ...API_HEADERS, 'Content-Type': 'text/event-stream; charset=utf-8', 'X-Accel-Buffering': 'no' } })
-      }
-      if (url.pathname === '/api/state' && request.method === 'GET')
-        return json({ version: 1, ...await workspace.overview() })
+    const response = await (async (): Promise<Response> => {
+      try {
+        if (url.pathname === '/api/session' && request.method === 'GET')
+          return json({ version: 1, authenticated: true, account: workspace.account })
+        if (url.pathname === '/api/session' && request.method === 'DELETE') {
+          this.options.management.signOut(token)
+          return new Response(null, { status: 204, headers: { ...API_HEADERS, 'Set-Cookie': expiredSessionCookie() } })
+        }
+        if (url.pathname === '/api/session/password' && request.method === 'PUT') {
+          const body = await requestJson(request, passwordChangeSchema)
+          if (body instanceof Response)
+            return body
+          await workspace.changePassword(body)
+          return new Response(null, { status: 204, headers: { ...API_HEADERS, 'Set-Cookie': expiredSessionCookie() } })
+        }
+        if (url.pathname === '/api/events' && request.method === 'GET') {
+          server.timeout(request, 0)
+          const encoder = new TextEncoder()
+          let dispose: (() => void) | undefined
+          const stream = new ReadableStream<Uint8Array>({
+            start: (controller) => {
+              const publish = (event: 'changed' | 'session_revoked'): void => {
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify({ version: 1, event })}\n\n`))
+                if (event === 'session_revoked')
+                  controller.close()
+              }
+              dispose = workspace.observe(publish)
+              publish('changed')
+            },
+            cancel() {
+              dispose?.()
+            },
+          })
+          return new Response(stream, { headers: { ...API_HEADERS, 'Content-Type': 'text/event-stream; charset=utf-8', 'X-Accel-Buffering': 'no' } })
+        }
+        if (url.pathname === '/api/state' && request.method === 'GET')
+          return json({ version: 1, ...await workspace.overview() })
 
-      if (url.pathname === '/api/accounts') {
-        const administration = workspace.administration()
-        if (request.method === 'GET')
-          return json({ version: 1, accounts: administration.listAccounts() })
-        if (request.method === 'POST') {
-          const body = await requestJson(request, accountCreateSchema)
+        if (url.pathname === '/api/accounts') {
+          const administration = workspace.administration()
+          if (request.method === 'GET')
+            return json({ version: 1, accounts: administration.listAccounts() })
+          if (request.method === 'POST') {
+            const body = await requestJson(request, accountCreateSchema)
+            if (body instanceof Response)
+              return body
+            return json({ version: 1, account: await administration.createAccount(body) }, 201)
+          }
+          return error('METHOD_NOT_ALLOWED', 'Use GET or POST', 405)
+        }
+        const accountId = parseId(url.pathname, /^\/api\/accounts\/([^/]+)$/)
+        if (accountId) {
+          const administration = workspace.administration()
+          if (request.method === 'PATCH') {
+            const body = await requestJson(request, accountRoleSchema)
+            if (body instanceof Response)
+              return body
+            const self = accountId === workspace.account.id
+            const account = administration.changeAccountRole(accountId, body.role)
+            return json({ version: 1, account }, 200, self ? { 'Set-Cookie': expiredSessionCookie() } : undefined)
+          }
+          if (request.method === 'DELETE') {
+            const self = accountId === workspace.account.id
+            administration.deleteAccount(accountId)
+            return new Response(null, { status: 204, headers: { ...API_HEADERS, ...(self ? { 'Set-Cookie': expiredSessionCookie() } : {}) } })
+          }
+          return error('METHOD_NOT_ALLOWED', 'Use PATCH or DELETE', 405)
+        }
+        const accountPasswordId = parseId(url.pathname, /^\/api\/accounts\/([^/]+)\/password$/)
+        if (accountPasswordId && request.method === 'PUT') {
+          const body = await requestJson(request, accountPasswordSchema)
           if (body instanceof Response)
             return body
-          return json({ version: 1, account: await administration.createAccount(body) }, 201)
-        }
-        return error('METHOD_NOT_ALLOWED', 'Use GET or POST', 405)
-      }
-      const accountId = parseId(url.pathname, /^\/api\/accounts\/([^/]+)$/)
-      if (accountId) {
-        const administration = workspace.administration()
-        if (request.method === 'PATCH') {
-          const body = await requestJson(request, accountRoleSchema)
-          if (body instanceof Response)
-            return body
-          const self = accountId === workspace.account.id
-          const account = administration.changeAccountRole(accountId, body.role)
-          return json({ version: 1, account }, 200, self ? { 'Set-Cookie': expiredSessionCookie() } : undefined)
-        }
-        if (request.method === 'DELETE') {
-          const self = accountId === workspace.account.id
-          administration.deleteAccount(accountId)
+          const self = accountPasswordId === workspace.account.id
+          await workspace.administration().resetAccountPassword(accountPasswordId, body.password)
           return new Response(null, { status: 204, headers: { ...API_HEADERS, ...(self ? { 'Set-Cookie': expiredSessionCookie() } : {}) } })
         }
-        return error('METHOD_NOT_ALLOWED', 'Use PATCH or DELETE', 405)
-      }
-      const accountPasswordId = parseId(url.pathname, /^\/api\/accounts\/([^/]+)\/password$/)
-      if (accountPasswordId && request.method === 'PUT') {
-        const body = await requestJson(request, accountPasswordSchema)
-        if (body instanceof Response)
-          return body
-        const self = accountPasswordId === workspace.account.id
-        await workspace.administration().resetAccountPassword(accountPasswordId, body.password)
-        return new Response(null, { status: 204, headers: { ...API_HEADERS, ...(self ? { 'Set-Cookie': expiredSessionCookie() } : {}) } })
-      }
 
-      if (url.pathname === '/api/clients') {
-        if (request.method === 'GET')
-          return json({ version: 1, clients: workspace.listClients() })
-        if (request.method === 'POST') {
-          const body = await requestJson(request, clientCreateSchema)
+        if (url.pathname === '/api/clients') {
+          if (request.method === 'GET')
+            return json({ version: 1, clients: workspace.listClients() })
+          if (request.method === 'POST') {
+            const body = await requestJson(request, clientCreateSchema)
+            if (body instanceof Response)
+              return body
+            return json({ version: 1, client: workspace.createClient(body) }, 201)
+          }
+          return error('METHOD_NOT_ALLOWED', 'Use GET or POST', 405)
+        }
+        const clientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)$/)
+        if (clientId) {
+          if (request.method === 'GET')
+            return json({ version: 1, ...workspace.getClient(clientId) })
+          if (request.method === 'PATCH') {
+            const body = await requestJson(request, clientRemarkSchema)
+            if (body instanceof Response)
+              return body
+            return json({ version: 1, client: workspace.updateClientRemark(clientId, body.remark) })
+          }
+          if (request.method === 'DELETE') {
+            workspace.deleteClient(clientId)
+            return new Response(null, { status: 204, headers: API_HEADERS })
+          }
+          return error('METHOD_NOT_ALLOWED', 'Use GET, PATCH, or DELETE', 405)
+        }
+        const rotateClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/rotate$/)
+        if (rotateClientId && request.method === 'POST')
+          return json({ version: 1, client: workspace.rotateClientToken(rotateClientId) })
+        const restartClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/restart$/)
+        if (restartClientId && request.method === 'POST') {
+          workspace.restartClient(restartClientId)
+          return json({ version: 1, accepted: true }, 202)
+        }
+        const tunnelImportPreviewClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/tunnels\/import\/preview$/)
+        if (tunnelImportPreviewClientId) {
+          if (request.method !== 'POST')
+            return error('METHOD_NOT_ALLOWED', 'Use POST', 405)
+          const body = await requestJson(request, tunnelImportPreviewSchema)
           if (body instanceof Response)
             return body
-          return json({ version: 1, client: workspace.createClient(body) }, 201)
+          return json({ version: 1, ...workspace.previewTunnelImport(tunnelImportPreviewClientId, body.source) })
         }
-        return error('METHOD_NOT_ALLOWED', 'Use GET or POST', 405)
-      }
-      const clientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)$/)
-      if (clientId) {
-        if (request.method === 'GET')
-          return json({ version: 1, ...workspace.getClient(clientId) })
-        if (request.method === 'PATCH') {
-          const body = await requestJson(request, clientRemarkSchema)
+        const tunnelImportClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/tunnels\/import$/)
+        if (tunnelImportClientId) {
+          if (request.method !== 'POST')
+            return error('METHOD_NOT_ALLOWED', 'Use POST', 405)
+          const body = await requestJson(request, tunnelImportSchema)
           if (body instanceof Response)
             return body
-          return json({ version: 1, client: workspace.updateClientRemark(clientId, body.remark) })
+          return json({ version: 1, tunnels: workspace.importTunnels(tunnelImportClientId, body.source, body.candidateIds) }, 201)
         }
-        if (request.method === 'DELETE') {
-          workspace.deleteClient(clientId)
-          return new Response(null, { status: 204, headers: API_HEADERS })
+        const tunnelsClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/tunnels$/)
+        if (tunnelsClientId) {
+          if (request.method === 'GET')
+            return json({ version: 1, tunnels: workspace.getClient(tunnelsClientId).tunnels })
+          if (request.method === 'POST') {
+            const body = await requestJson(request, tunnelSchema)
+            if (body instanceof Response)
+              return body
+            return json({ version: 1, tunnel: workspace.createTunnel(tunnelsClientId, body as TunnelMutationInput) }, 201)
+          }
+          return error('METHOD_NOT_ALLOWED', 'Use GET or POST', 405)
         }
-        return error('METHOD_NOT_ALLOWED', 'Use GET, PATCH, or DELETE', 405)
-      }
-      const rotateClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/rotate$/)
-      if (rotateClientId && request.method === 'POST')
-        return json({ version: 1, client: workspace.rotateClientToken(rotateClientId) })
-      const restartClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/restart$/)
-      if (restartClientId && request.method === 'POST') {
-        workspace.restartClient(restartClientId)
-        return json({ version: 1, accepted: true }, 202)
-      }
-      const tunnelImportPreviewClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/tunnels\/import\/preview$/)
-      if (tunnelImportPreviewClientId) {
-        if (request.method !== 'POST')
-          return error('METHOD_NOT_ALLOWED', 'Use POST', 405)
-        const body = await requestJson(request, tunnelImportPreviewSchema)
-        if (body instanceof Response)
-          return body
-        return json({ version: 1, ...workspace.previewTunnelImport(tunnelImportPreviewClientId, body.source) })
-      }
-      const tunnelImportClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/tunnels\/import$/)
-      if (tunnelImportClientId) {
-        if (request.method !== 'POST')
-          return error('METHOD_NOT_ALLOWED', 'Use POST', 405)
-        const body = await requestJson(request, tunnelImportSchema)
-        if (body instanceof Response)
-          return body
-        return json({ version: 1, tunnels: workspace.importTunnels(tunnelImportClientId, body.source, body.candidateIds) }, 201)
-      }
-      const tunnelsClientId = parseId(url.pathname, /^\/api\/clients\/([^/]+)\/tunnels$/)
-      if (tunnelsClientId) {
-        if (request.method === 'GET')
-          return json({ version: 1, tunnels: workspace.getClient(tunnelsClientId).tunnels })
-        if (request.method === 'POST') {
-          const body = await requestJson(request, tunnelSchema)
-          if (body instanceof Response)
-            return body
-          return json({ version: 1, tunnel: workspace.createTunnel(tunnelsClientId, body as TunnelMutationInput) }, 201)
+        const tunnelId = parseId(url.pathname, /^\/api\/tunnels\/([^/]+)$/)
+        if (tunnelId) {
+          if (request.method === 'PATCH') {
+            const body = await requestJson(request, tunnelPatchSchema)
+            if (body instanceof Response)
+              return body
+            return json({ version: 1, tunnel: workspace.updateTunnel(tunnelId, body as TunnelPatchInput) })
+          }
+          if (request.method === 'DELETE') {
+            workspace.deleteTunnel(tunnelId)
+            return new Response(null, { status: 204, headers: API_HEADERS })
+          }
+          return error('METHOD_NOT_ALLOWED', 'Use PATCH or DELETE', 405)
         }
-        return error('METHOD_NOT_ALLOWED', 'Use GET or POST', 405)
-      }
-      const tunnelId = parseId(url.pathname, /^\/api\/tunnels\/([^/]+)$/)
-      if (tunnelId) {
-        if (request.method === 'PATCH') {
-          const body = await requestJson(request, tunnelPatchSchema)
-          if (body instanceof Response)
-            return body
-          return json({ version: 1, tunnel: workspace.updateTunnel(tunnelId, body as TunnelPatchInput) })
+        if (url.pathname === '/api/server/frps/config/custom-404-page') {
+          const configuration = workspace.administration().frpsConfiguration()
+          if (request.method === 'GET')
+            return json({ version: 1, ...await configuration.getCustom404Page() })
+          if (request.method === 'PUT') {
+            const body = await requestJson(request, custom404PageSchema)
+            if (body instanceof Response)
+              return body
+            return json({ version: 1, ...await configuration.setCustom404Page(body.content) })
+          }
+          return error('METHOD_NOT_ALLOWED', 'Use GET or PUT', 405)
         }
-        if (request.method === 'DELETE') {
-          workspace.deleteTunnel(tunnelId)
-          return new Response(null, { status: 204, headers: API_HEADERS })
-        }
-        return error('METHOD_NOT_ALLOWED', 'Use PATCH or DELETE', 405)
+        const action = /^\/api\/server\/frp\/(start|stop|restart)$/.exec(url.pathname)?.[1] as 'start' | 'stop' | 'restart' | undefined
+        if (action && request.method === 'POST')
+          return json({ version: 1, server: await workspace.administration().controlFrps(action) })
+        return error('NOT_FOUND', 'Route not found', 404)
       }
-      if (url.pathname === '/api/server/frps/config/custom-404-page') {
-        const configuration = workspace.administration().frpsConfiguration()
-        if (request.method === 'GET')
-          return json({ version: 1, ...await configuration.getCustom404Page() })
-        if (request.method === 'PUT') {
-          const body = await requestJson(request, custom404PageSchema)
-          if (body instanceof Response)
-            return body
-          return json({ version: 1, ...await configuration.setCustom404Page(body.content) })
-        }
-        return error('METHOD_NOT_ALLOWED', 'Use GET or PUT', 405)
+      catch (cause) {
+        return errorResponse(cause)
       }
-      const action = /^\/api\/server\/frp\/(start|stop|restart)$/.exec(url.pathname)?.[1] as 'start' | 'stop' | 'restart' | undefined
-      if (action && request.method === 'POST')
-        return json({ version: 1, server: await workspace.administration().controlFrps(action) })
-      return error('NOT_FOUND', 'Route not found', 404)
+    })()
+    if (token && !response.headers.has('Set-Cookie')) {
+      response.headers.set('Set-Cookie', sessionCookie(token, workspace.sessionExpiresAt))
     }
-    catch (cause) {
-      return errorResponse(cause)
-    }
+    return response
   }
 
   stop(): void {}

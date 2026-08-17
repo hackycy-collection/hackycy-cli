@@ -114,7 +114,7 @@ _Avoid_: Tunnel Definition, Tunnel Control Plane
 | --- | --- |
 | Run server and client supervisors in the foreground. | Docker or the host service manager owns supervisor persistence and restart, keeping process ownership, signals, and logs predictable across platforms. |
 | Isolate Client Connection Instances by Control Plane origin and Client Token. | A keyed opaque directory identity allows unrelated connections to run in parallel without exposing Client Tokens in paths, while the same pair retains single-instance ownership. |
-| Persist control-plane state in one embedded SQLite database. | Transactions, ownership queries, uniqueness, and cascade deletion do not require an external database; connection, session, and process status remain bounded in memory. |
+| Persist control-plane state in one embedded SQLite database. | Transactions, ownership queries, uniqueness, and cascade deletion do not require an external database; connection and process status remain bounded in memory while account sessions are durable files in the server data directory. |
 | Keep current Client Tokens recoverable. | Authorized operators can retrieve credentials after creation; control-plane access, its data directory, and backups are therefore trusted, and rotation is the revocation mechanism. |
 | Use fixed Administrator and User roles with client-level ownership. | The two roles cover global operation and self-service without configurable policies; Tunnel Definitions inherit their client's owner so snapshots remain complete. |
 | Keep one environment-managed Deployment Administrator. | A stable, non-deletable Administrator preserves operational recovery while local account credentials remain database-managed. |
@@ -171,6 +171,7 @@ Options:
       --port-range <start-end>             default 20000-20100
       --advertise-frp-addr <host:port>     default derived from agent request host
       --data-dir <path>                    default platform-specific server directory
+      --session-idle-days <days>           default 7
 ```
 
 Non-secret option precedence is CLI option, environment variable, then default:
@@ -184,6 +185,7 @@ Non-secret option precedence is CLI option, environment variable, then default:
 | `--port-range` | `YCY_TUNNEL_PORT_RANGE` |
 | `--advertise-frp-addr` | `YCY_TUNNEL_ADVERTISE_FRP_ADDR` |
 | `--data-dir` | `YCY_TUNNEL_DATA_DIR` |
+| `--session-idle-days` | `YCY_TUNNEL_SESSION_IDLE_DAYS` |
 
 The Deployment Administrator is a stable account configured through environment variables. Its password has no default and the server refuses to start until a valid password is supplied. Local accounts are then managed through the Administrator UI.
 
@@ -192,6 +194,7 @@ The Deployment Administrator is a stable account configured through environment 
 | Username | `YCY_TUNNEL_ADMIN_USER` | `admin` |
 | Password | `YCY_TUNNEL_ADMIN_PASSWORD` | required |
 | FRP authentication token | `YCY_TUNNEL_FRP_TOKEN` | generated and persisted in the server data directory |
+| Session idle lifetime | `YCY_TUNNEL_SESSION_IDLE_DAYS` | 7 days |
 
 Account usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens and compare case-insensitively. Passwords contain 5-256 characters. `YCY_TUNNEL_FRP_TOKEN` must be non-empty when set; it optionally fixes the one token used by ycy's own managed `frps` and every generated `frpc`. It does not connect ycy to an externally managed `frps`; that deployment model is unsupported. It is not exposed in the management UI or API. The UI displays deployment settings but cannot mutate them. Changing a listener, port pool, Deployment Administrator credential, FRP authentication token, data directory, or advertised endpoint requires restarting the ycy supervisor through Docker or the host service manager.
 
@@ -243,7 +246,7 @@ The advertised FRP endpoint defaults to the hostname used by an authenticated ag
 - A User can list, inspect, edit, delete, rotate, and restart only owned clients and their complete Tunnel Definition sets. A cross-owner resource ID is indistinguishable from a missing ID.
 - An Administrator has the same operations across all clients, plus account and frps management. Administrator changes to another account's resources preserve their owner.
 - An account that still owns a Trusted Tunnel Client cannot be deleted. The Deployment Administrator cannot be deleted, demoted, or have its password changed through the UI.
-- Password changes, password resets, role changes, and account deletion revoke every in-memory session for that account immediately. Sessions expire after 12 hours, are bounded to eight per account and 128 total, and do not survive a server restart.
+- Password changes, password resets, role changes, and account deletion revoke every session for that account immediately. Sessions are opaque 256-bit IDs whose hashes and credential revisions live under `<data-dir>/sessions`; they expire after seven idle days, have no absolute maximum age, survive a restart when the account credentials are unchanged, and remain bounded to eight per account and 128 total.
 
 ### Client Token
 
@@ -516,13 +519,14 @@ This deliberately causes a brief interruption to every tunnel on that client whe
 
 ## Control Plane HTTP And UI
 
-The ycy HTTP service owns the embedded React application, JSON interface, bounded account sessions, and agent WebSocket. The FRP Dashboard is not proxied or embedded.
+The ycy HTTP service owns the embedded React application, JSON interface, durable bounded account sessions, and agent WebSocket. The FRP Dashboard is not proxied or embedded.
 
 The implementation exposes these versioned routes:
 
 | Method | Route | Purpose |
 | --- | --- | --- |
 | `POST` | `/api/session` | Authenticate a Control Plane Account. |
+| `GET` | `/api/session` | Confirm and refresh the current account session. |
 | `DELETE` | `/api/session` | End the current account session. |
 | `PUT` | `/api/session/password` | Change the current local account password and end all of its sessions. |
 | `GET` | `/api/state` | Return the current account and scoped overview; Administrator responses also contain frps and deployment settings. |

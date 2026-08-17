@@ -1,5 +1,8 @@
 import type { FrpChild } from '../frp/supervisor'
 import type { ServerTunnelConfig } from '../types'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
 import { FrpSupervisor } from '../frp/supervisor'
 import { TunnelError } from '../types'
@@ -28,6 +31,7 @@ interface Fixture {
   gateway: AgentGateway
   frps: FrpSupervisor
   management: TunnelManagement
+  sessionDirectory: string
 }
 
 const fixtures: Fixture[] = []
@@ -52,6 +56,7 @@ afterEach(async () => {
     fixture.gateway.stop()
     await fixture.frps.stop()
     fixture.database.close()
+    await rm(fixture.sessionDirectory, { recursive: true, force: true })
   }
 })
 
@@ -61,6 +66,7 @@ async function fixture(options: { sessionLifetimeMs?: number, adminPassword?: st
   const gateway = new AgentGateway(controlPlane, 7000, 'internal')
   const frps = new FrpSupervisor({ binaryPath: '/frps', role: 'frps', spawn: () => new FakeChild() })
   const config = serverConfig({ adminPassword: options.adminPassword ?? 'environment-secret' })
+  const sessionDirectory = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-management-session-'))
   const management = await TunnelManagement.create({
     database,
     controlPlane,
@@ -68,9 +74,10 @@ async function fixture(options: { sessionLifetimeMs?: number, adminPassword?: st
     frps,
     frpsConfiguration: new FrpsConfiguration(config),
     ...(options.sessionLifetimeMs === undefined ? {} : { sessionLifetimeMs: options.sessionLifetimeMs }),
+    sessionDirectory,
     serverConfig: config,
   })
-  const value = { database, gateway, frps, management }
+  const value = { database, gateway, frps, management, sessionDirectory }
   fixtures.push(value)
   return value
 }
@@ -172,6 +179,7 @@ describe('TunnelManagement accounts and sessions', () => {
     const { management } = await fixture({ sessionLifetimeMs: 50 })
     const grant = await management.signIn({ username: 'admin', password: 'environment-secret' })
     const workspace = management.resume(grant.token)!
+    expect(Date.parse(workspace.sessionExpiresAt)).toBeGreaterThan(Date.now())
     const events: string[] = []
     await new Promise<void>((resolve, reject) => {
       const timeout = setTimeout(() => reject(new Error('session did not expire')), 1_000)
@@ -254,6 +262,7 @@ describe('TunnelManagement accounts and sessions', () => {
       gateway: secondGateway,
       frps: secondFrps,
       frpsConfiguration: new FrpsConfiguration(secondConfig),
+      sessionDirectory: first.sessionDirectory,
       serverConfig: secondConfig,
     })
     const renamed = second.resume((await second.signIn({ username: 'ROOT-ADMIN', password: 'replacement-environment-secret' })).token)!
@@ -274,10 +283,54 @@ describe('TunnelManagement accounts and sessions', () => {
       gateway: thirdGateway,
       frps: thirdFrps,
       frpsConfiguration: new FrpsConfiguration(thirdConfig),
+      sessionDirectory: first.sessionDirectory,
       serverConfig: thirdConfig,
     })).rejects.toThrow('conflicts with a local account')
     thirdGateway.stop()
     await thirdFrps.stop()
+  })
+
+  test('restores a persisted session only while the environment credentials are unchanged', async () => {
+    const first = await fixture()
+    const grant = await first.management.signIn({ username: 'admin', password: 'environment-secret' })
+    first.management.stop()
+    first.gateway.stop()
+
+    const restoredControlPlane = new TunnelControlPlane(first.database, { start: 20000, end: 20002 })
+    const restoredGateway = new AgentGateway(restoredControlPlane, 7000, 'internal')
+    const restoredFrps = new FrpSupervisor({ binaryPath: '/frps', role: 'frps', spawn: () => new FakeChild() })
+    const restoredConfig = serverConfig()
+    const restored = await TunnelManagement.create({
+      database: first.database,
+      controlPlane: restoredControlPlane,
+      gateway: restoredGateway,
+      frps: restoredFrps,
+      frpsConfiguration: new FrpsConfiguration(restoredConfig),
+      sessionDirectory: first.sessionDirectory,
+      serverConfig: restoredConfig,
+    })
+    expect(restored.resume(grant.token)?.account.username).toBe('admin')
+    restored.stop()
+    restoredGateway.stop()
+    await restoredFrps.stop()
+
+    const changedControlPlane = new TunnelControlPlane(first.database, { start: 20000, end: 20002 })
+    const changedGateway = new AgentGateway(changedControlPlane, 7000, 'internal')
+    const changedFrps = new FrpSupervisor({ binaryPath: '/frps', role: 'frps', spawn: () => new FakeChild() })
+    const changedConfig = serverConfig({ adminPassword: 'replacement-environment-secret' })
+    const changed = await TunnelManagement.create({
+      database: first.database,
+      controlPlane: changedControlPlane,
+      gateway: changedGateway,
+      frps: changedFrps,
+      frpsConfiguration: new FrpsConfiguration(changedConfig),
+      sessionDirectory: first.sessionDirectory,
+      serverConfig: changedConfig,
+    })
+    expect(changed.resume(grant.token)).toBeUndefined()
+    changed.stop()
+    changedGateway.stop()
+    await changedFrps.stop()
   })
 })
 

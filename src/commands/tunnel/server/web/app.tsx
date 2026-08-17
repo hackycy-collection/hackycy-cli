@@ -456,6 +456,15 @@ export function App(): React.JSX.Element {
     }
     return () => events.close()
   }, [authenticated, load, sessionEnded])
+  useEffect(() => {
+    if (!authenticated)
+      return
+    const refresh = (): void => {
+      void apiJson('/api/session').catch(() => {})
+    }
+    const interval = window.setInterval(refresh, 24 * 60 * 60 * 1000)
+    return () => window.clearInterval(interval)
+  }, [authenticated])
   const logout = async (): Promise<void> => {
     setLoggingOut(true)
     try {

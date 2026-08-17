@@ -17,6 +17,7 @@ export function register(program: Command): void {
     .option('--port-range <start-end>', 'Server Port Pool')
     .option('--advertise-frp-addr <host:port>', 'FRP endpoint advertised to trusted clients')
     .option('--data-dir <path>', 'Tunnel server state directory')
+    .option('--session-idle-days <days>', 'Session idle lifetime in days')
     .action(async (options: ServerOptionInput) => {
       const { runTunnelServer } = await import('./server/run')
       await runTunnelServer(resolveServerConfig(options))

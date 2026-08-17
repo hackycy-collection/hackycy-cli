@@ -69,10 +69,14 @@ services:
       # this for NAT, a different Docker host port, or a dedicated FRP hostname.
       # Use host:port (or [IPv6]:port), without a URL scheme.
       # YCY_TUNNEL_ADVERTISE_FRP_ADDR: tunnel.example.com:7000
+
+      # Account sessions are stored under /data/sessions. They expire after
+      # seven idle days by default and survive restarts while this volume stays.
+      # YCY_TUNNEL_SESSION_IDLE_DAYS: 7
     volumes:
-      # Retain this volume when upgrading. It preserves the database and internal
-      # FRP token across replacement. Removing it creates a new control plane and
-      # invalidates its existing client enrollment state.
+      # Retain this volume when upgrading. It preserves the database, internal
+      # FRP token, and durable account sessions across replacement. Removing it
+      # creates a new control plane and invalidates its enrollment and sessions.
       - tunnel-data:/data
     ports:
       # Native frpc data-plane connections. Publish directly and allow it through

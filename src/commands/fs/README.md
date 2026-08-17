@@ -13,6 +13,9 @@ Options:
   -m, --manage              Enable uploads, downloads, extraction, and filesystem management
       --safe-html           Disable HTML and XHTML execution and force downloads
       --account <user:pass> Require login with an account (repeatable)
+      --session-dir <path>  Persistent directory for authenticated sessions
+      --session-idle-days <days>
+                             Session idle lifetime in days (default: 7)
 ```
 
 The directory defaults to the current working directory. The default binding is available to the local network; use `--address 127.0.0.1` for local-only access. Management mode allows text editing, upload, remote download, archive extraction, copy, move, rename, and permanent deletion. Without `--account`, use it only with a trusted directory and network.
@@ -26,6 +29,8 @@ ycy fs --account 'alice:password123' --account 'bob:another-password' ./shared
 ```
 
 The first colon separates the username from the password, so the password may contain additional colons. Usernames contain 1-64 ASCII letters, numbers, dots, underscores, or hyphens and are matched without case sensitivity. Passwords contain 5-256 characters. Duplicate usernames stop startup. Account specifications are process arguments and may be visible in shell history and process inspection tools.
+
+When accounts are configured, sessions are stored outside the browsed directory. `--session-dir` takes precedence over `YCY_FS_SESSION_DIR`; otherwise ycy uses a platform state directory isolated by the resolved browse root. `--session-idle-days` takes precedence over `YCY_FS_SESSION_IDLE_DAYS`; both default to seven days.
 
 ## Architecture
 
@@ -43,7 +48,7 @@ CLI registration (index.ts)
 ```
 
 - `workspace.ts` owns root confinement, symlink policy, metadata, text decoding, and atomic upload naming. Callers pass only POSIX relative paths.
-- `authentication.ts` owns account parsing, password hashing, bounded process-local sessions, expiration, and revocation notifications.
+- `authentication.ts` owns account parsing, password hashing, and the account adapter for the shared persistent file-session module.
 - `server.ts` maps workspace results to HTTP, validates methods and mutation origins, implements cache and Range semantics, and serves the embedded HTML bundle.
 - `download-service.ts` validates remote HTTP(S) targets, blocks literal private and reserved IP addresses, follows validated redirects, and owns the bounded process-local download queue.
 - `archive-extractor.ts` owns 7-Zip inspection, capacity checks, multi-layer TAR extraction, process cancellation, and normalized failures. `workspace.ts` owns staging, output validation, collision-safe naming, and atomic publication. `extraction-service.ts` owns the bounded single-worker queue.
@@ -90,10 +95,11 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 - Login mode is enabled by the presence of at least one `--account`. Without accounts, the HTTP behavior remains unauthenticated and `/api/session` reports that authentication is disabled.
 - The application shell and its compiled assets remain public so the browser can render the login form. Every other `/api/*`, `/files/*`, and `/thumbnails/*` request requires a valid session.
 - Passwords are hashed with Argon2id during startup. Failed logins use the same verification path whether or not the username exists.
-- Sessions use random process-local tokens in an `HttpOnly`, `SameSite=Strict` cookie. They expire after 12 hours, do not survive a restart, and are bounded to eight per account and 128 for the server.
-- Logging out, session expiry, or bounded-session eviction revokes the token and closes its active remote-download event stream.
+- Sessions use opaque 256-bit random IDs in an `HttpOnly`, `SameSite=Strict` cookie. The server stores only a SHA-256 ID hash, subject, credential revision, and idle expiry in a protected session directory; raw IDs are never persisted.
+- A session expires after seven days without an authenticated request and has no absolute maximum age. Successful authenticated responses refresh the persistent cookie and its file record, so a valid active session survives server and browser restarts. The application also refreshes its session daily while open.
+- Logging out, expiry, bounded-session eviction, or changing an account password in the startup configuration revokes the token and closes its active remote-download event stream. Sessions remain bounded to eight per account and 128 for the server.
+- The session directory allows one active fs server, uses restrictive file permissions, and is sensitive deployment data. Authentication does not add TLS; passwords and session cookies still travel over the HTTP connection exposed by `fs`.
 - All configured accounts have the same read and management permissions. There is no registration, role, password-change, or persistent account interface.
-- Authentication does not add TLS. Passwords and session cookies travel over the HTTP connection exposed by `fs`.
 
 ## Filesystem And Management Invariants
 

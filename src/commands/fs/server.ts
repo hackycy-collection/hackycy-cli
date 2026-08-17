@@ -4,6 +4,7 @@ import type { ExtractionErrorCode } from './extraction-service'
 import type { FsDownloadManager, FsErrorCode, FsExtractionManager, FsWorkspace } from './types'
 import { isIP } from 'node:net'
 import { z } from 'zod'
+import { FileSessionError } from '../../shared/file-session'
 import { createRemoteDownloadManager, DownloadError } from './download-service'
 import { createExtractionManager, ExtractionError } from './extraction-service'
 import { ThumbnailError, ThumbnailService } from './thumbnail-service'
@@ -147,8 +148,9 @@ function sessionToken(request: Request): string | undefined {
     ?.slice(SESSION_COOKIE.length + 1)
 }
 
-function activeSessionCookie(token: string): string {
-  return `${SESSION_COOKIE}=${token}; ${SESSION_COOKIE_ATTRIBUTES}; Max-Age=43200`
+function activeSessionCookie(token: string, expiresAt: string): string {
+  const maxAge = Math.max(1, Math.ceil((Date.parse(expiresAt) - Date.now()) / 1000))
+  return `${SESSION_COOKIE}=${token}; ${SESSION_COOKIE_ATTRIBUTES}; Max-Age=${maxAge}`
 }
 
 function expiredSessionCookie(): string {
@@ -435,457 +437,475 @@ export function startFsHttpServer(options: {
     async fetch(request, bunServer) {
       const url = new URL(request.url)
       const token = sessionToken(request)
-      if (url.pathname === '/api/session') {
-        if (request.method === 'GET') {
-          if (!options.authentication) {
-            return json(
-              { version: 1, authenticationEnabled: false },
-              200,
-              token ? { 'Set-Cookie': expiredSessionCookie() } : undefined,
-            )
-          }
-          const session = options.authentication.resume(token)
-          return json(
-            {
-              version: 1,
-              authenticationEnabled: true,
-              authenticated: session !== undefined,
-              ...(session ? { account: session.account } : {}),
-            },
-            200,
-            token && !session ? { 'Set-Cookie': expiredSessionCookie() } : undefined,
-          )
-        }
-        if (request.method === 'POST') {
-          if (!options.authentication)
-            return error('AUTHENTICATION_DISABLED', 'No accounts are configured for this server', 403)
-          const invalidOrigin = validateMutationOrigin(request, options.address)
-          if (invalidOrigin)
-            return invalidOrigin
-          if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
-            return error('UNSUPPORTED_MEDIA_TYPE', 'Login requests must use JSON', 415)
-          let body: unknown
-          try {
-            body = await request.json()
-          }
-          catch {
-            return error('INVALID_REQUEST', 'Login request must be valid JSON', 400)
-          }
-          const parsed = sessionSchema.safeParse(body)
-          if (!parsed.success)
-            return error('INVALID_REQUEST', 'Login request is invalid', 400)
-          const grant = await options.authentication.signIn(parsed.data)
-          if (!grant)
-            return error('AUTHENTICATION_FAILED', 'Account credentials are invalid', 401)
-          return json(
-            { version: 1, authenticationEnabled: true, authenticated: true, account: grant.account },
-            200,
-            { 'Set-Cookie': activeSessionCookie(grant.token) },
-          )
-        }
-        if (request.method === 'DELETE') {
-          const invalidOrigin = validateMutationOrigin(request, options.address)
-          if (invalidOrigin)
-            return invalidOrigin
-          options.authentication?.signOut(token)
-          return new Response(null, { status: 204, headers: { ...API_HEADERS, 'Set-Cookie': expiredSessionCookie() } })
-        }
-        return error('METHOD_NOT_ALLOWED', 'Use GET, POST, or DELETE', 405)
-      }
-
-      if (options.authentication && protectedPath(url.pathname) && !options.authentication.resume(token))
-        return error('AUTHENTICATION_REQUIRED', 'Authenticated session is required', 401)
-
-      if (url.pathname === '/api/directory') {
-        const invalidMethod = requireMethod(request, 'GET')
-        if (invalidMethod)
-          return invalidMethod
-        try {
-          const listing = await options.workspace.listDirectory(url.searchParams.get('path') ?? '')
-          return json({
-            version: 1,
-            ...listing,
-            managementEnabled: options.managementEnabled,
-            maxUploadBytes: MAX_UPLOAD_BYTES,
-          })
-        }
-        catch (cause) {
-          return workspaceError(cause)
-        }
-      }
-      if (url.pathname === '/api/text') {
-        if (request.method === 'PUT') {
-          if (!options.managementEnabled)
-            return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable filesystem management', 403)
-          const invalidOrigin = validateMutationOrigin(request, options.address)
-          if (invalidOrigin)
-            return invalidOrigin
-          const contentType = request.headers.get('Content-Type')
-          const [mediaType, ...parameters] = contentType?.split(';').map(value => value.trim().toLowerCase()) ?? []
-          if (mediaType !== 'text/plain' || parameters.some(parameter => parameter !== 'charset=utf-8'))
-            return error('UNSUPPORTED_MEDIA_TYPE', 'Text saves must use UTF-8 text/plain', 415)
-          const expectedRevision = request.headers.get('If-Match')
-          if (!expectedRevision)
-            return error('PRECONDITION_REQUIRED', 'If-Match is required when saving text', 428)
-          let body: string
-          try {
-            const length = Number(request.headers.get('Content-Length'))
-            if (Number.isSafeInteger(length) && length > MAX_TEXT_PREVIEW_BYTES)
-              return error('TOO_LARGE', 'Edited text exceeds the 10 MiB limit', 413)
-            const reader = request.body?.getReader()
-            if (!reader) {
-              body = ''
+      let refreshedSession: { expiresAt: string } | undefined
+      let response: Response
+      try {
+        response = await (async (): Promise<Response> => {
+          if (url.pathname === '/api/session') {
+            if (request.method === 'GET') {
+              if (!options.authentication) {
+                return json(
+                  { version: 1, authenticationEnabled: false },
+                  200,
+                  token ? { 'Set-Cookie': expiredSessionCookie() } : undefined,
+                )
+              }
+              const session = options.authentication.resume(token)
+              refreshedSession = session
+              return json(
+                {
+                  version: 1,
+                  authenticationEnabled: true,
+                  authenticated: session !== undefined,
+                  ...(session ? { account: session.account } : {}),
+                },
+                200,
+                token && !session ? { 'Set-Cookie': expiredSessionCookie() } : undefined,
+              )
             }
-            else {
-              const chunks: Uint8Array[] = []
-              let size = 0
-              while (true) {
-                const chunk = await reader.read()
-                if (chunk.done)
-                  break
-                size += chunk.value.byteLength
-                if (size > MAX_TEXT_PREVIEW_BYTES) {
-                  await reader.cancel()
+            if (request.method === 'POST') {
+              if (!options.authentication)
+                return error('AUTHENTICATION_DISABLED', 'No accounts are configured for this server', 403)
+              const invalidOrigin = validateMutationOrigin(request, options.address)
+              if (invalidOrigin)
+                return invalidOrigin
+              if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
+                return error('UNSUPPORTED_MEDIA_TYPE', 'Login requests must use JSON', 415)
+              let body: unknown
+              try {
+                body = await request.json()
+              }
+              catch {
+                return error('INVALID_REQUEST', 'Login request must be valid JSON', 400)
+              }
+              const parsed = sessionSchema.safeParse(body)
+              if (!parsed.success)
+                return error('INVALID_REQUEST', 'Login request is invalid', 400)
+              const grant = await options.authentication.signIn(parsed.data)
+              if (!grant)
+                return error('AUTHENTICATION_FAILED', 'Account credentials are invalid', 401)
+              return json(
+                { version: 1, authenticationEnabled: true, authenticated: true, account: grant.account },
+                200,
+                { 'Set-Cookie': activeSessionCookie(grant.token, grant.expiresAt) },
+              )
+            }
+            if (request.method === 'DELETE') {
+              const invalidOrigin = validateMutationOrigin(request, options.address)
+              if (invalidOrigin)
+                return invalidOrigin
+              options.authentication?.signOut(token)
+              return new Response(null, { status: 204, headers: { ...API_HEADERS, 'Set-Cookie': expiredSessionCookie() } })
+            }
+            return error('METHOD_NOT_ALLOWED', 'Use GET, POST, or DELETE', 405)
+          }
+
+          if (options.authentication && protectedPath(url.pathname)) {
+            refreshedSession = options.authentication.resume(token)
+            if (!refreshedSession)
+              return error('AUTHENTICATION_REQUIRED', 'Authenticated session is required', 401)
+          }
+
+          if (url.pathname === '/api/directory') {
+            const invalidMethod = requireMethod(request, 'GET')
+            if (invalidMethod)
+              return invalidMethod
+            try {
+              const listing = await options.workspace.listDirectory(url.searchParams.get('path') ?? '')
+              return json({
+                version: 1,
+                ...listing,
+                managementEnabled: options.managementEnabled,
+                maxUploadBytes: MAX_UPLOAD_BYTES,
+              })
+            }
+            catch (cause) {
+              return workspaceError(cause)
+            }
+          }
+          if (url.pathname === '/api/text') {
+            if (request.method === 'PUT') {
+              if (!options.managementEnabled)
+                return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable filesystem management', 403)
+              const invalidOrigin = validateMutationOrigin(request, options.address)
+              if (invalidOrigin)
+                return invalidOrigin
+              const contentType = request.headers.get('Content-Type')
+              const [mediaType, ...parameters] = contentType?.split(';').map(value => value.trim().toLowerCase()) ?? []
+              if (mediaType !== 'text/plain' || parameters.some(parameter => parameter !== 'charset=utf-8'))
+                return error('UNSUPPORTED_MEDIA_TYPE', 'Text saves must use UTF-8 text/plain', 415)
+              const expectedRevision = request.headers.get('If-Match')
+              if (!expectedRevision)
+                return error('PRECONDITION_REQUIRED', 'If-Match is required when saving text', 428)
+              let body: string
+              try {
+                const length = Number(request.headers.get('Content-Length'))
+                if (Number.isSafeInteger(length) && length > MAX_TEXT_PREVIEW_BYTES)
                   return error('TOO_LARGE', 'Edited text exceeds the 10 MiB limit', 413)
+                const reader = request.body?.getReader()
+                if (!reader) {
+                  body = ''
                 }
-                chunks.push(chunk.value)
+                else {
+                  const chunks: Uint8Array[] = []
+                  let size = 0
+                  while (true) {
+                    const chunk = await reader.read()
+                    if (chunk.done)
+                      break
+                    size += chunk.value.byteLength
+                    if (size > MAX_TEXT_PREVIEW_BYTES) {
+                      await reader.cancel()
+                      return error('TOO_LARGE', 'Edited text exceeds the 10 MiB limit', 413)
+                    }
+                    chunks.push(chunk.value)
+                  }
+                  const bytes = new Uint8Array(size)
+                  let offset = 0
+                  for (const chunk of chunks) {
+                    bytes.set(chunk, offset)
+                    offset += chunk.byteLength
+                  }
+                  body = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+                }
               }
-              const bytes = new Uint8Array(size)
-              let offset = 0
-              for (const chunk of chunks) {
-                bytes.set(chunk, offset)
-                offset += chunk.byteLength
+              catch {
+                return error('INVALID_REQUEST', 'Text save body must be valid UTF-8', 400)
               }
-              body = new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+              try {
+                return json({ version: 1, ...await options.workspace.saveTextFile(url.searchParams.get('path') ?? '', body, expectedRevision) })
+              }
+              catch (cause) {
+                return workspaceError(cause)
+              }
             }
-          }
-          catch {
-            return error('INVALID_REQUEST', 'Text save body must be valid UTF-8', 400)
-          }
-          try {
-            return json({ version: 1, ...await options.workspace.saveTextFile(url.searchParams.get('path') ?? '', body, expectedRevision) })
-          }
-          catch (cause) {
-            return workspaceError(cause)
-          }
-        }
-        const invalidMethod = requireMethod(request, 'GET')
-        if (invalidMethod)
-          return invalidMethod
-        try {
-          return json({
-            version: 1,
-            ...await options.workspace.readTextPreview(url.searchParams.get('path') ?? ''),
-          })
-        }
-        catch (cause) {
-          return workspaceError(cause)
-        }
-      }
-      if (url.pathname === '/api/upload') {
-        const invalidMethod = requireMethod(request, 'POST')
-        if (invalidMethod)
-          return invalidMethod
-        if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable filesystem management', 403)
-        const invalidOrigin = validateMutationOrigin(request, options.address)
-        if (invalidOrigin)
-          return invalidOrigin
-        if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'multipart/form-data')
-          return error('UNSUPPORTED_MEDIA_TYPE', 'Upload requests must use multipart form data', 415)
-        let file: FormDataEntryValue | null
-        try {
-          file = (await request.formData()).get('file')
-        }
-        catch {
-          return error('INVALID_UPLOAD', 'Request body must be multipart form data', 400)
-        }
-        if (!(file instanceof File))
-          return error('INVALID_UPLOAD', 'A file field is required', 400)
-        try {
-          return json({
-            version: 1,
-            ...await options.workspace.uploadFile(url.searchParams.get('path') ?? '', file),
-          })
-        }
-        catch (cause) {
-          return workspaceError(cause)
-        }
-      }
-      if (url.pathname === '/api/operations') {
-        const invalidMethod = requireMethod(request, 'POST')
-        if (invalidMethod)
-          return invalidMethod
-        if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable filesystem management', 403)
-        const invalidOrigin = validateMutationOrigin(request, options.address)
-        if (invalidOrigin)
-          return invalidOrigin
-        if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
-          return error('UNSUPPORTED_MEDIA_TYPE', 'Filesystem operations must use JSON', 415)
-        let body: unknown
-        try {
-          body = await request.json()
-        }
-        catch {
-          return error('INVALID_OPERATION', 'Request body must be valid JSON', 400)
-        }
-        const operation = operationSchema.safeParse(body)
-        if (!operation.success)
-          return error('INVALID_OPERATION', 'Filesystem operation is invalid', 400)
-        return json({
-          version: 1,
-          ...await options.workspace.applyOperation(operation.data),
-        })
-      }
-      if (url.pathname === '/api/downloads/events') {
-        const invalidMethod = requireMethod(request, 'GET')
-        if (invalidMethod)
-          return invalidMethod
-        if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
-        bunServer.timeout(request, 0)
-        const encoder = new TextEncoder()
-        let unsubscribe: (() => void) | undefined
-        let stopObservingSession: (() => void) | undefined
-        let closed = false
-        const dispose = (): void => {
-          unsubscribe?.()
-          stopObservingSession?.()
-          unsubscribe = undefined
-          stopObservingSession = undefined
-        }
-        const stream = new ReadableStream<Uint8Array>({
-          start(controller) {
-            unsubscribe = downloads.subscribe((tasks) => {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ version: 1, tasks })}\n\n`))
-            })
-            if (options.authentication && token) {
-              stopObservingSession = options.authentication.observe(token, () => {
-                if (closed)
-                  return
-                closed = true
-                dispose()
-                controller.close()
+            const invalidMethod = requireMethod(request, 'GET')
+            if (invalidMethod)
+              return invalidMethod
+            try {
+              return json({
+                version: 1,
+                ...await options.workspace.readTextPreview(url.searchParams.get('path') ?? ''),
               })
             }
-          },
-          cancel() {
-            closed = true
-            dispose()
-          },
-        })
-        return new Response(stream, {
-          headers: {
-            ...API_HEADERS,
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'Content-Type': 'text/event-stream; charset=utf-8',
-            'X-Accel-Buffering': 'no',
-          },
-        })
-      }
-      if (url.pathname === '/api/downloads') {
-        if (request.method === 'GET') {
-          if (!options.managementEnabled)
-            return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
-          return json({ version: 1, tasks: downloads.list() })
-        }
-        if (request.method === 'DELETE') {
-          if (!options.managementEnabled)
-            return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
-          const invalidOrigin = validateMutationOrigin(request, options.address)
-          if (invalidOrigin)
-            return invalidOrigin
-          if (url.searchParams.get('terminal') !== '1')
-            return error('INVALID_DOWNLOAD', 'Use terminal=1 to clear completed downloads', 400)
-          downloads.clearTerminal()
-          return new Response(null, { status: 204, headers: API_HEADERS })
-        }
-        const invalidMethod = requireMethod(request, 'POST')
-        if (invalidMethod)
-          return invalidMethod
-        if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
-        const invalidOrigin = validateMutationOrigin(request, options.address)
-        if (invalidOrigin)
-          return invalidOrigin
-        if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
-          return error('UNSUPPORTED_MEDIA_TYPE', 'Download requests must use JSON', 415)
-        let body: unknown
-        try {
-          body = await request.json()
-        }
-        catch {
-          return error('INVALID_DOWNLOAD', 'Download request must be valid JSON', 400)
-        }
-        const parsed = downloadRequestSchema.safeParse(body)
-        if (!parsed.success)
-          return error('INVALID_DOWNLOAD', 'Download request is invalid', 400)
-        try {
-          await options.workspace.listDirectory(parsed.data.directoryPath)
-          const task = await downloads.enqueue(parsed.data)
-          return json({ version: 1, task }, 202)
-        }
-        catch (cause) {
-          return cause instanceof DownloadError ? downloadError(cause) : workspaceError(cause)
-        }
-      }
-      const downloadAction = /^\/api\/downloads\/([^/]+)\/(cancel|retry)$/.exec(url.pathname)
-      if (downloadAction) {
-        const invalidMethod = requireMethod(request, 'POST')
-        if (invalidMethod)
-          return invalidMethod
-        if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
-        const invalidOrigin = validateMutationOrigin(request, options.address)
-        if (invalidOrigin)
-          return invalidOrigin
-        let taskId: string
-        try {
-          taskId = decodeURIComponent(downloadAction[1]!)
-        }
-        catch {
-          return error('INVALID_DOWNLOAD', 'Download task ID is invalid', 400)
-        }
-        try {
-          const task = downloadAction[2] === 'cancel'
-            ? downloads.cancel(taskId)
-            : await downloads.retry(taskId)
-          if (!task)
-            return downloadError(new DownloadError('DOWNLOAD_NOT_FOUND', 'Download task was not found'))
-          return json({ version: 1, task }, downloadAction[2] === 'retry' ? 202 : 200)
-        }
-        catch (cause) {
-          return downloadError(cause)
-        }
-      }
-      if (url.pathname === '/api/extractions/events') {
-        const invalidMethod = requireMethod(request, 'GET')
-        if (invalidMethod)
-          return invalidMethod
-        if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
-        bunServer.timeout(request, 0)
-        const encoder = new TextEncoder()
-        let unsubscribe: (() => void) | undefined
-        let stopObservingSession: (() => void) | undefined
-        let closed = false
-        const dispose = (): void => {
-          unsubscribe?.()
-          stopObservingSession?.()
-          unsubscribe = undefined
-          stopObservingSession = undefined
-        }
-        const stream = new ReadableStream<Uint8Array>({
-          start(controller) {
-            unsubscribe = extractions.subscribe((tasks) => {
-              controller.enqueue(encoder.encode(`data: ${JSON.stringify({ version: 1, tasks })}\n\n`))
-            })
-            if (options.authentication && token) {
-              stopObservingSession = options.authentication.observe(token, () => {
-                if (closed)
-                  return
-                closed = true
-                dispose()
-                controller.close()
+            catch (cause) {
+              return workspaceError(cause)
+            }
+          }
+          if (url.pathname === '/api/upload') {
+            const invalidMethod = requireMethod(request, 'POST')
+            if (invalidMethod)
+              return invalidMethod
+            if (!options.managementEnabled)
+              return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable filesystem management', 403)
+            const invalidOrigin = validateMutationOrigin(request, options.address)
+            if (invalidOrigin)
+              return invalidOrigin
+            if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'multipart/form-data')
+              return error('UNSUPPORTED_MEDIA_TYPE', 'Upload requests must use multipart form data', 415)
+            let file: FormDataEntryValue | null
+            try {
+              file = (await request.formData()).get('file')
+            }
+            catch {
+              return error('INVALID_UPLOAD', 'Request body must be multipart form data', 400)
+            }
+            if (!(file instanceof File))
+              return error('INVALID_UPLOAD', 'A file field is required', 400)
+            try {
+              return json({
+                version: 1,
+                ...await options.workspace.uploadFile(url.searchParams.get('path') ?? '', file),
               })
             }
-          },
-          cancel() {
-            closed = true
-            dispose()
-          },
-        })
-        return new Response(stream, {
-          headers: {
-            ...API_HEADERS,
-            'Cache-Control': 'no-cache',
-            'Connection': 'keep-alive',
-            'Content-Type': 'text/event-stream; charset=utf-8',
-            'X-Accel-Buffering': 'no',
-          },
-        })
+            catch (cause) {
+              return workspaceError(cause)
+            }
+          }
+          if (url.pathname === '/api/operations') {
+            const invalidMethod = requireMethod(request, 'POST')
+            if (invalidMethod)
+              return invalidMethod
+            if (!options.managementEnabled)
+              return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable filesystem management', 403)
+            const invalidOrigin = validateMutationOrigin(request, options.address)
+            if (invalidOrigin)
+              return invalidOrigin
+            if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
+              return error('UNSUPPORTED_MEDIA_TYPE', 'Filesystem operations must use JSON', 415)
+            let body: unknown
+            try {
+              body = await request.json()
+            }
+            catch {
+              return error('INVALID_OPERATION', 'Request body must be valid JSON', 400)
+            }
+            const operation = operationSchema.safeParse(body)
+            if (!operation.success)
+              return error('INVALID_OPERATION', 'Filesystem operation is invalid', 400)
+            return json({
+              version: 1,
+              ...await options.workspace.applyOperation(operation.data),
+            })
+          }
+          if (url.pathname === '/api/downloads/events') {
+            const invalidMethod = requireMethod(request, 'GET')
+            if (invalidMethod)
+              return invalidMethod
+            if (!options.managementEnabled)
+              return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
+            bunServer.timeout(request, 0)
+            const encoder = new TextEncoder()
+            let unsubscribe: (() => void) | undefined
+            let stopObservingSession: (() => void) | undefined
+            let closed = false
+            const dispose = (): void => {
+              unsubscribe?.()
+              stopObservingSession?.()
+              unsubscribe = undefined
+              stopObservingSession = undefined
+            }
+            const stream = new ReadableStream<Uint8Array>({
+              start(controller) {
+                unsubscribe = downloads.subscribe((tasks) => {
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify({ version: 1, tasks })}\n\n`))
+                })
+                if (options.authentication && token) {
+                  stopObservingSession = options.authentication.observe(token, () => {
+                    if (closed)
+                      return
+                    closed = true
+                    dispose()
+                    controller.close()
+                  })
+                }
+              },
+              cancel() {
+                closed = true
+                dispose()
+              },
+            })
+            return new Response(stream, {
+              headers: {
+                ...API_HEADERS,
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Content-Type': 'text/event-stream; charset=utf-8',
+                'X-Accel-Buffering': 'no',
+              },
+            })
+          }
+          if (url.pathname === '/api/downloads') {
+            if (request.method === 'GET') {
+              if (!options.managementEnabled)
+                return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
+              return json({ version: 1, tasks: downloads.list() })
+            }
+            if (request.method === 'DELETE') {
+              if (!options.managementEnabled)
+                return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
+              const invalidOrigin = validateMutationOrigin(request, options.address)
+              if (invalidOrigin)
+                return invalidOrigin
+              if (url.searchParams.get('terminal') !== '1')
+                return error('INVALID_DOWNLOAD', 'Use terminal=1 to clear completed downloads', 400)
+              downloads.clearTerminal()
+              return new Response(null, { status: 204, headers: API_HEADERS })
+            }
+            const invalidMethod = requireMethod(request, 'POST')
+            if (invalidMethod)
+              return invalidMethod
+            if (!options.managementEnabled)
+              return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
+            const invalidOrigin = validateMutationOrigin(request, options.address)
+            if (invalidOrigin)
+              return invalidOrigin
+            if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
+              return error('UNSUPPORTED_MEDIA_TYPE', 'Download requests must use JSON', 415)
+            let body: unknown
+            try {
+              body = await request.json()
+            }
+            catch {
+              return error('INVALID_DOWNLOAD', 'Download request must be valid JSON', 400)
+            }
+            const parsed = downloadRequestSchema.safeParse(body)
+            if (!parsed.success)
+              return error('INVALID_DOWNLOAD', 'Download request is invalid', 400)
+            try {
+              await options.workspace.listDirectory(parsed.data.directoryPath)
+              const task = await downloads.enqueue(parsed.data)
+              return json({ version: 1, task }, 202)
+            }
+            catch (cause) {
+              return cause instanceof DownloadError ? downloadError(cause) : workspaceError(cause)
+            }
+          }
+          const downloadAction = /^\/api\/downloads\/([^/]+)\/(cancel|retry)$/.exec(url.pathname)
+          if (downloadAction) {
+            const invalidMethod = requireMethod(request, 'POST')
+            if (invalidMethod)
+              return invalidMethod
+            if (!options.managementEnabled)
+              return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable remote downloads', 403)
+            const invalidOrigin = validateMutationOrigin(request, options.address)
+            if (invalidOrigin)
+              return invalidOrigin
+            let taskId: string
+            try {
+              taskId = decodeURIComponent(downloadAction[1]!)
+            }
+            catch {
+              return error('INVALID_DOWNLOAD', 'Download task ID is invalid', 400)
+            }
+            try {
+              const task = downloadAction[2] === 'cancel'
+                ? downloads.cancel(taskId)
+                : await downloads.retry(taskId)
+              if (!task)
+                return downloadError(new DownloadError('DOWNLOAD_NOT_FOUND', 'Download task was not found'))
+              return json({ version: 1, task }, downloadAction[2] === 'retry' ? 202 : 200)
+            }
+            catch (cause) {
+              return downloadError(cause)
+            }
+          }
+          if (url.pathname === '/api/extractions/events') {
+            const invalidMethod = requireMethod(request, 'GET')
+            if (invalidMethod)
+              return invalidMethod
+            if (!options.managementEnabled)
+              return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
+            bunServer.timeout(request, 0)
+            const encoder = new TextEncoder()
+            let unsubscribe: (() => void) | undefined
+            let stopObservingSession: (() => void) | undefined
+            let closed = false
+            const dispose = (): void => {
+              unsubscribe?.()
+              stopObservingSession?.()
+              unsubscribe = undefined
+              stopObservingSession = undefined
+            }
+            const stream = new ReadableStream<Uint8Array>({
+              start(controller) {
+                unsubscribe = extractions.subscribe((tasks) => {
+                  controller.enqueue(encoder.encode(`data: ${JSON.stringify({ version: 1, tasks })}\n\n`))
+                })
+                if (options.authentication && token) {
+                  stopObservingSession = options.authentication.observe(token, () => {
+                    if (closed)
+                      return
+                    closed = true
+                    dispose()
+                    controller.close()
+                  })
+                }
+              },
+              cancel() {
+                closed = true
+                dispose()
+              },
+            })
+            return new Response(stream, {
+              headers: {
+                ...API_HEADERS,
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+                'Content-Type': 'text/event-stream; charset=utf-8',
+                'X-Accel-Buffering': 'no',
+              },
+            })
+          }
+          if (url.pathname === '/api/extractions') {
+            if (request.method === 'GET') {
+              if (!options.managementEnabled)
+                return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
+              return json({ version: 1, tasks: extractions.list() })
+            }
+            if (request.method === 'DELETE') {
+              if (!options.managementEnabled)
+                return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
+              const invalidOrigin = validateMutationOrigin(request, options.address)
+              if (invalidOrigin)
+                return invalidOrigin
+              if (url.searchParams.get('terminal') !== '1')
+                return error('INVALID_EXTRACTION', 'Use terminal=1 to clear completed extractions', 400)
+              extractions.clearTerminal()
+              return new Response(null, { status: 204, headers: API_HEADERS })
+            }
+            const invalidMethod = requireMethod(request, 'POST')
+            if (invalidMethod)
+              return invalidMethod
+            if (!options.managementEnabled)
+              return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
+            const invalidOrigin = validateMutationOrigin(request, options.address)
+            if (invalidOrigin)
+              return invalidOrigin
+            if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
+              return error('UNSUPPORTED_MEDIA_TYPE', 'Extraction requests must use JSON', 415)
+            let body: unknown
+            try {
+              body = await request.json()
+            }
+            catch {
+              return error('INVALID_EXTRACTION', 'Extraction request must be valid JSON', 400)
+            }
+            const parsed = extractionRequestSchema.safeParse(body)
+            if (!parsed.success)
+              return error('INVALID_EXTRACTION', 'Extraction request is invalid', 400)
+            try {
+              const tasks = await extractions.enqueue(parsed.data.paths)
+              return json({ version: 1, tasks }, 202)
+            }
+            catch (cause) {
+              return extractionError(cause)
+            }
+          }
+          const extractionAction = /^\/api\/extractions\/([^/]+)\/(cancel|retry)$/.exec(url.pathname)
+          if (extractionAction) {
+            const invalidMethod = requireMethod(request, 'POST')
+            if (invalidMethod)
+              return invalidMethod
+            if (!options.managementEnabled)
+              return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
+            const invalidOrigin = validateMutationOrigin(request, options.address)
+            if (invalidOrigin)
+              return invalidOrigin
+            let taskId: string
+            try {
+              taskId = decodeURIComponent(extractionAction[1]!)
+            }
+            catch {
+              return error('INVALID_EXTRACTION', 'Extraction task ID is invalid', 400)
+            }
+            try {
+              const task = extractionAction[2] === 'cancel'
+                ? extractions.cancel(taskId)
+                : await extractions.retry(taskId)
+              if (!task)
+                return extractionError(new ExtractionError('EXTRACTION_NOT_FOUND', 'Extraction task was not found'))
+              return json({ version: 1, task }, extractionAction[2] === 'retry' ? 202 : 200)
+            }
+            catch (cause) {
+              return extractionError(cause)
+            }
+          }
+          if (url.pathname === '/files' || url.pathname.startsWith('/files/'))
+            return streamOriginalFile(request, options.workspace, !options.authentication, options.safeHtml === true)
+          if (url.pathname.startsWith('/thumbnails/'))
+            return streamThumbnail(request, thumbnails)
+          return error('NOT_FOUND', 'Route not found', 404)
+        })()
       }
-      if (url.pathname === '/api/extractions') {
-        if (request.method === 'GET') {
-          if (!options.managementEnabled)
-            return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
-          return json({ version: 1, tasks: extractions.list() })
-        }
-        if (request.method === 'DELETE') {
-          if (!options.managementEnabled)
-            return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
-          const invalidOrigin = validateMutationOrigin(request, options.address)
-          if (invalidOrigin)
-            return invalidOrigin
-          if (url.searchParams.get('terminal') !== '1')
-            return error('INVALID_EXTRACTION', 'Use terminal=1 to clear completed extractions', 400)
-          extractions.clearTerminal()
-          return new Response(null, { status: 204, headers: API_HEADERS })
-        }
-        const invalidMethod = requireMethod(request, 'POST')
-        if (invalidMethod)
-          return invalidMethod
-        if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
-        const invalidOrigin = validateMutationOrigin(request, options.address)
-        if (invalidOrigin)
-          return invalidOrigin
-        if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
-          return error('UNSUPPORTED_MEDIA_TYPE', 'Extraction requests must use JSON', 415)
-        let body: unknown
-        try {
-          body = await request.json()
-        }
-        catch {
-          return error('INVALID_EXTRACTION', 'Extraction request must be valid JSON', 400)
-        }
-        const parsed = extractionRequestSchema.safeParse(body)
-        if (!parsed.success)
-          return error('INVALID_EXTRACTION', 'Extraction request is invalid', 400)
-        try {
-          const tasks = await extractions.enqueue(parsed.data.paths)
-          return json({ version: 1, tasks }, 202)
-        }
-        catch (cause) {
-          return extractionError(cause)
-        }
+      catch (cause) {
+        if (!(cause instanceof FileSessionError))
+          throw cause
+        response = error('SESSION_UNAVAILABLE', 'Session storage is unavailable', 503)
       }
-      const extractionAction = /^\/api\/extractions\/([^/]+)\/(cancel|retry)$/.exec(url.pathname)
-      if (extractionAction) {
-        const invalidMethod = requireMethod(request, 'POST')
-        if (invalidMethod)
-          return invalidMethod
-        if (!options.managementEnabled)
-          return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable archive extraction', 403)
-        const invalidOrigin = validateMutationOrigin(request, options.address)
-        if (invalidOrigin)
-          return invalidOrigin
-        let taskId: string
-        try {
-          taskId = decodeURIComponent(extractionAction[1]!)
-        }
-        catch {
-          return error('INVALID_EXTRACTION', 'Extraction task ID is invalid', 400)
-        }
-        try {
-          const task = extractionAction[2] === 'cancel'
-            ? extractions.cancel(taskId)
-            : await extractions.retry(taskId)
-          if (!task)
-            return extractionError(new ExtractionError('EXTRACTION_NOT_FOUND', 'Extraction task was not found'))
-          return json({ version: 1, task }, extractionAction[2] === 'retry' ? 202 : 200)
-        }
-        catch (cause) {
-          return extractionError(cause)
-        }
-      }
-      if (url.pathname === '/files' || url.pathname.startsWith('/files/'))
-        return streamOriginalFile(request, options.workspace, !options.authentication, options.safeHtml === true)
-      if (url.pathname.startsWith('/thumbnails/'))
-        return streamThumbnail(request, thumbnails)
-      return error('NOT_FOUND', 'Route not found', 404)
+      if (refreshedSession && !response.headers.has('Set-Cookie'))
+        response.headers.set('Set-Cookie', activeSessionCookie(token!, refreshedSession.expiresAt))
+      return response
     },
   })
 

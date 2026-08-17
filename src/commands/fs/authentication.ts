@@ -1,19 +1,12 @@
-import { randomBytes } from 'node:crypto'
+import { FileSessionManager } from '../../shared/file-session'
 
-const SESSION_LIFETIME_MS = 12 * 60 * 60 * 1000
-const MAX_ACCOUNT_SESSIONS = 8
-const MAX_SESSIONS = 128
 const PASSWORD_ALGORITHM = { algorithm: 'argon2id', memoryCost: 65_536, timeCost: 3 } as const
 
 interface FsAccount {
   username: string
   key: string
   passwordHash: string
-}
-
-interface SessionEntry {
-  accountKey: string
-  expiresAt: number
+  sessionRevision: string
 }
 
 export interface FsSession {
@@ -26,6 +19,7 @@ export interface FsSessionGrant extends FsSession {
 }
 
 export interface FsAuthenticationOptions {
+  directory: string
   sessionLifetimeMs?: number
   maxAccountSessions?: number
   maxSessions?: number
@@ -52,17 +46,14 @@ function usernameKey(value: string): string | undefined {
 }
 
 export class FsAuthentication {
-  private readonly sessions = new Map<string, SessionEntry>()
-  private readonly observers = new Map<string, Set<() => void>>()
-  private expirationTimer: ReturnType<typeof setTimeout> | undefined
   private closed = false
 
   private constructor(
     private readonly accounts: Map<string, FsAccount>,
-    private readonly options: Required<FsAuthenticationOptions>,
+    private readonly sessions: FileSessionManager,
   ) {}
 
-  static async create(specifications: string[], options: FsAuthenticationOptions = {}): Promise<FsAuthentication | undefined> {
+  static async create(specifications: string[], options: FsAuthenticationOptions): Promise<FsAuthentication | undefined> {
     if (specifications.length === 0)
       return undefined
 
@@ -74,80 +65,41 @@ export class FsAuthentication {
       keys.add(account.key)
     }
 
-    const accounts = new Map<string, FsAccount>()
-    for (const account of parsedAccounts) {
-      accounts.set(account.key, {
-        username: account.username,
-        key: account.key,
-        passwordHash: await Bun.password.hash(account.password, PASSWORD_ALGORITHM),
-      })
-    }
-
-    return new FsAuthentication(accounts, {
-      sessionLifetimeMs: Math.max(1, options.sessionLifetimeMs ?? SESSION_LIFETIME_MS),
-      maxAccountSessions: Math.max(1, options.maxAccountSessions ?? MAX_ACCOUNT_SESSIONS),
-      maxSessions: Math.max(1, options.maxSessions ?? MAX_SESSIONS),
+    const sessions = await FileSessionManager.open({
+      directory: options.directory,
+      idleLifetimeMs: options.sessionLifetimeMs,
+      maxSubjectSessions: options.maxAccountSessions,
+      maxSessions: options.maxSessions,
     })
+    try {
+      const accounts = new Map<string, FsAccount>()
+      for (const account of parsedAccounts) {
+        accounts.set(account.key, {
+          username: account.username,
+          key: account.key,
+          passwordHash: await Bun.password.hash(account.password, PASSWORD_ALGORITHM),
+          sessionRevision: sessions.credentialRevision(`${account.key}\0${account.password}`),
+        })
+      }
+      return new FsAuthentication(accounts, sessions)
+    }
+    catch (cause) {
+      sessions.close()
+      throw cause
+    }
   }
 
   get accountCount(): number {
     return this.accounts.size
   }
 
-  private revoke(token: string, scheduleExpiration = true): void {
-    if (!this.sessions.delete(token))
-      return
-    const listeners = this.observers.get(token)
-    this.observers.delete(token)
-    if (listeners) {
-      for (const listener of [...listeners])
-        listener()
-    }
-    if (scheduleExpiration)
-      this.scheduleExpiration()
-  }
-
-  private clearExpiredSessions(): void {
-    const now = Date.now()
-    for (const [token, session] of this.sessions) {
-      if (session.expiresAt <= now)
-        this.revoke(token, false)
-    }
-    this.scheduleExpiration()
-  }
-
-  private scheduleExpiration(): void {
-    clearTimeout(this.expirationTimer)
-    this.expirationTimer = undefined
-    if (this.closed)
-      return
-
-    let nextExpiration = Number.POSITIVE_INFINITY
-    for (const session of this.sessions.values())
-      nextExpiration = Math.min(nextExpiration, session.expiresAt)
-    if (!Number.isFinite(nextExpiration))
-      return
-
-    this.expirationTimer = setTimeout(() => this.clearExpiredSessions(), Math.max(0, nextExpiration - Date.now()))
-    this.expirationTimer.unref?.()
+  get sessionDirectory(): string {
+    return this.sessions.directory
   }
 
   private createSession(account: FsAccount): FsSessionGrant {
-    this.clearExpiredSessions()
-    const accountSessions = [...this.sessions].filter(([, session]) => session.accountKey === account.key)
-    while (accountSessions.length >= this.options.maxAccountSessions) {
-      const oldest = accountSessions.shift()
-      if (oldest)
-        this.revoke(oldest[0], false)
-    }
-    while (this.sessions.size >= this.options.maxSessions)
-      this.revoke(this.sessions.keys().next().value!, false)
-
-    const token = randomBytes(32).toString('base64url')
-    const expiresAt = Date.now() + this.options.sessionLifetimeMs
-    this.sessions.set(token, { accountKey: account.key, expiresAt })
-    this.scheduleExpiration()
-    return { token, expiresAt: new Date(expiresAt).toISOString(), account: { username: account.username } }
+    const session = this.sessions.issue(account.key, account.sessionRevision)
+    return { token: session.token, expiresAt: session.expiresAt, account: { username: account.username } }
   }
 
   async signIn(input: { username: string, password: string }): Promise<FsSessionGrant | undefined> {
@@ -162,44 +114,26 @@ export class FsAuthentication {
   resume(token: string | undefined): FsSession | undefined {
     if (this.closed || !token)
       return undefined
-    this.clearExpiredSessions()
-    const session = this.sessions.get(token)
-    const account = session ? this.accounts.get(session.accountKey) : undefined
+    const session = this.sessions.resume(token, subject => this.accounts.get(subject)?.sessionRevision)
+    const account = session ? this.accounts.get(session.subject) : undefined
     if (!session || !account)
       return undefined
-
-    this.sessions.delete(token)
-    this.sessions.set(token, session)
-    return { expiresAt: new Date(session.expiresAt).toISOString(), account: { username: account.username } }
+    return { expiresAt: session.expiresAt, account: { username: account.username } }
   }
 
   signOut(token: string | undefined): void {
-    if (token)
-      this.revoke(token)
+    this.sessions.revoke(token)
   }
 
   observe(token: string, listener: () => void): () => void {
-    if (!this.sessions.has(token))
-      return () => {}
-    const listeners = this.observers.get(token) ?? new Set()
-    listeners.add(listener)
-    this.observers.set(token, listeners)
-    return () => {
-      listeners.delete(listener)
-      if (listeners.size === 0)
-        this.observers.delete(token)
-    }
+    return this.sessions.observe(token, listener)
   }
 
   close(): void {
     if (this.closed)
       return
     this.closed = true
-    clearTimeout(this.expirationTimer)
-    this.expirationTimer = undefined
-    for (const token of [...this.sessions.keys()])
-      this.revoke(token, false)
-    this.observers.clear()
+    this.sessions.close()
   }
 }
 

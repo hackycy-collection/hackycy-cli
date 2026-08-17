@@ -16,13 +16,22 @@ services:
     # enabled for uploads, remote downloads, archive extraction, and file
     # operations. Safe HTML prevents served HTML and XHTML from executing.
     command: [fs, --address, 0.0.0.0, --port, '1204', --manage, --safe-html, --account, '${YCY_FS_ACCOUNT:?required}', /data]
+    environment:
+      # Keep durable login sessions outside the browsed directory. This named
+      # volume is sensitive because valid session records live there.
+      YCY_FS_SESSION_DIR: /sessions
+      # YCY_FS_SESSION_IDLE_DAYS: 7
     volumes:
       # Set YCY_FS_DIRECTORY to an absolute host path for an existing
       # directory. The default creates ./fs-data beside this file.
       # All file-management operations affect this host directory permanently.
       - '${YCY_FS_DIRECTORY:-./fs-data}:/data'
+      - fs-sessions:/sessions
     ports:
       # The browser is available at http://localhost:1204 by default. Set
       # YCY_FS_PORT to select another host port. Use a reverse proxy with
       # HTTPS before exposing this service outside a trusted network.
       - '${YCY_FS_PORT:-1204}:1204/tcp'
+volumes:
+  # Retain this volume to preserve valid file-browser sessions across restarts.
+  fs-sessions:

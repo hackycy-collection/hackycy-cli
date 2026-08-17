@@ -12,6 +12,8 @@ export function register(program: Command): void {
     .option('-m, --manage', 'Enable uploads, downloads, extraction, and filesystem management', false)
     .option('--safe-html', 'Disable HTML and XHTML execution and force downloads', false)
     .option('--account <username:password>', 'Require login with an account (repeatable)', (value, values: string[]) => [...values, value], [])
+    .option('--session-dir <path>', 'Persistent directory for authenticated sessions')
+    .option('--session-idle-days <days>', 'Session idle lifetime in days', parseIntArg)
     .action(async (directory: string | undefined, options: Omit<FsOptions, 'directory' | 'accounts'> & { account: string[] }) => {
       const { runFsCommand } = await import('./run')
       const { account, ...fsOptions } = options

@@ -39,6 +39,7 @@ export type TunnelErrorCode
     | 'PORT_OUTSIDE_POOL'
     | 'PORT_POOL_EXHAUSTED'
     | 'RESOURCE_RESERVED'
+    | 'SESSION_UNAVAILABLE'
     | 'UNSUPPORTED_PLATFORM'
     | 'USERNAME_TAKEN'
 
@@ -243,6 +244,7 @@ export interface ServerTunnelConfig {
   dataDir: string
   adminUser: string
   adminPassword: string
+  sessionIdleLifetimeMs?: number
 }
 
 export interface ClientTunnelConfig {

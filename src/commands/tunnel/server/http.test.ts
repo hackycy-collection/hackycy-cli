@@ -1,7 +1,7 @@
 import type { FrpChild } from '../frp/supervisor'
 import type { FrpProcessState, ServerTunnelConfig } from '../types'
 import type { FrpsAvailability } from './agent-gateway'
-import { mkdtemp, rm } from 'node:fs/promises'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -164,6 +164,36 @@ describe('Tunnel HTTP control plane', () => {
     expect((await request(value.server, '/api/state', cookies[1]!)).status).toBe(401)
     expect((await request(value.server, '/api/state', cookies[0]!)).status).toBe(200)
     expect((await request(value.server, '/api/state', cookies.at(-1)!)).status).toBe(200)
+  })
+
+  test('returns and refreshes the authenticated session cookie on management requests', async () => {
+    const value = await fixture()
+    const cookie = await login(value.server)
+
+    const session = await request(value.server, '/api/session', cookie)
+    expect(session.status).toBe(200)
+    expect(await session.json()).toMatchObject({ version: 1, authenticated: true, account: { username: 'admin' } })
+    expect(session.headers.get('set-cookie')).toContain('Max-Age=604800')
+
+    const state = await request(value.server, '/api/state', cookie)
+    expect(state.status).toBe(200)
+    expect(state.headers.get('set-cookie')).toContain('Max-Age=604800')
+  })
+
+  test('returns a storage error instead of renewing an undurable authenticated session', async () => {
+    const value = await fixture()
+    const cookie = await login(value.server)
+    const directory = path.join(value.dataDir, 'sessions')
+    await rm(directory, { recursive: true, force: true })
+    await writeFile(directory, 'unavailable')
+
+    const response = await request(value.server, '/api/state', cookie)
+
+    expect(response.status).toBe(503)
+    expect(await response.json()).toEqual({
+      version: 1,
+      error: { code: 'SESSION_UNAVAILABLE', message: 'Session storage is unavailable' },
+    })
   })
 
   test('protects admin routes and performs client and tunnel mutations', async () => {

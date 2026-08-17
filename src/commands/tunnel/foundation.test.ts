@@ -22,13 +22,14 @@ afterEach(async () => {
 
 describe('tunnel configuration', () => {
   test('uses CLI, environment, then defaults and parses deployment values', () => {
-    const config = resolveServerConfig({ controlPort: 7600 }, {
+    const config = resolveServerConfig({ controlPort: 7600, sessionIdleDays: 2 }, {
       HOME: '/home/test',
       YCY_TUNNEL_CONTROL_PORT: '7700',
       YCY_TUNNEL_FRP_PORT: '7100',
       YCY_TUNNEL_PORT_RANGE: '30000-30010',
       YCY_TUNNEL_ADVERTISE_FRP_ADDR: '[2001:db8::1]:7001',
       YCY_TUNNEL_FRP_TOKEN: 'configured-frp-token',
+      YCY_TUNNEL_SESSION_IDLE_DAYS: '3',
       YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret',
     })
     expect(config.controlPort).toBe(7600)
@@ -38,6 +39,7 @@ describe('tunnel configuration', () => {
     expect(config.advertiseFrpAddress).toEqual({ host: '2001:db8::1', port: 7001 })
     expect(config.frpToken).toBe('configured-frp-token')
     expect(config.adminUser).toBe('admin')
+    expect(config.sessionIdleLifetimeMs).toBe(2 * 24 * 60 * 60 * 1000)
     expect(resolveServerConfig({}, { YCY_TUNNEL_ADMIN_USER: '-operator', YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret' }).adminUser).toBe('-operator')
   })
 
@@ -56,6 +58,7 @@ describe('tunnel configuration', () => {
     expect(() => resolveServerConfig({}, { YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret', YCY_TUNNEL_FRP_TOKEN: '   ' })).toThrow('FRP Token must not be empty')
     expect(() => resolveServerConfig({ controlPort: 7000, frpPort: 7000 }, environment)).toThrow('must be distinct')
     expect(() => resolveServerConfig({ controlPort: 20000 }, environment)).toThrow('must not include')
+    expect(() => resolveServerConfig({ sessionIdleDays: 0 }, environment)).toThrow('positive integer')
   })
 
   test('resolves Client Token precedence and stable opaque instance directories', async () => {

@@ -7,6 +7,7 @@ import { cancel, intro, note, outro } from '@clack/prompts'
 import ansis from 'ansis'
 import { printTitle } from '../../shared/utils'
 import { createFsAuthentication } from './authentication'
+import { resolveFsSessionOptions } from './paths'
 import { startFsHttpServer } from './server'
 import { createFsWorkspace } from './workspace'
 
@@ -47,7 +48,9 @@ export async function runFsCommand(options: FsOptions): Promise<void> {
 
   let authentication: Awaited<ReturnType<typeof createFsAuthentication>>
   try {
-    authentication = await createFsAuthentication(options.accounts)
+    authentication = options.accounts.length === 0
+      ? undefined
+      : await createFsAuthentication(options.accounts, resolveFsSessionOptions(options, options.directory))
   }
   catch (cause) {
     cancel(`Invalid account configuration: ${cause instanceof Error ? cause.message : String(cause)}`)
@@ -78,6 +81,8 @@ export async function runFsCommand(options: FsOptions): Promise<void> {
   messages.push(`  ${ansis.dim('Management'.padEnd(11))} ${options.manage ? ansis.green('enabled') : ansis.dim('disabled')}`)
   messages.push(`  ${ansis.dim('HTML execution'.padEnd(15))} ${options.safeHtml ? ansis.dim('disabled (download)') : ansis.green('enabled')}`)
   messages.push(`  ${ansis.dim('Authentication'.padEnd(15))} ${authentication ? ansis.green(`enabled (${authentication.accountCount} ${authentication.accountCount === 1 ? 'account' : 'accounts'})`) : ansis.dim('disabled')}`)
+  if (authentication)
+    messages.push(`  ${ansis.dim('Session storage'.padEnd(15))} ${ansis.dim(authentication.sessionDirectory)}`)
   note(messages.join('\n'), 'File Browser running')
 
   let stopping = false

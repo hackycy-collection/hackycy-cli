@@ -18,6 +18,7 @@ export interface ServerOptionInput {
   portRange?: string
   advertiseFrpAddr?: string
   dataDir?: string
+  sessionIdleDays?: string | number
 }
 
 export interface ClientOptionInput {
@@ -47,6 +48,13 @@ function port(value: string | number, label: string): number {
   if (!Number.isSafeInteger(parsed) || parsed < 1 || parsed > 65535)
     throw new TunnelError('INVALID_CONFIG', `${label} must be an integer from 1 through 65535`)
   return parsed
+}
+
+function sessionIdleLifetime(value: string | number): number {
+  const days = typeof value === 'number' ? value : Number(value)
+  if (!Number.isSafeInteger(days) || days < 1)
+    throw new TunnelError('INVALID_CONFIG', 'Session idle lifetime must be a positive integer number of days')
+  return days * 24 * 60 * 60 * 1000
 }
 
 export function parsePortRange(value: string): { start: number, end: number } {
@@ -109,6 +117,7 @@ export function resolveServerConfig(input: ServerOptionInput, env: NodeJS.Proces
     dataDir,
     adminUser,
     adminPassword,
+    sessionIdleLifetimeMs: sessionIdleLifetime(option(input.sessionIdleDays, env, 'YCY_TUNNEL_SESSION_IDLE_DAYS', 7)),
   }
   const listenerPorts = [config.controlPort, config.frpPort, config.httpPort]
   if (new Set(listenerPorts).size !== listenerPorts.length)
