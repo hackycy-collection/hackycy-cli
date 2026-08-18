@@ -24,6 +24,16 @@ describe('fs command registration', () => {
     expect(command.getOptionValue('manage')).toBe(false)
   })
 
+  test('keeps chunked uploads opt-in and exposes a bounded chunk size option', () => {
+    const program = new Command()
+    register(program)
+
+    const command = program.commands[0]!
+    expect(command.options.map(option => option.long)).toContain('--chunked-upload')
+    expect(command.options.map(option => option.long)).toContain('--upload-chunk-size')
+    expect(command.getOptionValue('chunkedUpload')).toBeUndefined()
+  })
+
   test('keeps safe HTML mode opt-in', () => {
     const program = new Command()
     register(program)

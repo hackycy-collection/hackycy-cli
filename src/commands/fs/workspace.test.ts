@@ -1,3 +1,4 @@
+import type { StatsFs } from 'node:fs'
 import type { FsWorkspace } from './types'
 import { chmod, lstat, mkdir, mkdtemp, readdir, readFile, readlink, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -211,6 +212,65 @@ describe('FsWorkspace', () => {
       'report.txt',
     ])
     await expect(workspace.uploadFile('docs', new File(['bad'], '../secret.txt'))).rejects.toMatchObject({ code: 'INVALID_UPLOAD' })
+  })
+
+  test('writes chunked upload staging at explicit offsets and publishes only when complete', async () => {
+    const { workspace, root } = await createFixture()
+    const upload = await workspace.beginChunkedUpload('docs', 'chunked.bin', 5)
+    await upload.writeChunk(0, new Response('abc').body!, 3)
+    expect((await workspace.listDirectory('docs')).entries).toHaveLength(0)
+    await upload.writeChunk(3, new Response('de').body!, 2)
+    expect(await upload.publish()).toEqual({ filename: 'chunked.bin', path: 'docs/chunked.bin', size: 5 })
+    expect(await readFile(path.join(root, 'docs', 'chunked.bin'), 'utf8')).toBe('abcde')
+    await upload.abort()
+    expect((await readdir(path.join(root, 'docs'))).some(name => name.startsWith('.upload-'))).toBe(false)
+  })
+
+  test('publishes one result when completion is retried concurrently', async () => {
+    const { workspace, root } = await createFixture()
+    const upload = await workspace.beginChunkedUpload('docs', 'concurrent.bin', 3)
+    await upload.writeChunk(0, new Response('abc').body!, 3)
+
+    const results = await Promise.all([upload.publish(), upload.publish()])
+
+    expect(results[0]).toEqual(results[1])
+    expect((await readdir(path.join(root, 'docs'))).filter(name => name.startsWith('concurrent'))).toEqual(['concurrent.bin'])
+  })
+
+  test('reserves capacity for active chunked uploads before accepting another session', async () => {
+    const { root } = await createFixture()
+    const workspace = await createFsWorkspace(root, {
+      statfs: async () => ({ bsize: 1, bavail: 100, bfree: 100, blocks: 100, ffree: 100, files: 100, type: 0 }) as StatsFs,
+    })
+    const first = await workspace.beginChunkedUpload('docs', 'first.bin', 60)
+    await expect(workspace.beginChunkedUpload('docs', 'second.bin', 31)).rejects.toMatchObject({ code: 'INSUFFICIENT_SPACE' })
+    await first.abort()
+    const second = await workspace.beginChunkedUpload('docs', 'second.bin', 31)
+    await second.abort()
+  })
+
+  test('serializes concurrent capacity checks before reserving upload space', async () => {
+    const { root } = await createFixture()
+    let releaseStatfs!: () => void
+    const statfsReleased = new Promise<void>((resolve) => {
+      releaseStatfs = resolve
+    })
+    let calls = 0
+    const workspace = await createFsWorkspace(root, {
+      statfs: async () => {
+        calls++
+        if (calls === 2)
+          releaseStatfs()
+        await statfsReleased
+        return { bsize: 1, bavail: 100, bfree: 100, blocks: 100, ffree: 100, files: 100, type: 0 } as StatsFs
+      },
+    })
+    const first = workspace.beginChunkedUpload('docs', 'first.bin', 60)
+    const second = workspace.beginChunkedUpload('docs', 'second.bin', 60)
+    releaseStatfs()
+    const results = await Promise.allSettled([first, second])
+    expect(results.filter(result => result.status === 'fulfilled')).toHaveLength(1)
+    expect(results.filter(result => result.status === 'rejected')).toHaveLength(1)
   })
 
   test('conditionally saves text while preserving encoding, BOM, line endings, and mode bits', async () => {

@@ -14,6 +14,8 @@ export function register(program: Command): void {
     .option('--account <username:password>', 'Require login with an account (repeatable)', (value, values: string[]) => [...values, value], [])
     .option('--session-dir <path>', 'Persistent directory for authenticated sessions')
     .option('--session-idle-days <days>', 'Session idle lifetime in days', parseIntArg)
+    .option('--chunked-upload', 'Upload files larger than 20 MiB in retryable chunks')
+    .option('--upload-chunk-size <MiB>', 'Chunk size for large uploads (4-16 MiB)', parseIntArg)
     .action(async (directory: string | undefined, options: Omit<FsOptions, 'directory' | 'accounts'> & { account: string[] }) => {
       const { runFsCommand } = await import('./run')
       const { account, ...fsOptions } = options

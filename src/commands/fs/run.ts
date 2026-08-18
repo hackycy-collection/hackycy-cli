@@ -7,7 +7,7 @@ import { cancel, intro, note, outro } from '@clack/prompts'
 import ansis from 'ansis'
 import { printTitle } from '../../shared/utils'
 import { createFsAuthentication } from './authentication'
-import { resolveFsSessionOptions } from './paths'
+import { resolveFsChunkedUploadOptions, resolveFsSessionOptions } from './paths'
 import { startFsHttpServer } from './server'
 import { createFsWorkspace } from './workspace'
 
@@ -57,6 +57,15 @@ export async function runFsCommand(options: FsOptions): Promise<void> {
     return
   }
 
+  let chunkedUpload: ReturnType<typeof resolveFsChunkedUploadOptions>
+  try {
+    chunkedUpload = resolveFsChunkedUploadOptions(options)
+  }
+  catch (cause) {
+    authentication?.close()
+    cancel(`Invalid chunked upload configuration: ${cause instanceof Error ? cause.message : String(cause)}`)
+    return
+  }
   let server: ReturnType<typeof startFsHttpServer>
   try {
     server = startFsHttpServer({
@@ -66,6 +75,7 @@ export async function runFsCommand(options: FsOptions): Promise<void> {
       managementEnabled: options.manage,
       safeHtml: options.safeHtml,
       authentication,
+      chunkedUpload,
     })
   }
   catch (cause) {
@@ -79,6 +89,7 @@ export async function runFsCommand(options: FsOptions): Promise<void> {
   messages.push(`  ${ansis.dim('Directory'.padEnd(9))} ${ansis.dim(path.resolve(options.directory))}`)
   messages.push(`  ${ansis.dim('Bind'.padEnd(9))} ${ansis.dim(`${options.address}:${server.url.port}`)}`)
   messages.push(`  ${ansis.dim('Management'.padEnd(11))} ${options.manage ? ansis.green('enabled') : ansis.dim('disabled')}`)
+  messages.push(`  ${ansis.dim('Chunked uploads'.padEnd(15))} ${chunkedUpload.enabled ? ansis.green(`enabled (>20 MiB, ${chunkedUpload.chunkSizeBytes / 1024 / 1024} MiB chunks)`) : ansis.dim('disabled')}`)
   messages.push(`  ${ansis.dim('HTML execution'.padEnd(15))} ${options.safeHtml ? ansis.dim('disabled (download)') : ansis.green('enabled')}`)
   messages.push(`  ${ansis.dim('Authentication'.padEnd(15))} ${authentication ? ansis.green(`enabled (${authentication.accountCount} ${authentication.accountCount === 1 ? 'account' : 'accounts'})`) : ansis.dim('disabled')}`)
   if (authentication)

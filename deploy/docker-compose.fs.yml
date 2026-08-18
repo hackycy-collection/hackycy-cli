@@ -4,6 +4,8 @@
 # file, then run: docker compose -f docker-compose.fs.yml up -d
 # YCY_FS_ACCOUNT uses the format username:password. The account is supplied
 # as a container argument, so keep the Compose project and Docker host private.
+# Chunked uploads are disabled by default. Set YCY_FS_CHUNKED_UPLOAD=1 for files
+# larger than 20 MiB; YCY_FS_UPLOAD_CHUNK_SIZE_MIB accepts 4-16 and defaults to 8.
 services:
   fs:
     # Set YCY_VERSION to a released image tag to pin upgrades; omitting it uses
@@ -21,6 +23,8 @@ services:
       # volume is sensitive because valid session records live there.
       YCY_FS_SESSION_DIR: /sessions
       # YCY_FS_SESSION_IDLE_DAYS: 7
+      YCY_FS_CHUNKED_UPLOAD: '${YCY_FS_CHUNKED_UPLOAD:-0}'
+      YCY_FS_UPLOAD_CHUNK_SIZE_MIB: '${YCY_FS_UPLOAD_CHUNK_SIZE_MIB:-8}'
     volumes:
       # Set YCY_FS_DIRECTORY to an absolute host path for an existing
       # directory. The default creates ./fs-data beside this file.

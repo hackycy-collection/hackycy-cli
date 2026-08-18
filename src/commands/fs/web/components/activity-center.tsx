@@ -152,6 +152,11 @@ export function ActivityCenter({
                     <Button className="size-6" size="icon" variant="ghost" aria-label="Retry extraction" onClick={() => onRetryExtraction(extraction.id)}><RotateCcw className="size-3.5" /></Button>
                   </span>
                 )}
+                {local?.cancel && status === 'running' && (
+                  <span className="activity-actions">
+                    <Button className="size-6" size="icon" variant="ghost" aria-label="Cancel upload" onClick={local.cancel}><CircleStop className="size-3.5" /></Button>
+                  </span>
+                )}
                 {(progress !== undefined || indeterminate) && (
                   <span className={`activity-progress${indeterminate ? ' indeterminate' : ''}`}>
                     <span className={status === 'error' || status === 'cancelled' ? 'bg-red-500' : 'bg-accent'} style={progress === undefined ? undefined : { width: `${progress}%` }} />

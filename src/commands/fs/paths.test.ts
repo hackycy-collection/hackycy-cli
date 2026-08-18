@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import { defaultFsSessionDirectory, resolveFsSessionOptions } from './paths'
+import { defaultFsSessionDirectory, resolveFsChunkedUploadOptions, resolveFsSessionOptions } from './paths'
 
 describe('fs session paths', () => {
   test('uses CLI values before environment values and isolates default state by root', () => {
@@ -18,5 +18,12 @@ describe('fs session paths', () => {
 
   test('rejects an invalid idle lifetime', () => {
     expect(() => resolveFsSessionOptions({ sessionIdleDays: 0 }, '/workspace', {})).toThrow('positive integer')
+  })
+
+  test('resolves chunked uploads from CLI values before environment values', () => {
+    const env = { YCY_FS_CHUNKED_UPLOAD: '1', YCY_FS_UPLOAD_CHUNK_SIZE_MIB: '12' }
+    expect(resolveFsChunkedUploadOptions({}, env)).toEqual({ enabled: true, chunkSizeBytes: 12 * 1024 * 1024 })
+    expect(resolveFsChunkedUploadOptions({ chunkedUpload: false, uploadChunkSizeMiB: 4 }, env)).toEqual({ enabled: false, chunkSizeBytes: 4 * 1024 * 1024 })
+    expect(() => resolveFsChunkedUploadOptions({ uploadChunkSizeMiB: 3 }, {})).toThrow('4 to 16 MiB')
   })
 })

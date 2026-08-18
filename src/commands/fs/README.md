@@ -11,6 +11,9 @@ Options:
   -p, --port <number>       Port for the file browser (default: 1204)
   -a, --address <string>    Address to bind to (default: 0.0.0.0)
   -m, --manage              Enable uploads, downloads, extraction, and filesystem management
+      --chunked-upload      Enable chunked uploads for files larger than 20 MiB
+      --upload-chunk-size <MiB>
+                             Chunk size for large uploads (4-16 MiB, default: 8)
       --safe-html           Disable HTML and XHTML execution and force downloads
       --account <user:pass> Require login with an account (repeatable)
       --session-dir <path>  Persistent directory for authenticated sessions
@@ -19,6 +22,8 @@ Options:
 ```
 
 The directory defaults to the current working directory. The default binding is available to the local network; use `--address 127.0.0.1` for local-only access. Management mode allows text editing, upload, remote download, archive extraction, copy, move, rename, and permanent deletion. Without `--account`, use it only with a trusted directory and network.
+
+When `--chunked-upload` is enabled, browser uploads larger than 20 MiB use sequential 8 MiB chunks by default. The chunk size may be set from 4 to 16 MiB with `--upload-chunk-size`; `YCY_FS_CHUNKED_UPLOAD` and `YCY_FS_UPLOAD_CHUNK_SIZE_MIB` provide the equivalent container configuration. Chunked uploads do not impose the legacy 1 GiB multipart limit. The server checks the target filesystem before creating a session, reserves the declared size across active sessions, and preserves 10% of free space up to 1 GiB. Upload sessions are process-local, expire after 30 minutes of inactivity, and are removed on normal shutdown; refreshing the page or restarting the process does not resume a selected browser file.
 
 HTML and XHTML files are executable same-origin pages by default, similar to a conventional static file server. Use `--safe-html` to sandbox those documents and force them to download instead. This option does not remove a sandbox imposed by an outer iframe; the embedding page must grant `allow-scripts`.
 
@@ -41,6 +46,7 @@ CLI registration (index.ts)
      -> FsAuthentication (authentication.ts, when accounts are configured)
      -> FsHttpServer (server.ts)
         -> JSON and file HTTP adapter
+        -> ChunkedUploadManager with bounded process-local sessions (when enabled)
         -> RemoteDownloadManager with a bounded process-local queue
         -> ExtractionManager with a single-worker process-local queue
         -> ThumbnailService and two persistent conversion workers
@@ -50,6 +56,7 @@ CLI registration (index.ts)
 - `workspace.ts` owns root confinement, symlink policy, metadata, text decoding, and atomic upload naming. Callers pass only POSIX relative paths.
 - `authentication.ts` owns account parsing, password hashing, and the account adapter for the shared persistent file-session module.
 - `server.ts` maps workspace results to HTTP, validates methods and mutation origins, implements cache and Range semantics, and serves the embedded HTML bundle.
+- `chunked-upload-service.ts` owns bounded upload-session state, caller isolation, ordered offsets, lifecycle cleanup, and completion idempotency. `workspace.ts` owns capacity reservation, destination-local staging, stream writes, and atomic publication.
 - `download-service.ts` validates remote HTTP(S) targets, blocks literal private and reserved IP addresses, follows validated redirects, and owns the bounded process-local download queue.
 - `archive-extractor.ts` owns 7-Zip inspection, capacity checks, multi-layer TAR extraction, process cancellation, and normalized failures. `workspace.ts` owns staging, output validation, collision-safe naming, and atomic publication. `extraction-service.ts` owns the bounded single-worker queue.
 - `thumbnail-service.ts` owns input limits, request coalescing, the bounded worker queue, and the session-only LRU. `thumbnail-worker.ts` performs WASM decoding and WebP conversion off the HTTP thread.
@@ -65,6 +72,11 @@ CLI registration (index.ts)
 | `GET /api/directory?path=` | Current directory metadata and entries. |
 | `GET\|PUT /api/text?path=` | Read text previews with SHA-256 revisions or conditionally save text in management mode. |
 | `POST /api/upload?path=` | One multipart file per request when `--manage` is enabled. |
+| `POST /api/uploads` | Create a large-upload session when chunked uploads are enabled. |
+| `GET /api/uploads/:id` | Inspect a chunked-upload session's confirmed offset. |
+| `PUT /api/uploads/:id` | Append one ordered `Content-Range` chunk. |
+| `POST /api/uploads/:id/complete` | Atomically publish a completed chunked upload. |
+| `DELETE /api/uploads/:id` | Cancel a chunked-upload session. |
 | `POST /api/operations` | Validated create-directory, rename, copy, move, and permanent-delete commands in management mode. |
 | `GET\|POST\|DELETE /api/downloads` | List, create, or clear terminal remote-download tasks in management mode. |
 | `GET /api/downloads/events` | Server-sent task snapshots for remote-download progress. |
@@ -79,7 +91,7 @@ CLI registration (index.ts)
 
 The former direct file URL shape is intentionally not retained. A file browser path such as `docs/readme.txt` is available at `/files/docs/readme.txt`; `/browse/docs` is the browser route.
 
-Errors use `{ version: 1, error: { code, message } }`. Directory and text responses are not cacheable. Original files support ETag, Last-Modified, HEAD, and one byte range. Thumbnail responses support ETag, Last-Modified, and conditional 304 responses. Only `/files/*` enables wildcard CORS, and only when login mode is disabled.
+Errors use `{ version: 1, error: { code, message } }`. Chunk-session creation uses JSON; every `PUT /api/uploads/:id` must contain `application/octet-stream`, an exact `Content-Range: bytes start-end/total`, and a matching content length. Chunks are sequential per session, and callers recover a transport failure by reading the confirmed offset before retrying. Directory and text responses are not cacheable. Original files support ETag, Last-Modified, HEAD, and one byte range. Thumbnail responses support ETag, Last-Modified, and conditional 304 responses. Only `/files/*` enables wildcard CORS, and only when login mode is disabled.
 
 ## Text Editing
 
@@ -109,7 +121,9 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 - Thumbnail input is capped at 64 MiB and 50 million pixels. SVG is never sent to the raster converter. Failed or oversized thumbnails remain file icons in the main browser and never trigger an original-image fallback.
 - Thumbnail conversion uses two persistent workers, at most 128 queued tasks, a five-second task timeout, and replacement of a timed-out worker. Concurrent requests for the same file revision share one conversion.
 - Thumbnail output stays in a process-local LRU keyed by path, size, and modification time. The cache holds at most 1000 entries or 32 MiB, writes nothing to the file browser directory, and is discarded when the server stops.
-- Each upload is capped at 1 GiB, written to a temporary file in the destination directory, then published atomically with a hard link.
+- Direct multipart uploads remain capped at 1 GiB, written to a temporary file in the destination directory, then published atomically with a hard link. When chunked uploads are enabled, browser files larger than 20 MiB use the bounded session protocol and are limited by filesystem capacity rather than an artificial file-size cap.
+- Chunked-upload sessions use random IDs and are bound to the authenticated cookie session when login is enabled. At most three active sessions belong to one caller and at most 100 upload sessions (including retained terminal results) belong to the server. A session accepts at most one 4-16 MiB chunk at a time; a stalled chunk is aborted after five minutes. Sessions expire after 30 inactive minutes, and a completed result is kept for five minutes so completion can be retried safely.
+- Before staging a chunked upload, the workspace reserves the declared full file size across all active sessions on the target filesystem. It leaves 10% of reported free space available, capped at 1 GiB. Cancellation, expiration, and normal shutdown remove the hidden destination-local temporary file; a publication failure keeps the session available for retry until it expires. A later upload in that directory removes stale temporary files left by abnormal termination.
 - Remote downloads have no upload-size cap. Response bodies are streamed through bounded chunks into hidden destination-local temporary files, then published atomically with the same collision-safe naming rules as uploads.
 - At most two remote downloads run concurrently, at most 100 wait in the queue, and terminal task records are pruned to a bounded history. Cancelling a task or stopping the server aborts the request and removes its temporary file.
 - Remote download URLs permit only HTTP(S) and cannot contain credentials. Literal loopback, private, link-local, multicast, documentation, and other reserved IP addresses are rejected without resolving domain names. Every redirect is revalidated and the chain is capped at five hops.
@@ -136,7 +150,7 @@ Errors use `{ version: 1, error: { code, message } }`. Directory and text respon
 - Source code, configuration files, and dotenv variants use the `@pierre/diffs` Shiki-based read-only file renderer. Plain text remains escaped content; HTML and XML are never executed in the preview. Opening an HTML/XHTML `fileUrl` in a new tab executes scripts by default; `--safe-html` downloads it instead.
 - Images retain an inline preview and use `react-photo-view` for a current-image-only full-viewport viewer with pan, zoom, rotate, and reset controls. Audio, video, and PDF keep browser-native presentation.
 - Theme, view mode, sort key, and direction may be stored locally. Paths and file contents are not persisted.
-- Multi-file upload runs at most three requests concurrently and refreshes the current listing when the queue settles.
+- Multi-file upload runs at most three files concurrently and refreshes the current listing when the queue settles. With chunking enabled, each large file sends sequential configured-size chunks, recovers transient transport failures from the server-confirmed offset with three exponential-backoff retries, and exposes cancellation in the activity center.
 - Remote-download tasks share the activity center with uploads and file operations. They show transferred bytes, known percentage, server-measured speed, cancellation, and retry controls; unknown response lengths use an indeterminate progress bar.
 - Extraction tasks use the same activity center and show waiting, inspection, progress, completion destination, cancellation, and retry states. Completing an extraction beside the visible directory refreshes its listing.
 

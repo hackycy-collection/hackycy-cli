@@ -1,6 +1,7 @@
-import type { Stats } from 'node:fs'
+import type { Stats, StatsFs } from 'node:fs'
 import type { ArchiveExtractor } from './archive-extractor'
 import type {
+  FsChunkedUpload,
   FsDirectoryEntry,
   FsDirectoryListing,
   FsFile,
@@ -35,7 +36,10 @@ const THUMBNAIL_EXTENSIONS = new Set(['.avif', '.gif', '.jpeg', '.jpg', '.png', 
 const DOWNLOAD_TEMPORARY_NAME = /^\.download-[0-9a-f-]{36}\.tmp$/i
 const EXTRACTION_TEMPORARY_NAME = /^\.extract-[0-9a-f-]{36}\.tmp(?:\.outer)?$/i
 const EDIT_TEMPORARY_NAME = /^\.edit-[0-9a-f-]{36}\.tmp$/i
+const UPLOAD_TEMPORARY_NAME = /^\.upload-[0-9a-f-]{36}\.tmp$/i
 const EXTRACTION_TEMPORARY_MAX_AGE_MS = 24 * 60 * 60 * 1000
+const UPLOAD_TEMPORARY_MAX_AGE_MS = 24 * 60 * 60 * 1000
+const MAX_RESERVED_UPLOAD_BYTES = 1024 ** 3
 
 export const MAX_TEXT_PREVIEW_BYTES = 10 * 1024 * 1024
 export const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024
@@ -468,6 +472,26 @@ async function cleanupStaleExtractionDirectories(directory: string): Promise<voi
   }))
 }
 
+async function cleanupStaleUploadFiles(directory: string): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await fs.readdir(directory)
+  }
+  catch {
+    return
+  }
+  const threshold = Date.now() - UPLOAD_TEMPORARY_MAX_AGE_MS
+  await Promise.all(entries.filter(name => UPLOAD_TEMPORARY_NAME.test(name)).map(async (name) => {
+    const target = path.join(directory, name)
+    try {
+      const stat = await fs.lstat(target)
+      if (stat.isFile() && stat.mtimeMs < threshold)
+        await fs.unlink(target)
+    }
+    catch {}
+  }))
+}
+
 async function validateExtractedTree(root: string): Promise<void> {
   const walk = async (directory: string): Promise<void> => {
     for (const name of await fs.readdir(directory)) {
@@ -503,6 +527,7 @@ async function validateExtractedTree(root: string): Promise<void> {
 
 export interface FsWorkspaceOptions {
   archiveExtractor?: ArchiveExtractor
+  statfs?: (target: string) => Promise<StatsFs>
 }
 
 export async function createFsWorkspace(directory: string, options: FsWorkspaceOptions = {}): Promise<FsWorkspace> {
@@ -517,6 +542,23 @@ export async function createFsWorkspace(directory: string, options: FsWorkspaceO
   if (!rootStat.isDirectory())
     throw new FsWorkspaceError('NOT_DIRECTORY', `Path is not a directory: ${root}`)
   const archiveExtractor = options.archiveExtractor ?? createSevenZipArchiveExtractor()
+  const statfs = options.statfs ?? (target => fs.statfs(target))
+  const reservedUploadBytes = new Map<string, number>()
+  let reservationLock = Promise.resolve()
+  const withReservationLock = async <T>(operation: () => Promise<T>): Promise<T> => {
+    const previous = reservationLock
+    let release!: () => void
+    reservationLock = new Promise<void>((resolve) => {
+      release = resolve
+    })
+    await previous
+    try {
+      return await operation()
+    }
+    finally {
+      release()
+    }
+  }
 
   return {
     async listDirectory(requestedPath): Promise<FsDirectoryListing> {
@@ -528,7 +570,7 @@ export async function createFsWorkspace(directory: string, options: FsWorkspaceO
 
       let names: string[]
       try {
-        names = (await fs.readdir(resolved)).filter(name => !DOWNLOAD_TEMPORARY_NAME.test(name) && !EXTRACTION_TEMPORARY_NAME.test(name) && !EDIT_TEMPORARY_NAME.test(name))
+        names = (await fs.readdir(resolved)).filter(name => !DOWNLOAD_TEMPORARY_NAME.test(name) && !EXTRACTION_TEMPORARY_NAME.test(name) && !EDIT_TEMPORARY_NAME.test(name) && !UPLOAD_TEMPORARY_NAME.test(name))
       }
       catch {
         throw new FsWorkspaceError('UNAVAILABLE', 'Directory cannot be read')
@@ -667,6 +709,130 @@ export async function createFsWorkspace(directory: string, options: FsWorkspaceO
         if (error instanceof FsWorkspaceError)
           throw error
         throw new FsWorkspaceError('UNAVAILABLE', error instanceof Error ? error.message : String(error))
+      }
+    },
+    async beginChunkedUpload(requestedDirectory, requestedFilename, size): Promise<FsChunkedUpload> {
+      if (!Number.isSafeInteger(size) || size <= 0)
+        throw new FsWorkspaceError('INVALID_UPLOAD', 'Upload size is invalid')
+      const filename = uploadFilename(requestedFilename)
+      const directoryPath = normalizedRelativePath(requestedDirectory)
+      const directory = await resolvedInsideRoot(root, absolutePath(root, directoryPath))
+      const directoryStat = await fs.stat(directory)
+      if (!directoryStat.isDirectory())
+        throw new FsWorkspaceError('NOT_DIRECTORY', 'Upload target is not a directory')
+      await cleanupStaleUploadFiles(directory)
+
+      const volumeKey = String(directoryStat.dev ?? 'default')
+      const temporaryPath = await withReservationLock(async () => {
+        const filesystem = await statfs(directory)
+        const availableBytes = filesystem.bavail * filesystem.bsize
+        const reservedBytes = Math.min(MAX_RESERVED_UPLOAD_BYTES, Math.floor(availableBytes * 0.1))
+        const reservedForVolume = reservedUploadBytes.get(volumeKey) ?? 0
+        if (size > availableBytes - reservedBytes - reservedForVolume)
+          throw new FsWorkspaceError('INSUFFICIENT_SPACE', 'Upload does not fit in the available disk space')
+
+        const target = path.join(directory, `.upload-${crypto.randomUUID()}.tmp`)
+        let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+        try {
+          handle = await fs.open(target, 'wx')
+          await handle.close()
+          handle = undefined
+        }
+        catch (cause) {
+          await handle?.close().catch(() => {})
+          await fs.unlink(target).catch(() => {})
+          throw cause
+        }
+        reservedUploadBytes.set(volumeKey, reservedForVolume + size)
+        return target
+      })
+      let released = false
+      let published = false
+      let publishedResult: FsUploadResult | undefined
+      let publishing: Promise<FsUploadResult> | undefined
+      const release = (): void => {
+        if (released)
+          return
+        released = true
+        const remaining = (reservedUploadBytes.get(volumeKey) ?? size) - size
+        if (remaining <= 0)
+          reservedUploadBytes.delete(volumeKey)
+        else
+          reservedUploadBytes.set(volumeKey, remaining)
+      }
+      return {
+        async writeChunk(offset, stream, expectedLength, options = {}): Promise<void> {
+          if (!Number.isSafeInteger(offset) || !Number.isSafeInteger(expectedLength) || offset < 0 || expectedLength <= 0 || offset + expectedLength > size)
+            throw new FsWorkspaceError('INVALID_UPLOAD', 'Upload chunk range is invalid')
+          const reader = stream.getReader()
+          const abort = (): void => {
+            void reader.cancel(options.signal?.reason).catch(() => {})
+          }
+          const throwIfAborted = (): void => {
+            if (options.signal?.aborted)
+              throw options.signal.reason ?? new FsWorkspaceError('UNAVAILABLE', 'Upload chunk was cancelled')
+          }
+          options.signal?.addEventListener('abort', abort, { once: true })
+          let handle: Awaited<ReturnType<typeof fs.open>> | undefined
+          let written = 0
+          try {
+            throwIfAborted()
+            handle = await fs.open(temporaryPath, 'r+')
+            while (true) {
+              throwIfAborted()
+              const chunk = await reader.read()
+              if (chunk.done)
+                break
+              throwIfAborted()
+              if (!(chunk.value instanceof Uint8Array) || written + chunk.value.byteLength > expectedLength)
+                throw new FsWorkspaceError('INVALID_UPLOAD', 'Upload chunk body does not match its declared length')
+              let chunkOffset = 0
+              while (chunkOffset < chunk.value.byteLength) {
+                throwIfAborted()
+                const result = await handle.write(chunk.value, chunkOffset, chunk.value.byteLength - chunkOffset, offset + written + chunkOffset)
+                if (result.bytesWritten <= 0)
+                  throw new FsWorkspaceError('UNAVAILABLE', 'Upload chunk could not be written')
+                chunkOffset += result.bytesWritten
+              }
+              written += chunk.value.byteLength
+            }
+            if (written !== expectedLength)
+              throw new FsWorkspaceError('INVALID_UPLOAD', 'Upload chunk body does not match its declared length')
+            await handle.sync()
+          }
+          finally {
+            options.signal?.removeEventListener('abort', abort)
+            await handle?.close().catch(() => {})
+            reader.releaseLock()
+          }
+        },
+        async publish(): Promise<FsUploadResult> {
+          if (published)
+            return publishedResult!
+          if (publishing)
+            return await publishing
+          publishing = (async () => {
+            try {
+              const stat = await fs.stat(temporaryPath)
+              if (stat.size !== size)
+                throw new FsWorkspaceError('INVALID_UPLOAD', 'Upload is incomplete')
+              const result = await publishTemporaryFile(directory, directoryPath, filename, temporaryPath, size)
+              published = true
+              publishedResult = result
+              release()
+              return result
+            }
+            finally {
+              publishing = undefined
+            }
+          })()
+          return await publishing
+        },
+        async abort(): Promise<void> {
+          if (!published)
+            await fs.unlink(temporaryPath).catch(() => {})
+          release()
+        },
       }
     },
     async writeFileStream(requestedDirectory, requestedFilename, stream, options: FsStreamWriteOptions = {}): Promise<FsUploadResult> {

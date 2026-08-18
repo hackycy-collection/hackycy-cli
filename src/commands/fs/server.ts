@@ -1,10 +1,12 @@
 import type { FsAuthentication } from './authentication'
+import type { FsChunkedUploadManager } from './chunked-upload-service'
 import type { DownloadErrorCode } from './download-service'
 import type { ExtractionErrorCode } from './extraction-service'
 import type { FsDownloadManager, FsErrorCode, FsExtractionManager, FsWorkspace } from './types'
 import { isIP } from 'node:net'
 import { z } from 'zod'
 import { FileSessionError } from '../../shared/file-session'
+import { ChunkedUploadError, createChunkedUploadManager } from './chunked-upload-service'
 import { createRemoteDownloadManager, DownloadError } from './download-service'
 import { createExtractionManager, ExtractionError } from './extraction-service'
 import { ThumbnailError, ThumbnailService } from './thumbnail-service'
@@ -50,10 +52,18 @@ const extractionRequestSchema = z.object({
   paths: z.array(operationPathSchema).min(1).max(100),
 }).strict()
 
+const chunkedUploadRequestSchema = z.object({
+  directoryPath: z.string().max(4096),
+  filename: z.string().max(4096),
+  size: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
+}).strict()
+
 const sessionSchema = z.object({
   username: z.string().max(64),
   password: z.string().max(256),
 }).strict()
+
+const CHUNKED_UPLOAD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 function configureWebBundleHeaders(bundle: Bun.HTMLBundle): void {
   for (const file of bundle.files ?? []) {
@@ -136,8 +146,82 @@ function extractionError(cause: unknown): Response {
   return error('EXTRACTION_UNAVAILABLE', cause instanceof Error ? cause.message : String(cause), 500)
 }
 
+const CHUNKED_UPLOAD_ERROR_STATUS: Record<ChunkedUploadError['code'], number> = {
+  INVALID_CHUNKED_UPLOAD: 400,
+  CHUNKED_UPLOAD_NOT_FOUND: 404,
+  CHUNKED_UPLOAD_OFFSET_MISMATCH: 409,
+  CHUNKED_UPLOAD_ACTIVE: 409,
+  CHUNKED_UPLOAD_INCOMPLETE: 409,
+  CHUNKED_UPLOAD_LIMIT_REACHED: 429,
+  CHUNKED_UPLOAD_TIMEOUT: 408,
+  CHUNKED_UPLOAD_STOPPED: 503,
+}
+
+const MAX_CHUNKED_UPLOAD_REQUEST_BYTES = 64 * 1024
+
+class RequestBodyTooLarge extends Error {}
+
+async function boundedJsonBody(request: Request, maxBytes: number): Promise<unknown> {
+  const contentLength = request.headers.get('Content-Length')
+  if (contentLength !== null) {
+    const length = Number(contentLength)
+    if (!Number.isSafeInteger(length) || length < 0 || length > maxBytes) {
+      await request.body?.cancel().catch(() => {})
+      throw new RequestBodyTooLarge()
+    }
+  }
+  const reader = request.body?.getReader()
+  if (!reader)
+    throw new SyntaxError('Request body is missing')
+  const chunks: Uint8Array[] = []
+  let size = 0
+  try {
+    while (true) {
+      const chunk = await reader.read()
+      if (chunk.done)
+        break
+      size += chunk.value.byteLength
+      if (size > maxBytes) {
+        await reader.cancel()
+        throw new RequestBodyTooLarge()
+      }
+      chunks.push(chunk.value)
+    }
+  }
+  finally {
+    reader.releaseLock()
+  }
+  const bytes = new Uint8Array(size)
+  let offset = 0
+  for (const chunk of chunks) {
+    bytes.set(chunk, offset)
+    offset += chunk.byteLength
+  }
+  return JSON.parse(new TextDecoder().decode(bytes))
+}
+
+function chunkedUploadError(cause: unknown): Response {
+  if (cause instanceof ChunkedUploadError)
+    return error(cause.code, cause.message, CHUNKED_UPLOAD_ERROR_STATUS[cause.code])
+  return workspaceError(cause)
+}
+
 function requireMethod(request: Request, method: string): Response | undefined {
   return request.method === method ? undefined : error('METHOD_NOT_ALLOWED', `Use ${method}`, 405)
+}
+
+function chunkedUploadPart(request: Request): { start: number, end: number, total: number } | undefined {
+  const value = request.headers.get('Content-Range')
+  const match = value && /^bytes (\d+)-(\d+)\/(\d+)$/.exec(value)
+  if (!match)
+    return undefined
+  const start = Number(match[1])
+  const end = Number(match[2])
+  const total = Number(match[3])
+  const contentLength = Number(request.headers.get('Content-Length'))
+  if (![start, end, total, contentLength].every(Number.isSafeInteger) || start < 0 || end < start || total <= end || contentLength !== end - start + 1)
+    return undefined
+  return { start, end, total }
 }
 
 function sessionToken(request: Request): string | undefined {
@@ -403,14 +487,19 @@ export function startFsHttpServer(options: {
   managementEnabled: boolean
   safeHtml?: boolean
   authentication?: FsAuthentication
+  chunkedUpload?: { enabled: boolean, chunkSizeBytes: number }
   thumbnailService?: ThumbnailService
   downloadManager?: FsDownloadManager
   extractionManager?: FsExtractionManager
+  chunkedUploadManager?: FsChunkedUploadManager
 }): RunningFsServer {
   configureWebBundleHeaders(fsWebApp)
   const thumbnails = options.thumbnailService ?? new ThumbnailService(options.workspace)
   const downloads = options.downloadManager ?? createRemoteDownloadManager(options.workspace)
   const extractions = options.extractionManager ?? createExtractionManager(options.workspace)
+  const chunkedUploads = options.chunkedUpload?.enabled
+    ? options.chunkedUploadManager ?? createChunkedUploadManager(options.workspace, { chunkSizeBytes: options.chunkedUpload.chunkSizeBytes })
+    : undefined
   // Bun accepts an HTMLBundle for a method route, though its ambient type only lists it for whole-route values.
   const appRoute = {
     GET: fsWebApp as unknown as Response,
@@ -517,6 +606,9 @@ export function startFsHttpServer(options: {
                 ...listing,
                 managementEnabled: options.managementEnabled,
                 maxUploadBytes: MAX_UPLOAD_BYTES,
+                ...(options.managementEnabled && chunkedUploads
+                  ? { chunkedUpload: { thresholdBytes: 20 * 1024 * 1024, chunkSizeBytes: options.chunkedUpload!.chunkSizeBytes } }
+                  : {}),
               })
             }
             catch (cause) {
@@ -620,6 +712,82 @@ export function startFsHttpServer(options: {
             }
             catch (cause) {
               return workspaceError(cause)
+            }
+          }
+          if (url.pathname === '/api/uploads') {
+            const invalidMethod = requireMethod(request, 'POST')
+            if (invalidMethod)
+              return invalidMethod
+            if (!options.managementEnabled)
+              return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable filesystem management', 403)
+            if (!chunkedUploads)
+              return error('CHUNKED_UPLOAD_DISABLED', 'Start fs with --chunked-upload to enable chunked uploads', 403)
+            const invalidOrigin = validateMutationOrigin(request, options.address)
+            if (invalidOrigin)
+              return invalidOrigin
+            if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/json')
+              return error('UNSUPPORTED_MEDIA_TYPE', 'Upload session requests must use JSON', 415)
+            let body: unknown
+            try {
+              body = await boundedJsonBody(request, MAX_CHUNKED_UPLOAD_REQUEST_BYTES)
+            }
+            catch (cause) {
+              if (cause instanceof RequestBodyTooLarge)
+                return error('TOO_LARGE', 'Upload session request is too large', 413)
+              return error('INVALID_CHUNKED_UPLOAD', 'Upload session request must be valid JSON', 400)
+            }
+            const parsed = chunkedUploadRequestSchema.safeParse(body)
+            if (!parsed.success)
+              return error('INVALID_CHUNKED_UPLOAD', 'Upload session request is invalid', 400)
+            try {
+              return json({ version: 1, upload: await chunkedUploads.create(parsed.data, token ?? 'anonymous') }, 201)
+            }
+            catch (cause) {
+              return chunkedUploadError(cause)
+            }
+          }
+          const chunkedUploadRoute = /^\/api\/uploads\/([^/]+)(?:\/(complete))?$/.exec(url.pathname)
+          if (chunkedUploadRoute) {
+            const id = chunkedUploadRoute[1]!
+            const action = chunkedUploadRoute[2]
+            if (!CHUNKED_UPLOAD_ID.test(id))
+              return error('INVALID_CHUNKED_UPLOAD', 'Upload session ID is invalid', 400)
+            if (!options.managementEnabled)
+              return error('MANAGEMENT_DISABLED', 'Start fs with --manage to enable filesystem management', 403)
+            if (!chunkedUploads)
+              return error('CHUNKED_UPLOAD_DISABLED', 'Start fs with --chunked-upload to enable chunked uploads', 403)
+            if (request.method !== 'GET') {
+              const invalidOrigin = validateMutationOrigin(request, options.address)
+              if (invalidOrigin)
+                return invalidOrigin
+            }
+            try {
+              if (!action && request.method === 'GET')
+                return json({ version: 1, upload: await chunkedUploads.get(id, token ?? 'anonymous') })
+              if (!action && request.method === 'DELETE') {
+                await chunkedUploads.cancel(id, token ?? 'anonymous')
+                return new Response(null, { status: 204, headers: API_HEADERS })
+              }
+              if (!action && request.method === 'PUT') {
+                if (request.headers.get('Content-Type')?.split(';')[0]?.trim().toLowerCase() !== 'application/octet-stream') {
+                  await request.body?.cancel().catch(() => {})
+                  return error('UNSUPPORTED_MEDIA_TYPE', 'Upload chunks must use application/octet-stream', 415)
+                }
+                const part = chunkedUploadPart(request)
+                if (!part || !request.body) {
+                  await request.body?.cancel().catch(() => {})
+                  return error('INVALID_CHUNKED_UPLOAD', 'Upload chunk range or body is invalid', 400)
+                }
+                return json({ version: 1, upload: await chunkedUploads.write(id, token ?? 'anonymous', part, request.body, request.signal) })
+              }
+              if (action === 'complete' && request.method === 'POST')
+                return json({ version: 1, upload: await chunkedUploads.complete(id, token ?? 'anonymous') })
+              return error('METHOD_NOT_ALLOWED', action ? 'Use POST' : 'Use GET, PUT, or DELETE', 405)
+            }
+            catch (cause) {
+              if (!action && request.method === 'PUT')
+                await request.body?.cancel().catch(() => {})
+              return chunkedUploadError(cause)
             }
           }
           if (url.pathname === '/api/operations') {
@@ -914,6 +1082,7 @@ export function startFsHttpServer(options: {
     finished,
     async stop() {
       options.authentication?.close()
+      await chunkedUploads?.close()
       await downloads.close()
       await extractions.close()
       thumbnails.close()

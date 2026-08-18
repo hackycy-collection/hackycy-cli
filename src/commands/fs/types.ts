@@ -7,6 +7,8 @@ export interface FsOptions {
   accounts: string[]
   sessionDir?: string
   sessionIdleDays?: number
+  chunkedUpload?: boolean
+  uploadChunkSizeMiB?: number
 }
 
 export type FsEntryKind = 'directory' | 'file' | 'unavailable'
@@ -60,6 +62,12 @@ export interface FsUploadResult {
   filename: string
   path: string
   size: number
+}
+
+export interface FsChunkedUpload {
+  writeChunk: (offset: number, stream: ReadableStream<Uint8Array>, expectedLength: number, options?: { signal?: AbortSignal }) => Promise<void>
+  publish: () => Promise<FsUploadResult>
+  abort: () => Promise<void>
 }
 
 export interface FsStreamWriteOptions {
@@ -172,6 +180,7 @@ export interface FsWorkspace {
   readTextPreview: (relativePath: string) => Promise<FsTextPreview>
   saveTextFile: (relativePath: string, text: string, revision: string) => Promise<FsTextSaveResult>
   uploadFile: (directoryPath: string, file: File) => Promise<FsUploadResult>
+  beginChunkedUpload: (directoryPath: string, filename: string, size: number) => Promise<FsChunkedUpload>
   writeFileStream: (directoryPath: string, filename: string, stream: ReadableStream<Uint8Array>, options?: FsStreamWriteOptions) => Promise<FsUploadResult>
   extractArchive: (archivePath: string, options?: FsArchiveExtractOptions) => Promise<FsArchiveExtractResult>
   applyOperation: (operation: FsOperation) => Promise<FsOperationResult>

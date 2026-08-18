@@ -5,7 +5,8 @@ export type SortDirection = 'asc' | 'desc'
 export interface ActivityTask {
   id: string
   label: string
-  status: 'queued' | 'running' | 'done' | 'error'
+  status: 'queued' | 'running' | 'done' | 'error' | 'cancelled'
   progress?: number
   detail?: string
+  cancel?: () => void
 }

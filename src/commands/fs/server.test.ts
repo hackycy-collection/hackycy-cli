@@ -2,7 +2,7 @@ import type { RunningFsServer } from './server'
 import type { ThumbnailWorkerRequest } from './thumbnail-worker'
 import type { FsDownloadManager, FsExtractionManager } from './types'
 import { Buffer } from 'node:buffer'
-import { mkdtemp, rm, truncate, writeFile } from 'node:fs/promises'
+import { mkdtemp, readdir, rm, truncate, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -50,6 +50,7 @@ async function startFixtureServer(
   authentication?: Awaited<ReturnType<typeof createFsAuthentication>>,
   createArchiveExtractionManager?: (workspace: Awaited<ReturnType<typeof createFsWorkspace>>) => FsExtractionManager,
   safeHtml = false,
+  chunkedUpload = false,
 ): Promise<{ server: RunningFsServer, root: string }> {
   const root = await mkdtemp(path.join(tmpdir(), 'ycy-fs-http-'))
   temporaryDirectories.push(root)
@@ -65,6 +66,7 @@ async function startFixtureServer(
     thumbnailService: createThumbnailService?.(workspace),
     downloadManager: createDownloadManager?.(workspace),
     extractionManager: createArchiveExtractionManager?.(workspace),
+    chunkedUpload: chunkedUpload ? { enabled: true, chunkSizeBytes: 8 * 1024 * 1024 } : undefined,
   })
   servers.push(server)
   return { server, root }
@@ -97,6 +99,8 @@ describe('FsHttpServer', () => {
       fetch(new URL('/api/directory', server.url)),
       fetch(new URL('/api/text?path=hello.txt', server.url)),
       fetch(new URL('/api/upload', server.url), { method: 'POST' }),
+      fetch(new URL('/api/uploads', server.url), { method: 'POST' }),
+      fetch(new URL('/api/uploads/00000000-0000-0000-0000-000000000000', server.url)),
       fetch(new URL('/api/operations', server.url), { method: 'POST' }),
       fetch(new URL('/api/downloads', server.url)),
       fetch(new URL('/api/downloads/events', server.url)),
@@ -584,6 +588,103 @@ describe('FsHttpServer', () => {
     })
     const listing = await fetch(new URL('/api/directory?path=', enabledFixture.server.url)).then(response => response.json())
     expect(listing.entries).toEqual(expect.arrayContaining([expect.objectContaining({ name: 'notes.txt' })]))
+  })
+
+  test('uploads large files through ordered chunk sessions and publishes atomically', async () => {
+    const { server, root } = await startFixtureServer(true, undefined, undefined, undefined, undefined, false, true)
+    const origin = server.url.origin
+    const total = 20 * 1024 * 1024 + 2
+    const capability = await fetch(new URL('/api/directory', server.url)).then(response => response.json()) as { chunkedUpload?: { thresholdBytes: number, chunkSizeBytes: number } }
+    expect(capability.chunkedUpload).toEqual({ thresholdBytes: 20 * 1024 * 1024, chunkSizeBytes: 8 * 1024 * 1024 })
+    const created = await fetch(new URL('/api/uploads', server.url), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Origin': origin },
+      body: JSON.stringify({ directoryPath: '', filename: 'large.bin', size: total }),
+    })
+    const createdBody = await created.json() as { upload: { id: string, chunkSizeBytes: number, uploadedBytes: number } }
+    expect(created.status).toBe(201)
+    expect(createdBody.upload).toEqual(expect.objectContaining({ chunkSizeBytes: 8 * 1024 * 1024, uploadedBytes: 0 }))
+
+    const first = new Uint8Array(8 * 1024 * 1024).fill(0x41)
+    const second = new Uint8Array(8 * 1024 * 1024).fill(0x42)
+    const third = new Uint8Array(total - first.byteLength - second.byteLength).fill(0x43)
+    const wrongOffset = await fetch(new URL(`/api/uploads/${createdBody.upload.id}`, server.url), {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Range': `bytes 1-1/${total}`,
+        'Origin': origin,
+      },
+      body: new Uint8Array([0]),
+    })
+    expect(wrongOffset.status).toBe(409)
+    const firstResponse = await fetch(new URL(`/api/uploads/${createdBody.upload.id}`, server.url), {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Range': `bytes 0-${first.byteLength - 1}/${total}`,
+        'Origin': origin,
+      },
+      body: first,
+    })
+    expect(firstResponse.status).toBe(200)
+    expect((await firstResponse.json()).upload.uploadedBytes).toBe(first.byteLength)
+
+    const incomplete = await fetch(new URL(`/api/uploads/${createdBody.upload.id}/complete`, server.url), {
+      method: 'POST',
+      headers: { Origin: origin },
+    })
+    expect(incomplete.status).toBe(409)
+
+    const secondResponse = await fetch(new URL(`/api/uploads/${createdBody.upload.id}`, server.url), {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Range': `bytes ${first.byteLength}-${first.byteLength + second.byteLength - 1}/${total}`,
+        'Origin': origin,
+      },
+      body: second,
+    })
+    expect(secondResponse.status).toBe(200)
+
+    const thirdResponse = await fetch(new URL(`/api/uploads/${createdBody.upload.id}`, server.url), {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/octet-stream',
+        'Content-Range': `bytes ${first.byteLength + second.byteLength}-${total - 1}/${total}`,
+        'Origin': origin,
+      },
+      body: third,
+    })
+    expect(thirdResponse.status).toBe(200)
+
+    const completed = await fetch(new URL(`/api/uploads/${createdBody.upload.id}/complete`, server.url), {
+      method: 'POST',
+      headers: { Origin: origin },
+    })
+    const completedBody = await completed.json() as { upload: { status: string, result: { filename: string, size: number } } }
+    expect(completed.status).toBe(200)
+    expect(completedBody.upload).toEqual(expect.objectContaining({ status: 'complete', result: expect.objectContaining({ filename: 'large.bin', size: total }) }))
+    expect((await fetch(new URL(`/files/${completedBody.upload.result.filename}`, server.url), { method: 'HEAD' })).headers.get('content-length')).toBe(String(total))
+    const listing = await fetch(new URL('/api/directory', server.url))
+    expect(await listing.json()).toEqual(expect.objectContaining({
+      entries: expect.not.arrayContaining([expect.objectContaining({ name: expect.stringMatching(/^\.upload-/) })]),
+    }))
+    expect((await readdir(root)).some(name => name.startsWith('.upload-'))).toBe(false)
+  })
+
+  test('bounds chunked-upload session request bodies before JSON parsing', async () => {
+    const { server } = await startFixtureServer(true, undefined, undefined, undefined, undefined, false, true)
+    const body = JSON.stringify({ directoryPath: '', filename: 'large.bin', size: 20 * 1024 * 1024 + 1 }) + ' '.repeat(64 * 1024)
+    const response = await fetch(new URL('/api/uploads', server.url), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Origin': server.url.origin },
+      body,
+    })
+
+    expect(response.status).toBe(413)
+    expect(await response.json()).toEqual(expect.objectContaining({ error: expect.objectContaining({ code: 'TOO_LARGE' }) }))
+    expect((await fetch(new URL('/api/directory', server.url))).status).toBe(200)
   })
 
   test('applies validated filesystem operations only in same-origin management mode', async () => {

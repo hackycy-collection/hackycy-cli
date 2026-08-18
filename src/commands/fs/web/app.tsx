@@ -45,7 +45,7 @@ import { Button } from '../../../shared/web/components/ui/button'
 import { Sheet, SheetContent } from '../../../shared/web/components/ui/sheet'
 import { Tooltip } from '../../../shared/web/components/ui/tooltip'
 import { cn } from '../../../shared/web/lib/utils'
-import { apiJson, applyOperation, cancelDownload, cancelExtraction, clearDownloads as clearServerDownloads, clearExtractions as clearServerExtractions, createDownload, createExtractions, retryDownload, retryExtraction, uploadFile } from './api'
+import { apiJson, applyOperation, cancelDownload, cancelExtraction, clearDownloads as clearServerDownloads, clearExtractions as clearServerExtractions, createDownload, createExtractions, retryDownload, retryExtraction, uploadChunkedFile, uploadFile } from './api'
 import { ActivityCenter } from './components/activity-center'
 import { DeleteDialog } from './components/delete-dialog'
 import { DownloadDialog } from './components/download-dialog'
@@ -315,12 +315,25 @@ function ExplorerApp({
   const [editorDirty, setEditorDirty] = useState(false)
   const [toast, setToast] = useState<string>()
   const fileInputRef = useRef<HTMLInputElement>(null)
+  const uploadControllersRef = useRef(new Map<string, AbortController>())
   const currentRouteRef = useRef({ directoryPath, previewPath })
   const editorDirtyRef = useRef(editorDirty)
   const revertingPopStateRef = useRef(false)
   const activeResizeHandleRef = useRef<'navigation' | 'preview' | undefined>(undefined)
   const navigationPanelRef = usePanelRef()
   const mobile = useMobile()
+
+  useEffect(() => {
+    const cancelUploads = (): void => {
+      for (const controller of uploadControllersRef.current.values())
+        controller.abort()
+    }
+    window.addEventListener('pagehide', cancelUploads)
+    return () => {
+      window.removeEventListener('pagehide', cancelUploads)
+      cancelUploads()
+    }
+  }, [])
 
   const saveNavigationPanelWidth = useCallback((_layout: Layout, meta: LayoutChangedMeta): void => {
     const activeHandle = activeResizeHandleRef.current
@@ -908,15 +921,17 @@ function ExplorerApp({
   const enqueueUploads = useCallback(async (files: File[]) => {
     if (files.length === 0 || uploadActive || !listing?.managementEnabled)
       return
+    const canChunk = (file: File): boolean => listing.chunkedUpload !== undefined && file.size > listing.chunkedUpload.thresholdBytes
+    const tooLarge = (file: File): boolean => file.size > listing.maxUploadBytes && !canChunk(file)
     const tasks = files.map(file => ({
       id: uuidv4(),
       file,
       activity: {
         id: uuidv4(),
         label: file.name,
-        status: file.size > listing.maxUploadBytes ? 'error' as const : 'queued' as const,
+        status: tooLarge(file) ? 'error' as const : 'queued' as const,
         progress: 0,
-        detail: file.size > listing.maxUploadBytes ? 'File exceeds the 1 GiB limit' : 'Waiting to upload',
+        detail: tooLarge(file) ? 'File exceeds the 1 GiB direct-upload limit' : 'Waiting to upload',
       },
     }))
     setActivities(current => [...tasks.map(task => task.activity), ...current])
@@ -926,13 +941,23 @@ function ExplorerApp({
     const worker = async (): Promise<void> => {
       while (cursor < pending.length) {
         const item = pending[cursor++]!
+        const controller = new AbortController()
+        uploadControllersRef.current.set(item.activity.id, controller)
+        updateActivity(item.activity.id, { cancel: () => controller.abort() })
         updateActivity(item.activity.id, { status: 'running', progress: 0, detail: 'Uploading' })
         try {
-          const result = await uploadFile(directoryPath, item.file, progress => updateActivity(item.activity.id, { progress }))
+          const result = canChunk(item.file)
+            ? await uploadChunkedFile(directoryPath, item.file, listing.chunkedUpload!, progress => updateActivity(item.activity.id, { progress }), controller.signal, detail => updateActivity(item.activity.id, { detail }))
+            : await uploadFile(directoryPath, item.file, progress => updateActivity(item.activity.id, { progress }), controller.signal)
           updateActivity(item.activity.id, { status: 'done', progress: 100, detail: result.filename === item.file.name ? 'Uploaded' : `Saved as ${result.filename}` })
         }
         catch (cause) {
-          updateActivity(item.activity.id, { status: 'error', detail: cause instanceof Error ? cause.message : String(cause) })
+          const cancelled = cause instanceof DOMException && cause.name === 'AbortError'
+          updateActivity(item.activity.id, { status: cancelled ? 'cancelled' : 'error', detail: cancelled ? 'Cancelled' : cause instanceof Error ? cause.message : String(cause) })
+        }
+        finally {
+          uploadControllersRef.current.delete(item.activity.id)
+          updateActivity(item.activity.id, { cancel: undefined })
         }
       }
     }
