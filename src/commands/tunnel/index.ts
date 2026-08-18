@@ -2,6 +2,7 @@ import type { Command } from 'commander'
 import type { ClientOptionInput, ServerOptionInput } from './config'
 import process from 'node:process'
 import { rememberTunnelConnection } from '../../config/tunnel'
+import { getLogger } from '../../shared/log'
 import { maskTunnelToken, resolveClientConfig, resolveServerConfig } from './config'
 
 export function register(program: Command): void {
@@ -20,7 +21,16 @@ export function register(program: Command): void {
     .option('--session-idle-days <days>', 'Session idle lifetime in days')
     .action(async (options: ServerOptionInput) => {
       const { runTunnelServer } = await import('./server/run')
-      await runTunnelServer(resolveServerConfig(options))
+      const logger = getLogger('tunnel.server')
+      let config: ReturnType<typeof resolveServerConfig>
+      try {
+        config = resolveServerConfig(options)
+      }
+      catch (cause) {
+        logger.error('Could not resolve tunnel server configuration', cause)
+        throw cause
+      }
+      await runTunnelServer(config)
     })
 
   tunnel
@@ -30,26 +40,34 @@ export function register(program: Command): void {
     .option('--token <client-token>', 'Client Token')
     .action(async (options: ClientOptionInput) => {
       const { runTunnelClient } = await import('./client/run')
+      const logger = getLogger('tunnel.client')
       const interactive = Boolean(process.stdin.isTTY && process.stdout.isTTY)
-      const resolved = await resolveClientConfig(options, process.env, undefined, {
-        selectConnection: interactive
-          ? async (connections) => {
-            const prompts = await import('@clack/prompts')
-            const selected = await prompts.select({
-              message: 'Select a tunnel connection',
-              options: connections.map(connection => ({
-                value: connection.id,
-                label: `${connection.server}  ${maskTunnelToken(connection.token)}`,
-              })),
-            })
-            if (prompts.isCancel(selected)) {
-              prompts.cancel('Cancelled')
-              return undefined
+      let resolved: Awaited<ReturnType<typeof resolveClientConfig>>
+      try {
+        resolved = await resolveClientConfig(options, process.env, undefined, {
+          selectConnection: interactive
+            ? async (connections) => {
+              const prompts = await import('@clack/prompts')
+              const selected = await prompts.select({
+                message: 'Select a tunnel connection',
+                options: connections.map(connection => ({
+                  value: connection.id,
+                  label: `${connection.server}  ${maskTunnelToken(connection.token)}`,
+                })),
+              })
+              if (prompts.isCancel(selected)) {
+                prompts.cancel('Cancelled')
+                return undefined
+              }
+              return selected
             }
-            return selected
-          }
-          : undefined,
-      })
+            : undefined,
+        })
+      }
+      catch (cause) {
+        logger.error('Could not resolve tunnel client configuration', cause)
+        throw cause
+      }
       if (!resolved)
         return
       await runTunnelClient(resolved.config, {

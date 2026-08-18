@@ -356,6 +356,20 @@ describe('FRP foundation', () => {
     })
   })
 
+  test('propagates an explicit runtime log level to generated FRP configuration', () => {
+    const server = resolveServerConfig(
+      { address: '127.0.0.1', frpPort: 7001, httpPort: 8081, portRange: '21000-21005', dataDir: '/tmp/tunnel' },
+      { YCY_TUNNEL_ADMIN_PASSWORD: 'environment-secret' },
+    )
+    expect(tomlCodec.parse(renderFrpsConfig(server, 'internal', '/tmp/tunnel/404.html', 'debug'))).toMatchObject({ log: { level: 'debug' } })
+    expect(tomlCodec.parse(renderFrpcConfig({
+      advertisedFrpHost: 'frp.example.com',
+      advertisedFrpPort: 7001,
+      internalFrpToken: 'internal',
+      snapshot: { clientKey: 'client-key', revision: 0, tunnels: [] },
+    }, 'error'))).toMatchObject({ log: { level: 'error' } })
+  })
+
   test('rejects an archive with the wrong SHA and prints manual placement details', async () => {
     const root = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-frp-'))
     temporaryDirectories.push(root)

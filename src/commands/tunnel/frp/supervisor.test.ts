@@ -1,5 +1,7 @@
+import type { LogRecord, LogSink } from '../../../shared/log'
 import type { FrpChild } from './supervisor'
 import { describe, expect, test } from 'bun:test'
+import { configureLogger, stderrLogSink } from '../../../shared/log'
 import { FrpSupervisor } from './supervisor'
 
 class FakeChild implements FrpChild {
@@ -21,7 +23,47 @@ class FakeChild implements FrpChild {
   }
 }
 
+class MemorySink implements LogSink {
+  readonly records: LogRecord[] = []
+
+  write(record: LogRecord): void {
+    this.records.push(record)
+  }
+}
+
+function output(text: string): ReadableStream<Uint8Array> {
+  return new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode(text))
+      controller.close()
+    },
+  })
+}
+
 describe('FrpSupervisor', () => {
+  test('captures child stdout and stderr through the global logger', async () => {
+    const sink = new MemorySink()
+    configureLogger({ level: 'debug', sink })
+    const child = new FakeChild(0) as FrpChild & { stdout?: ReadableStream<Uint8Array>, stderr?: ReadableStream<Uint8Array> }
+    Object.assign(child, { stdout: output('frpc ready\n'), stderr: output('frpc warning\n') })
+    const supervisor = new FrpSupervisor({
+      binaryPath: '/frpc',
+      role: 'frpc',
+      spawn: () => child,
+    })
+    try {
+      await supervisor.start('/config')
+      await Bun.sleep(1)
+
+      expect(sink.records).toContainEqual(expect.objectContaining({ level: 'info', message: 'frpc ready', context: { role: 'frpc', pid: 0 } }))
+      expect(sink.records).toContainEqual(expect.objectContaining({ level: 'warn', message: 'frpc warning', context: { role: 'frpc', pid: 0 } }))
+      await supervisor.stop()
+    }
+    finally {
+      configureLogger({ level: 'info', sink: stderrLogSink })
+    }
+  })
+
   test('owns at most one child and suppresses recovery after manual stop', async () => {
     const children: FakeChild[] = []
     const supervisor = new FrpSupervisor({

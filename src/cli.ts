@@ -12,6 +12,7 @@ import { register as registerTunnel } from './commands/tunnel'
 import { register as registerUpgrade } from './commands/upgrade'
 import { consumeUpdateState, formatUpdateState, INTERNAL_UPDATE_COMMAND, INTERNAL_UPDATE_VERIFY_ENV, runInternalUpdater } from './commands/upgrade/updater'
 import { register as registerZip } from './commands/zip'
+import { configureLogger, resolveLogLevel } from './shared/log'
 
 function errorHandler(error: Error): void {
   let message = error.message || String(error)
@@ -53,6 +54,11 @@ else {
     const program = new Command()
       .name('ycy')
       .version(version)
+      .option('--log-level <level>', 'Log level: debug, info, warn, or error')
+
+    program.hook('preAction', () => {
+      configureLogger({ level: resolveLogLevel(program.opts().logLevel) })
+    })
 
     registerExport(program)
     registerDiff(program)

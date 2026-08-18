@@ -1,6 +1,7 @@
 import type { FrpSupervisorOptions, FrpSupervisorState } from '../frp/supervisor'
 import type { ServerTunnelConfig, StructuredRuntimeError } from '../types'
 import type { FrpsConfiguration } from './frps-configuration'
+import { getLogger } from '../../../shared/log'
 import { atomicWrite } from '../atomic-file'
 import { ensureFrpBinary } from '../frp/binary'
 import { verifyFrpConfiguration } from '../frp/config'
@@ -49,6 +50,7 @@ export class ManagedFrpsController implements FrpsController {
   private readonly listeners = new Set<(state: FrpSupervisorState) => void>()
   private queue = Promise.resolve()
   private activationPending = false
+  private readonly logger = getLogger('tunnel.server.frps')
 
   constructor(private readonly options: ManagedFrpsControllerOptions) {}
 
@@ -98,11 +100,13 @@ export class ManagedFrpsController implements FrpsController {
   }
 
   private async activate(): Promise<void> {
+    this.logger.debug('Preparing managed frps')
     await this.discardSupervisor()
     this.publish({ state: 'stopped' })
     let binaryPath: string
     try {
       binaryPath = await (this.options.ensureBinary ?? (signal => ensureFrpBinary('frps', { signal })))(this.options.signal)
+      this.logger.debug('Managed frps binary ready', { binaryPath })
     }
     catch (cause) {
       throw installationError(cause)
@@ -139,6 +143,7 @@ export class ManagedFrpsController implements FrpsController {
       if (this.options.signal.aborted)
         throw cause
       const error = cause instanceof TunnelError ? cause : frpsActivationError(this.options.config, cause)
+      this.logger.error('Managed frps activation failed', error)
       this.publish({ state: 'stopped', error: runtimeError(error) })
       throw error
     }

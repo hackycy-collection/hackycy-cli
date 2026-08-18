@@ -2,6 +2,7 @@ import type { ServerTunnelConfig } from '../types'
 import { Buffer } from 'node:buffer'
 import { readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
+import { getLogger } from '../../../shared/log'
 import { atomicWrite } from '../atomic-file'
 import { renderFrpsConfig } from '../frp/config'
 import { TunnelError } from '../types'
@@ -31,6 +32,7 @@ function isMissingFile(cause: unknown): boolean {
 export class FrpsConfiguration {
   readonly paths: FrpsConfigurationPaths
   private queue = Promise.resolve()
+  private readonly logger = getLogger('tunnel.server.frps')
 
   constructor(private readonly serverConfig: ServerTunnelConfig) {
     this.paths = new FrpsConfigurationPaths(serverConfig.dataDir)
@@ -41,7 +43,7 @@ export class FrpsConfiguration {
   }
 
   render(internalFrpToken: string): string {
-    return renderFrpsConfig(this.serverConfig, internalFrpToken, this.paths.custom404PagePath)
+    return renderFrpsConfig(this.serverConfig, internalFrpToken, this.paths.custom404PagePath, this.logger.level)
   }
 
   async getCustom404Page(): Promise<string> {

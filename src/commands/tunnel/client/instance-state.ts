@@ -1,12 +1,14 @@
 import type { StateDirectoryLock } from '../lock'
 import { readdir, rm, stat } from 'node:fs/promises'
 import path from 'node:path'
+import { getLogger } from '../../../shared/log'
 import { acquireStateDirectoryLock, acquireStateRegistryLock, stateDirectoryIsActive } from '../lock'
 
 const INSTANCE_DIRECTORY_PATTERN = /^v1_[\w-]{43}$/
 const INSTANCE_EXPIRY_MS = 90 * 24 * 60 * 60 * 1000
 
 async function cleanupExpiredInstances(stateRoot: string, currentStateDirectory: string, now: number): Promise<void> {
+  const logger = getLogger('tunnel.client.state')
   const entries = await readdir(stateRoot, { withFileTypes: true })
   for (const entry of entries) {
     if (!entry.isDirectory() || !INSTANCE_DIRECTORY_PATTERN.test(entry.name))
@@ -21,7 +23,7 @@ async function cleanupExpiredInstances(stateRoot: string, currentStateDirectory:
       await rm(stateDirectory, { recursive: true, force: true })
     }
     catch (cause) {
-      console.warn(`Could not clean expired tunnel state directory ${stateDirectory}: ${cause instanceof Error ? cause.message : String(cause)}`)
+      logger.warn('Could not clean expired tunnel state directory', { stateDirectory, reason: cause instanceof Error ? cause.message : String(cause) })
     }
   }
 }
@@ -39,7 +41,7 @@ export async function acquireClientInstanceState(stateDirectory: string, now: nu
       await cleanupExpiredInstances(stateRoot, stateDirectory, now)
     }
     catch (cause) {
-      console.warn(`Could not inspect tunnel client state root ${stateRoot}: ${cause instanceof Error ? cause.message : String(cause)}`)
+      getLogger('tunnel.client.state').warn('Could not inspect tunnel client state root', { stateRoot, reason: cause instanceof Error ? cause.message : String(cause) })
     }
     return instance
   }

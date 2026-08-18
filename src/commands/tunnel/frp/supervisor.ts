@@ -1,9 +1,12 @@
 import type { FrpProcessState, StructuredRuntimeError } from '../types'
+import { getLogger } from '../../../shared/log'
 import { backoffDelay, DEFAULT_BACKOFF_MS } from '../backoff'
 
 export interface FrpChild {
   readonly pid: number
   readonly exited: Promise<number>
+  readonly stdout?: ReadableStream<Uint8Array>
+  readonly stderr?: ReadableStream<Uint8Array>
   kill: (signal?: NodeJS.Signals | number) => void
 }
 
@@ -39,9 +42,15 @@ export class FrpSupervisor {
   private readonly listeners = new Set<(state: FrpSupervisorState) => void>()
   private readonly spawnChild: (command: string[]) => FrpChild
   private readonly backoffMs: readonly number[]
+  private readonly logger: ReturnType<typeof getLogger>
 
   constructor(private readonly options: FrpSupervisorOptions) {
-    this.spawnChild = options.spawn ?? (command => Bun.spawn(command, { stdin: 'ignore', stdout: 'inherit', stderr: 'inherit' }))
+    this.logger = getLogger(options.role === 'frpc' ? 'tunnel.client.frpc' : 'tunnel.server.frps')
+    this.spawnChild = options.spawn ?? (command => Bun.spawn(command, {
+      stdin: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }) as unknown as FrpChild)
     this.backoffMs = options.backoffMs ?? DEFAULT_BACKOFF_MS
   }
 
@@ -80,8 +89,12 @@ export class FrpSupervisor {
     if (!this.configPath)
       throw new Error(`Cannot start ${this.options.role} without a configuration path`)
     this.clearTimers()
+    this.logger.debug('Starting FRP child', { role: this.options.role, configPath: this.configPath })
     const child = this.spawnChild([this.options.binaryPath, '-c', this.configPath])
     this.child = child
+    this.consumeOutput(child.stdout, 'info', child.pid)
+    this.consumeOutput(child.stderr, 'warn', child.pid)
+    this.logger.info('FRP child started', { role: this.options.role, pid: child.pid })
     this.publish({ state: 'running', pid: child.pid })
     const stableAfterMs = this.options.stableAfterMs ?? 60_000
     this.stableTimer = setTimeout(() => {
@@ -121,6 +134,7 @@ export class FrpSupervisor {
       this.failureCount = 0
       this.publish({ state: 'stopped' })
     }
+    this.logger.error(`${this.options.role} exited during startup`, outcome.cause ?? new Error(`exit code ${outcome.exitCode}`), { role: this.options.role, exitCode: outcome.exitCode })
     throw new Error(`${this.options.role} exited with code ${outcome.exitCode} during startup${outcome.cause ? `: ${String(outcome.cause)}` : ''}`)
   }
 
@@ -132,11 +146,13 @@ export class FrpSupervisor {
       clearTimeout(this.stableTimer)
     this.stableTimer = undefined
     if (!this.desiredRunning) {
+      this.logger.info('FRP child stopped', { role: this.options.role, pid: child.pid, exitCode })
       this.publish({ state: 'stopped' })
       return
     }
     const delay = backoffDelay(this.failureCount, this.backoffMs)
     this.failureCount++
+    this.logger.warn('FRP child exited; scheduling recovery', { role: this.options.role, pid: child.pid, exitCode, delayMs: delay })
     this.publish({
       state: 'recovering',
       error: { code: 'FRP_EXITED', message: `${this.options.role} exited with code ${exitCode}${cause ? `: ${String(cause)}` : ''}` },
@@ -155,12 +171,14 @@ export class FrpSupervisor {
     this.child = undefined
     if (!child)
       return
+    this.logger.debug('Stopping FRP child', { role: this.options.role, pid: child.pid })
     child.kill('SIGTERM')
     const timedOut = await Promise.race([
       child.exited.then(() => false, () => false),
       sleep(this.options.stopTimeoutMs ?? 5000).then(() => true),
     ])
     if (timedOut) {
+      this.logger.warn('FRP child did not stop before timeout', { role: this.options.role, pid: child.pid })
       child.kill('SIGKILL')
       await child.exited.catch(() => {})
     }
@@ -188,6 +206,7 @@ export class FrpSupervisor {
       this.desiredRunning = false
       this.failureCount = 0
       await this.stopChild()
+      this.logger.debug('FRP supervisor stopped', { role: this.options.role })
       this.publish({ state: 'stopped' })
     })
   }
@@ -207,7 +226,49 @@ export class FrpSupervisor {
     return this.enqueue(async () => {
       this.desiredRunning = false
       await this.stopChild()
+      this.logger.error('FRP configuration failed', new Error(error.message), { role: this.options.role, code: error.code })
       this.publish({ state: 'configuration_failed', error })
     })
+  }
+
+  private consumeOutput(stream: ReadableStream<Uint8Array> | undefined, level: 'info' | 'warn', pid: number): void {
+    if (!stream)
+      return
+    void (async () => {
+      const reader = stream.getReader()
+      const decoder = new TextDecoder()
+      let pending = ''
+      try {
+        while (true) {
+          const next = await reader.read()
+          if (next.done)
+            break
+          pending += decoder.decode(next.value, { stream: true })
+          const lines = pending.split(/\r?\n/)
+          pending = lines.pop() ?? ''
+          for (const line of lines) {
+            if (line)
+              this.writeChildLine(level, line, pid)
+          }
+        }
+        pending += decoder.decode()
+        if (pending)
+          this.writeChildLine(level, pending, pid)
+      }
+      catch (cause) {
+        this.logger.warn('Could not read FRP child output', { role: this.options.role, pid, reason: cause instanceof Error ? cause.message : String(cause) })
+      }
+      finally {
+        reader.releaseLock()
+      }
+    })()
+  }
+
+  private writeChildLine(level: 'info' | 'warn', message: string, pid: number): void {
+    const context = { role: this.options.role, pid }
+    if (level === 'info')
+      this.logger.info(message, context)
+    else
+      this.logger.warn(message, context)
   }
 }

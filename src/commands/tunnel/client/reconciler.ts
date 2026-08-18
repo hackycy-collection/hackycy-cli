@@ -2,6 +2,7 @@ import type { FrpcDesiredConfiguration } from '../types'
 import type { AppliedClientState } from './state'
 import { readFile, rm } from 'node:fs/promises'
 import path from 'node:path'
+import { getLogger } from '../../../shared/log'
 import { atomicWrite } from '../atomic-file'
 import { renderFrpcConfig, verifyFrpConfiguration } from '../frp/config'
 import { TunnelError } from '../types'
@@ -32,8 +33,12 @@ export class ClientReconciler {
   private activated = false
   private stopped = false
   private stopPromise?: Promise<void>
+  private readonly logger = getLogger('tunnel.client.reconciler')
 
-  constructor(private readonly stateDirectory: string, private readonly runtime: ClientFrpRuntime) {}
+  constructor(
+    private readonly stateDirectory: string,
+    private readonly runtime: ClientFrpRuntime,
+  ) {}
 
   lastApplied(): Promise<AppliedClientState | undefined> {
     return readAppliedClientState(this.stateDirectory)
@@ -63,8 +68,9 @@ export class ClientReconciler {
       return
     const activePath = activeFrpcConfigPath(this.stateDirectory)
     const candidatePath = path.join(this.stateDirectory, `frpc.revision-${input.snapshot.revision}.candidate.toml`)
-    const configuration = renderFrpcConfig(input)
+    const configuration = renderFrpcConfig(input, this.logger.level)
     const hasEnabledTunnels = input.snapshot.tunnels.some(tunnel => tunnel.enabled)
+    this.logger.debug('Applying desired tunnel state', { revision: input.snapshot.revision, enabledTunnels: input.snapshot.tunnels.filter(tunnel => tunnel.enabled).length })
     await atomicWrite(candidatePath, configuration)
     try {
       try {
@@ -72,6 +78,7 @@ export class ClientReconciler {
           await this.runtime.verify(candidatePath)
       }
       catch (cause) {
+        this.logger.error('FRP configuration verification failed', cause, { revision: input.snapshot.revision })
         throw new TunnelError('CONFIGURATION_FAILED', cause instanceof Error ? cause.message : String(cause))
       }
 
@@ -87,8 +94,10 @@ export class ClientReconciler {
         this.ensureActive()
         await writeAppliedClientState(this.stateDirectory, { ...input, revision: input.snapshot.revision })
         this.activated = true
+        this.logger.info('Desired tunnel state applied', { revision: input.snapshot.revision, enabledTunnels: input.snapshot.tunnels.filter(tunnel => tunnel.enabled).length })
       }
       catch (cause) {
+        this.logger.error('Could not activate desired tunnel state', cause, { revision: input.snapshot.revision })
         await this.runtime.stop().catch(() => {})
         if (previousConfiguration)
           await atomicWrite(activePath, previousConfiguration)

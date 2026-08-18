@@ -3,6 +3,7 @@ import type { AgentGateway, AgentSocketData } from './agent-gateway'
 import type { TunnelMutationInput, TunnelPatchInput } from './control-plane'
 import type { TunnelManagement, TunnelWorkspace } from './tunnel-management'
 import { z } from 'zod'
+import { getLogger } from '../../../shared/log'
 import { TunnelError } from '../types'
 
 const API_HEADERS = {
@@ -106,10 +107,10 @@ function error(code: string, message: string, status: number): Response {
   return json({ version: 1, error: { code, message } }, status)
 }
 
-function errorResponse(cause: unknown): Response {
+function errorResponse(cause: unknown, request?: Request): Response {
   if (cause instanceof TunnelError)
     return error(cause.code, cause.message, TUNNEL_ERROR_STATUS[cause.code])
-  console.error('Tunnel control request failed', cause)
+  getLogger('tunnel.server.http').error('Tunnel control request failed', cause, request ? { method: request.method, path: new URL(request.url).pathname } : undefined)
   return error('INTERNAL_ERROR', 'The tunnel control request failed', 500)
 }
 
@@ -203,7 +204,7 @@ export class TunnelControlApi {
         return json({ version: 1, authenticated: true, account: grant.account }, 200, { 'Set-Cookie': sessionCookie(grant.token, grant.expiresAt) })
       }
       catch (cause) {
-        return errorResponse(cause)
+        return errorResponse(cause, request)
       }
     }
 
@@ -215,7 +216,7 @@ export class TunnelControlApi {
       workspace = this.workspace(request)
     }
     catch (cause) {
-      return errorResponse(cause)
+      return errorResponse(cause, request)
     }
     if (workspace instanceof Response)
       return workspace
@@ -397,7 +398,7 @@ export class TunnelControlApi {
         return error('NOT_FOUND', 'Route not found', 404)
       }
       catch (cause) {
-        return errorResponse(cause)
+        return errorResponse(cause, request)
       }
     })()
     if (token && !response.headers.has('Set-Cookie')) {

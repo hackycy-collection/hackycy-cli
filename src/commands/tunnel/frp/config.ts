@@ -1,3 +1,4 @@
+import type { LogLevel } from '../../../shared/log'
 import type { FrpcDesiredConfiguration, ServerTunnelConfig, TunnelHeader, TunnelProtocol } from '../types'
 import type { TomlDocument } from './toml'
 import { tomlCodec } from './toml'
@@ -14,7 +15,7 @@ interface FrpAuthenticationToml extends TomlDocument {
 
 interface FrpLogToml extends TomlDocument {
   to: 'console'
-  level: 'warn'
+  level: LogLevel
 }
 
 interface FrpPortRangeToml extends TomlDocument {
@@ -181,7 +182,7 @@ function buildProxy(tunnel: FrpcTunnel): FrpProxyToml {
   return proxy
 }
 
-function buildFrpsDocument(config: ServerTunnelConfig, internalFrpToken: string, custom404PagePath: string): FrpsTomlDocument {
+function buildFrpsDocument(config: ServerTunnelConfig, internalFrpToken: string, custom404PagePath: string, logLevel: LogLevel): FrpsTomlDocument {
   return {
     bindAddr: config.address,
     bindPort: config.frpPort,
@@ -189,11 +190,11 @@ function buildFrpsDocument(config: ServerTunnelConfig, internalFrpToken: string,
     custom404Page: custom404PagePath,
     auth: { method: 'token', token: internalFrpToken },
     allowPorts: [{ start: config.portRange.start, end: config.portRange.end }],
-    log: { to: 'console', level: 'warn' },
+    log: { to: 'console', level: logLevel },
   }
 }
 
-function buildFrpcDocument(input: FrpcDesiredConfiguration): FrpcTomlDocument {
+function buildFrpcDocument(input: FrpcDesiredConfiguration, logLevel: LogLevel): FrpcTomlDocument {
   const proxies = input.snapshot.tunnels.filter(tunnel => tunnel.enabled).map(buildProxy)
   return {
     serverAddr: input.advertisedFrpHost,
@@ -201,15 +202,15 @@ function buildFrpcDocument(input: FrpcDesiredConfiguration): FrpcTomlDocument {
     user: `ycy_${input.snapshot.clientKey.replace(/[^\w-]/g, '_')}`,
     loginFailExit: false,
     auth: { method: 'token', token: input.internalFrpToken },
-    log: { to: 'console', level: 'warn' },
+    log: { to: 'console', level: logLevel },
     ...(proxies.length ? { proxies } : {}),
   }
 }
 
-export function renderFrpsConfig(config: ServerTunnelConfig, internalFrpToken: string, custom404PagePath: string): string {
-  return tomlCodec.stringify(buildFrpsDocument(config, internalFrpToken, custom404PagePath))
+export function renderFrpsConfig(config: ServerTunnelConfig, internalFrpToken: string, custom404PagePath: string, logLevel: LogLevel = 'warn'): string {
+  return tomlCodec.stringify(buildFrpsDocument(config, internalFrpToken, custom404PagePath, logLevel))
 }
 
-export function renderFrpcConfig(input: FrpcDesiredConfiguration): string {
-  return tomlCodec.stringify(buildFrpcDocument(input))
+export function renderFrpcConfig(input: FrpcDesiredConfiguration, logLevel: LogLevel = 'warn'): string {
+  return tomlCodec.stringify(buildFrpcDocument(input, logLevel))
 }

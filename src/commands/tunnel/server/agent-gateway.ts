@@ -2,6 +2,7 @@ import type { ServerWebSocket } from 'bun'
 import type { Buffer } from 'node:buffer'
 import type { AgentHelloMessage, AgentToServerMessage, ClientRuntimeState, FrpProcessState, ServerToAgentMessage } from '../types'
 import type { ControlPlaneEvent, TunnelControlPlane } from './control-plane'
+import { getLogger } from '../../../shared/log'
 import { FRP_VERSION, resolveFrpArtifact } from '../frp/manifest'
 import { TUNNEL_PROTOCOL_VERSION, TunnelError } from '../types'
 
@@ -62,6 +63,7 @@ export class AgentGateway {
   private readonly unsubscribe: () => void
   private readonly unsubscribeFrps: () => void
   private readonly livenessTimer: ReturnType<typeof setInterval>
+  private readonly logger = getLogger('tunnel.server.gateway')
   private frpsState: FrpProcessState
 
   constructor(
@@ -112,8 +114,10 @@ export class AgentGateway {
     const client = token ? this.controlPlane.findClientByToken(token) : undefined
     if (!client)
       return Response.json({ version: 1, error: { code: 'AUTHENTICATION_FAILED', message: 'Client Token is invalid' } }, { status: 401 })
-    if (this.runtime.get(client.id)?.socket || this.pendingConnections.has(client.id))
+    if (this.runtime.get(client.id)?.socket || this.pendingConnections.has(client.id)) {
+      this.logger.debug('Rejected duplicate tunnel client authorization', { clientId: client.id })
       return Response.json({ version: 1, error: { code: 'CLIENT_CONNECTED', message: 'Client Token already has an active control session' } }, { status: 409 })
+    }
     this.pendingConnections.add(client.id)
     return {
       data: {
@@ -138,6 +142,7 @@ export class AgentGateway {
     }
     this.controlPlane.acknowledgeReplacementToken(socket.data.clientId)
     this.runtime.set(socket.data.clientId, { connectionState: 'connected', processState: existing?.processState ?? 'stopped', socket })
+    this.logger.info('Trusted tunnel client connected', { clientId: socket.data.clientId })
     this.changed(socket.data.clientId)
   }
 
@@ -148,6 +153,7 @@ export class AgentGateway {
   message(socket: ServerWebSocket<AgentSocketData>, raw: string | Buffer): void {
     const message = parseMessage(raw)
     if (!message) {
+      this.logger.warn('Rejected invalid client control message', { clientId: socket.data.clientId })
       socket.close(4400, 'Invalid JSON message')
       return
     }
@@ -178,6 +184,7 @@ export class AgentGateway {
         }
       }
       else {
+        this.logger.warn('Trusted tunnel client failed to apply desired state', { clientId: socket.data.clientId, revision: message.revision, code: message.error?.code ?? 'APPLY_FAILED' })
         this.updateRuntime(socket.data.clientId, {
           lastError: message.error ?? { code: 'APPLY_FAILED', message: 'Client could not apply Desired Revision', revision: message.revision },
         })
@@ -237,12 +244,14 @@ export class AgentGateway {
       snapshot: this.controlPlane.snapshot(socket.data.clientId),
     }
     socket.send(JSON.stringify(welcome))
+    this.logger.info('Trusted tunnel client authenticated', { clientId: socket.data.clientId, revision: welcome.snapshot.revision })
   }
 
   private incompatible(socket: ServerWebSocket<AgentSocketData>, message: string): void {
     const payload: ServerToAgentMessage = { type: 'incompatible', tunnelProtocolVersion: TUNNEL_PROTOCOL_VERSION, message }
     socket.send(JSON.stringify(payload))
     this.updateRuntime(socket.data.clientId, { connectionState: 'incompatible' })
+    this.logger.warn('Rejected incompatible trusted tunnel client', { clientId: socket.data.clientId, reason: message })
     socket.close(4406, 'Incompatible client')
   }
 
@@ -256,6 +265,7 @@ export class AgentGateway {
       socket: undefined,
       connectionState: this.revocationPending(socket.data.clientId) ? 'revocation_pending' : clientState.connectionState === 'incompatible' ? 'incompatible' : 'disconnected',
     })
+    this.logger.info('Trusted tunnel client disconnected', { clientId: socket.data.clientId })
     this.changed(socket.data.clientId)
   }
 
@@ -283,8 +293,11 @@ export class AgentGateway {
   }
 
   private setFrpsState(state: FrpProcessState): void {
+    const previous = this.frpsState
     const wasRunning = this.frpsState === 'running'
     this.frpsState = state
+    if (previous !== state)
+      this.logger.info('Managed frps state changed', { state })
     if (wasRunning && state !== 'running') {
       for (const entry of this.runtime.values())
         entry.socket?.close(4503, 'Managed frps is not running')

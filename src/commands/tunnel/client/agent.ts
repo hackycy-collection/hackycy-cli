@@ -1,6 +1,7 @@
 import type { AgentHelloMessage, AgentWelcomeMessage, DesiredStateMessage, FrpProcessState, ServerToAgentMessage, StructuredRuntimeError } from '../types'
 import type { ClientReconciler } from './reconciler'
 import process from 'node:process'
+import { getLogger } from '../../../shared/log'
 import { backoffDelay, DEFAULT_BACKOFF_MS } from '../backoff'
 import { FRP_VERSION, resolveFrpArtifact } from '../frp/manifest'
 import { TUNNEL_PROTOCOL_VERSION, TunnelError } from '../types'
@@ -15,7 +16,6 @@ export interface ClientAgentOptions {
   fetch?: (input: string | URL | Request, init?: RequestInit) => Promise<Response>
   backoffMs?: readonly number[]
   onAuthenticated?: () => Promise<void> | void
-  onMessage?: (message: string) => void
 }
 
 function websocketUrl(server: URL): URL {
@@ -51,6 +51,7 @@ export class TunnelClientAgent {
   private authenticationReported = false
   private processState: { state: FrpProcessState, error?: StructuredRuntimeError } = { state: 'stopped' }
   private readonly backoffMs: readonly number[]
+  private readonly logger = getLogger('tunnel.client.agent')
 
   constructor(private readonly options: ClientAgentOptions) {
     this.backoffMs = options.backoffMs ?? DEFAULT_BACKOFF_MS
@@ -70,6 +71,7 @@ export class TunnelClientAgent {
         break
       const delay = backoffDelay(failures, this.backoffMs)
       failures++
+      this.logger.debug('Scheduling tunnel control reconnect', { delayMs: delay, attempt: failures })
       await sleep(delay)
     }
     if (this.fatalError)
@@ -83,12 +85,15 @@ export class TunnelClientAgent {
       })
       return ![401, 403].includes(response.status)
     }
-    catch {
+    catch (cause) {
+      this.logger.debug('Could not probe tunnel control plane authentication', { reason: cause instanceof Error ? cause.message : String(cause) })
       return undefined
     }
   }
 
   private failAuthentication(message: string): Promise<void> {
+    if (!this.fatalError)
+      this.logger.error('Tunnel client authentication failed', new TunnelError('AUTHENTICATION_FAILED', message))
     this.fatalError ??= new TunnelError('AUTHENTICATION_FAILED', message)
     this.authenticationFailure ??= this.stopReconciler() ?? Promise.resolve()
     return this.authenticationFailure
@@ -110,6 +115,7 @@ export class TunnelClientAgent {
         ? this.options.createWebSocket(websocketUrl(this.options.server), this.options.token)
         : new BunWebSocket(websocketUrl(this.options.server), { headers: { Authorization: `Bearer ${this.options.token}` } })
       this.socket = socket
+      this.logger.debug('Connecting to tunnel control plane', { server: this.options.server.origin })
       const finish = (): void => {
         if (settled)
           return
@@ -119,6 +125,7 @@ export class TunnelClientAgent {
         resolve(welcomed)
       }
       socket.addEventListener('open', () => {
+        this.logger.debug('Tunnel control connection opened')
         const hello: AgentHelloMessage = {
           type: 'hello',
           tunnelProtocolVersion: TUNNEL_PROTOCOL_VERSION,
@@ -154,8 +161,11 @@ export class TunnelClientAgent {
         const message = 'message' in event && typeof event.message === 'string' ? event.message : ''
         if (/\b(?:401|403)\b/.test(message))
           void this.failAuthentication('Client Token was rejected by the Tunnel Control Plane')
+        else
+          this.logger.warn('Tunnel control connection error', { reason: message || 'unknown error' })
       })
       socket.addEventListener('close', (event) => {
+        this.logger.debug('Tunnel control connection closed', { code: event.code, reason: event.reason || undefined })
         let closing = Promise.resolve()
         if ([4401, 4403].includes(event.code) && !this.revoked && !this.stopped) {
           closing = this.failAuthentication(event.reason || 'Client Token was rejected by the Tunnel Control Plane')
@@ -192,6 +202,7 @@ export class TunnelClientAgent {
       this.validateWelcome(message)
       if (!this.authenticationReported) {
         this.authenticationReported = true
+        this.logger.info('Authenticated with tunnel control plane', { revision: message.snapshot.revision })
         await this.options.onAuthenticated?.()
       }
       this.welcome = message
@@ -216,7 +227,7 @@ export class TunnelClientAgent {
     if (message.type === 'revoke') {
       this.revoked = true
       await (preparedStop ?? this.stopReconciler())
-      this.options.onMessage?.(`Client Token ${message.reason === 'rotated' ? 'was rotated' : 'was deleted'}`)
+      this.logger.warn(`Client Token ${message.reason === 'rotated' ? 'was rotated' : 'was deleted'}`)
       this.socket?.close(1000, 'Revoked')
     }
   }
@@ -247,6 +258,7 @@ export class TunnelClientAgent {
         message: cause instanceof Error ? cause.message : String(cause),
         revision: message.snapshot.revision,
       }
+      this.logger.error('Could not apply desired tunnel state', cause, { revision: message.snapshot.revision })
       this.send({ type: 'apply_result', tunnelProtocolVersion: TUNNEL_PROTOCOL_VERSION, revision: message.snapshot.revision, success: false, error })
       this.publishProcessState()
     }

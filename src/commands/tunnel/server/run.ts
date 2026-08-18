@@ -1,6 +1,7 @@
 import type { FrpSupervisor, FrpSupervisorOptions } from '../frp/supervisor'
 import type { ServerTunnelConfig } from '../types'
 import process from 'node:process'
+import { getLogger } from '../../../shared/log'
 import { acquireStateDirectoryLock } from '../lock'
 import { AgentGateway } from './agent-gateway'
 import { TunnelControlPlane } from './control-plane'
@@ -18,7 +19,15 @@ export interface TunnelServerRunOptions {
 }
 
 export async function runTunnelServer(config: ServerTunnelConfig, options: TunnelServerRunOptions = {}): Promise<void> {
-  const lock = await acquireStateDirectoryLock(config.dataDir)
+  const logger = getLogger('tunnel.server')
+  let lock: Awaited<ReturnType<typeof acquireStateDirectoryLock>>
+  try {
+    lock = await acquireStateDirectoryLock(config.dataDir)
+  }
+  catch (cause) {
+    logger.error('Could not start tunnel server', cause, { stateDirectory: config.dataDir })
+    throw cause
+  }
   const shutdown = new AbortController()
   let database: ReturnType<typeof openTunnelDatabase> | undefined
   let gateway: AgentGateway | undefined
@@ -62,19 +71,20 @@ export async function runTunnelServer(config: ServerTunnelConfig, options: Tunne
     if (shutdown.signal.aborted)
       return
     server = startTunnelHttpServer({ management, gateway, address: config.address, controlPort: config.controlPort })
-    console.log(`Tunnel control plane: ${server.url}`)
-    console.log(`FRP bind: ${config.address}:${config.frpPort}`)
-    console.log(`FRP HTTP vhost: ${config.address}:${config.httpPort}`)
-    console.log(`Server Port Pool: ${config.portRange.start}-${config.portRange.end} TCP/UDP`)
-    console.log(`State directory: ${config.dataDir}`)
+    logger.info('Tunnel control plane started', { url: server.url.toString(), address: config.address, controlPort: config.controlPort })
+    logger.info('FRP listeners configured', { frpBind: `${config.address}:${config.frpPort}`, httpVhost: `${config.address}:${config.httpPort}`, portPool: `${config.portRange.start}-${config.portRange.end}` })
+    logger.info('Tunnel server state directory configured', { stateDirectory: config.dataDir })
     void frps.start().catch(() => {})
     await server.finished
   }
   catch (cause) {
-    if (!shutdown.signal.aborted)
+    if (!shutdown.signal.aborted) {
+      logger.error('Tunnel server failed', cause)
       throw cause
+    }
   }
   finally {
+    logger.info('Tunnel server stopping')
     options.signal?.removeEventListener('abort', stop)
     if (usesProcessSignals) {
       process.removeListener('SIGINT', stop)
@@ -86,5 +96,6 @@ export async function runTunnelServer(config: ServerTunnelConfig, options: Tunne
     await frps?.stop()
     database?.close()
     await lock.release()
+    logger.info('Tunnel server stopped')
   }
 }

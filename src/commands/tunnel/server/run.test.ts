@@ -1,12 +1,28 @@
+import type { LogRecord, LogSink } from '../../../shared/log'
 import type { FrpChild, FrpSupervisorOptions } from '../frp/supervisor'
 import type { ServerTunnelConfig } from '../types'
 import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
 import { describe, expect, test } from 'bun:test'
+import { configureLogger, stderrLogSink } from '../../../shared/log'
 import { FRPS_ACTIVATION_GRACE_MS, FrpSupervisor } from '../frp/supervisor'
+import { acquireStateDirectoryLock } from '../lock'
 import { TUNNEL_PROTOCOL_VERSION } from '../types'
 import { runTunnelServer } from './run'
+
+class MemorySink implements LogSink {
+  readonly records: LogRecord[] = []
+
+  write(record: LogRecord): void {
+    this.records.push(record)
+  }
+}
+
+function captureLogs(sink: LogSink): () => void {
+  configureLogger({ level: 'debug', sink })
+  return () => configureLogger({ level: 'info', sink: stderrLogSink })
+}
 
 class FakeChild implements FrpChild {
   readonly pid = 42
@@ -105,6 +121,30 @@ async function agentWelcome(origin: string): Promise<{ socket: WebSocket, messag
 }
 
 describe('Tunnel server lifecycle', () => {
+  test('records a state-lock conflict through the global logger', async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-server-lock-'))
+    const owner = await acquireStateDirectoryLock(dataDir)
+    const sink = new MemorySink()
+    const restoreLogs = captureLogs(sink)
+    try {
+      let failure: unknown
+      try {
+        await runTunnelServer(config(dataDir))
+      }
+      catch (cause) {
+        failure = cause
+      }
+      expect(failure).toBeInstanceOf(Error)
+      expect((failure as Error).message).toMatch(/already owns state directory/)
+      expect(sink.records).toContainEqual(expect.objectContaining({ level: 'error', message: 'Could not start tunnel server' }))
+    }
+    finally {
+      restoreLogs()
+      await owner.release()
+      await rm(dataDir, { recursive: true, force: true })
+    }
+  })
+
   test('cancels bootstrap and releases its state directory when shutdown is requested', async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), 'ycy-tunnel-server-run-'))
     const shutdown = new AbortController()

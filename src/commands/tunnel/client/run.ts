@@ -1,6 +1,7 @@
 import type { ClientTunnelConfig } from '../types'
 import process from 'node:process'
 import { version } from '../../../../package.json'
+import { getLogger } from '../../../shared/log'
 import { ensureFrpBinary } from '../frp/binary'
 import { FRP_ACTIVATION_GRACE_MS, FrpSupervisor } from '../frp/supervisor'
 import { TunnelClientAgent } from './agent'
@@ -15,14 +16,21 @@ export interface TunnelClientRunOptions {
 }
 
 export async function runTunnelClient(config: ClientTunnelConfig, options: TunnelClientRunOptions = {}): Promise<void> {
-  const lock = await acquireClientInstanceState(config.stateDir)
+  const logger = getLogger('tunnel.client')
+  let lock: Awaited<ReturnType<typeof acquireClientInstanceState>>
+  try {
+    lock = await acquireClientInstanceState(config.stateDir)
+  }
+  catch (cause) {
+    logger.error('Could not start tunnel client', cause, { stateDirectory: config.stateDir })
+    throw cause
+  }
   const shutdown = new AbortController()
   let supervisor: FrpSupervisor | undefined
   let reconciler: ClientReconciler | undefined
   let agent: TunnelClientAgent | undefined
 
-  console.log(`Tunnel client: ${config.server.origin}`)
-  console.log(`State directory: ${config.stateDir}`)
+  logger.info('Tunnel client started', { server: config.server.origin, stateDirectory: config.stateDir })
 
   const stop = (): void => {
     shutdown.abort()
@@ -54,7 +62,7 @@ export async function runTunnelClient(config: ClientTunnelConfig, options: Tunne
           await options.onAuthenticated?.()
         }
         catch (cause) {
-          console.warn(`Could not remember tunnel connection: ${cause instanceof Error ? cause.message : String(cause)}`)
+          logger.warn('Could not remember tunnel connection', { reason: cause instanceof Error ? cause.message : String(cause) })
         }
       },
       async createReconciler() {
@@ -69,15 +77,17 @@ export async function runTunnelClient(config: ClientTunnelConfig, options: Tunne
         supervisor.observe(state => agent?.reportProcessState(state.state, state.error))
         return reconciler
       },
-      onMessage: message => console.log(message),
     })
     await agent.run()
   }
   catch (cause) {
-    if (!shutdown.signal.aborted)
+    if (!shutdown.signal.aborted) {
+      logger.error('Tunnel client failed', cause)
       throw cause
+    }
   }
   finally {
+    logger.info('Tunnel client stopping')
     options.signal?.removeEventListener('abort', stop)
     if (usesProcessSignals) {
       process.removeListener('SIGINT', stop)
@@ -86,5 +96,6 @@ export async function runTunnelClient(config: ClientTunnelConfig, options: Tunne
     shutdown.abort()
     await agent?.stop()
     await lock.release()
+    logger.info('Tunnel client stopped')
   }
 }
