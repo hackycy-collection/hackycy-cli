@@ -45,6 +45,11 @@ Commands:
   help [command]               display help for command
 ```
 
+## Thanks
+
+- [frp](https://github.com/fatedier/frp)
+- [7z](https://www.7-zip.org/)
+
 ## License
 
 [MIT](./LICENSE) License © [hackycy](https://github.com/hackycy)
