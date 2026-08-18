@@ -1,0 +1,291 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#02030b">
+  <title>漂流于无垠之外</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --ink: #f4f7ff;
+      --muted: rgba(207, 220, 255, .62);
+      --faint: rgba(157, 178, 226, .38);
+      --line: rgba(170, 198, 255, .2);
+      --blue: #8cb9ff;
+    }
+
+    * { box-sizing: border-box; }
+
+    html, body {
+      width: 100%;
+      min-height: 100%;
+      margin: 0;
+    }
+
+    body {
+      overflow: hidden;
+      background: #02030b;
+      color: var(--ink);
+      font-family: "Avenir Next", "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+
+    .universe {
+      position: relative;
+      min-height: 100svh;
+      isolation: isolate;
+      overflow: hidden;
+      background:
+        radial-gradient(ellipse at 64% 44%, rgba(38, 57, 128, .2) 0, rgba(11, 16, 49, .09) 28%, transparent 58%),
+        radial-gradient(ellipse at 16% 84%, rgba(24, 82, 119, .16) 0, transparent 38%),
+        #02030b;
+    }
+
+    .universe::before,
+    .universe::after {
+      position: absolute;
+      z-index: -1;
+      display: block;
+      content: "";
+      pointer-events: none;
+    }
+
+    .universe::before {
+      inset: 0;
+      opacity: .34;
+      background: repeating-linear-gradient(112deg, transparent 0 16vw, rgba(121, 159, 238, .028) 16.1vw 16.25vw, transparent 16.4vw 31vw);
+      transform: rotate(-8deg) scale(1.4);
+    }
+
+    .universe::after {
+      inset: auto -20vw -46vw;
+      height: 74vw;
+      border: 1px solid rgba(121, 165, 255, .14);
+      border-radius: 50%;
+      box-shadow: 0 -1px 50px rgba(79, 134, 255, .08), 0 -1px 140px rgba(76, 125, 255, .06);
+      transform: rotate(-7deg);
+    }
+
+    #starfield {
+      position: absolute;
+      inset: 0;
+      z-index: -2;
+      width: 100%;
+      height: 100%;
+    }
+
+    .copy {
+      position: absolute;
+      top: 50%;
+      left: clamp(1.5rem, 10vw, 10rem);
+      width: min(31rem, calc(100% - 3rem));
+      transform: translateY(-44%);
+    }
+
+    .trace {
+      display: flex;
+      align-items: center;
+      gap: .7rem;
+      margin: 0 0 1.55rem;
+      color: var(--faint);
+      font-size: .67rem;
+      font-weight: 500;
+      letter-spacing: .28em;
+      line-height: 1;
+      text-transform: uppercase;
+    }
+
+    .trace::before {
+      width: 2.8rem;
+      height: 1px;
+      background: var(--line);
+      content: "";
+    }
+
+    h1 {
+      max-width: 10em;
+      margin: 0;
+      font-size: clamp(2.8rem, 7vw, 6.8rem);
+      font-weight: 300;
+      letter-spacing: .02em;
+      line-height: .98;
+      text-wrap: balance;
+    }
+
+    h1 span {
+      display: block;
+      color: rgba(244, 247, 255, .55);
+      font-size: .53em;
+      letter-spacing: .07em;
+      line-height: 1.25;
+      margin-top: .38em;
+    }
+
+    .message {
+      max-width: 22em;
+      margin: 2rem 0 0;
+      color: var(--muted);
+      font-size: clamp(.9rem, 1.35vw, 1.05rem);
+      font-weight: 300;
+      letter-spacing: .08em;
+      line-height: 2;
+    }
+
+    .coordinates {
+      position: absolute;
+      right: clamp(1.5rem, 7vw, 7rem);
+      bottom: clamp(1.5rem, 7vh, 5rem);
+      display: flex;
+      align-items: center;
+      gap: .65rem;
+      color: var(--faint);
+      font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+      font-size: .62rem;
+      letter-spacing: .16em;
+      white-space: nowrap;
+    }
+
+    .coordinates i {
+      display: block;
+      width: .42rem;
+      height: .42rem;
+      border: 1px solid var(--blue);
+      border-radius: 50%;
+      box-shadow: 0 0 10px rgba(140, 185, 255, .85);
+    }
+
+    @media (max-width: 600px) {
+      .universe::after { inset: auto -50vw -66vw; height: 112vw; }
+      .copy {
+        top: 45%;
+        left: 1.5rem;
+        width: calc(100% - 3rem);
+        transform: translateY(-40%);
+      }
+      .trace { margin-bottom: 1.2rem; }
+      h1 { font-size: clamp(2.65rem, 13vw, 4.4rem); }
+      .message { margin-top: 1.55rem; line-height: 1.9; }
+      .coordinates { right: 1.5rem; bottom: 1.45rem; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      #starfield { opacity: .78; }
+    }
+  </style>
+</head>
+<body>
+  <main class="universe" aria-label="无边宇宙中的漂流">
+    <canvas id="starfield" aria-hidden="true"></canvas>
+    <section class="copy">
+      <p class="trace">远航记录 · 坐标未知</p>
+      <h1>漂流于无垠之外<span>在寂静里，寻找一束微光</span></h1>
+      <p class="message">信号渐远，星尘从身旁无声掠过。没有地图的地方，连时间也失去了方向。</p>
+    </section>
+    <div class="coordinates" aria-hidden="true"><i></i><span>深空 / 00° 00′ 00″</span></div>
+  </main>
+  <script>
+    (() => {
+      const canvas = document.getElementById('starfield');
+      const context = canvas.getContext('2d');
+      const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+      const stars = [];
+      const comets = [];
+      let width = 0;
+      let height = 0;
+      let scale = 1;
+      let lastTime = 0;
+
+      const random = (min, max) => Math.random() * (max - min) + min;
+
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        scale = Math.min(window.devicePixelRatio || 1, 2);
+        width = rect.width;
+        height = rect.height;
+        canvas.width = Math.round(width * scale);
+        canvas.height = Math.round(height * scale);
+        context.setTransform(scale, 0, 0, scale, 0, 0);
+        stars.length = 0;
+        const amount = Math.min(460, Math.max(180, Math.round(width * height / 7000)));
+        for (let index = 0; index < amount; index += 1) {
+          stars.push({
+            x: random(0, width),
+            y: random(0, height),
+            depth: random(.15, 1),
+            size: random(.25, 1.35),
+            phase: random(0, Math.PI * 2),
+            hue: random(195, 235)
+          });
+        }
+      }
+
+      function addComet() {
+        if (reducedMotion.matches || comets.length > 1 || Math.random() > .012) return;
+        comets.push({
+          x: random(width * .54, width * 1.08),
+          y: random(-height * .08, height * .56),
+          life: 0,
+          duration: random(900, 1700),
+          speed: random(.55, 1.15)
+        });
+      }
+
+      function draw(time) {
+        const elapsed = Math.min(time - lastTime || 16, 50);
+        lastTime = time;
+        context.clearRect(0, 0, width, height);
+
+        const haze = context.createRadialGradient(width * .68, height * .42, 0, width * .68, height * .42, Math.max(width, height) * .64);
+        haze.addColorStop(0, 'rgba(54, 68, 152, .09)');
+        haze.addColorStop(.36, 'rgba(21, 38, 98, .035)');
+        haze.addColorStop(1, 'rgba(2, 3, 11, 0)');
+        context.fillStyle = haze;
+        context.fillRect(0, 0, width, height);
+
+        stars.forEach((star) => {
+          const drift = reducedMotion.matches ? 0 : elapsed * star.depth * .003;
+          star.x -= drift;
+          if (star.x < -3) star.x = width + 3;
+          const pulse = .58 + Math.sin(time * .00055 + star.phase) * .24;
+          context.fillStyle = `hsla(${star.hue}, 80%, 88%, ${pulse * star.depth})`;
+          context.beginPath();
+          context.arc(star.x, star.y, star.size * (0.7 + star.depth * .55), 0, Math.PI * 2);
+          context.fill();
+        });
+
+        addComet();
+        comets.forEach((comet) => {
+          comet.life += elapsed;
+          const progress = comet.life / comet.duration;
+          const x = comet.x - progress * width * .7 * comet.speed;
+          const y = comet.y + progress * height * .36 * comet.speed;
+          const opacity = Math.sin(Math.PI * progress) * .72;
+          const trail = context.createLinearGradient(x + 110, y - 58, x, y);
+          trail.addColorStop(0, 'rgba(162, 204, 255, 0)');
+          trail.addColorStop(1, `rgba(190, 222, 255, ${opacity})`);
+          context.strokeStyle = trail;
+          context.lineWidth = 1.2;
+          context.beginPath();
+          context.moveTo(x + 110, y - 58);
+          context.lineTo(x, y);
+          context.stroke();
+          context.fillStyle = `rgba(230, 244, 255, ${opacity})`;
+          context.beginPath();
+          context.arc(x, y, 1.8, 0, Math.PI * 2);
+          context.fill();
+        });
+        for (let index = comets.length - 1; index >= 0; index -= 1) {
+          if (comets[index].life >= comets[index].duration) comets.splice(index, 1);
+        }
+
+        requestAnimationFrame(draw);
+      }
+
+      window.addEventListener('resize', resize, { passive: true });
+      resize();
+      requestAnimationFrame(draw);
+    })();
+  </script>
+</body>
+</html>
