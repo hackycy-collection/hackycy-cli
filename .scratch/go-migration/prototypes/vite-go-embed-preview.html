@@ -1,0 +1,1216 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vite 到 Go 嵌入路径 - 规划原型</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --page: #f4f6f8;
+        --surface: #ffffff;
+        --surface-muted: #eef2f4;
+        --border: #d5dde2;
+        --border-strong: #aebbc3;
+        --text: #17232d;
+        --muted: #5f6f79;
+        --accent: #006d77;
+        --accent-soft: #dff2f1;
+        --success: #18794e;
+        --success-soft: #e6f4ec;
+        --danger: #b42318;
+        --danger-soft: #fdebea;
+        --warning: #8a5d00;
+        --warning-soft: #fff3d6;
+        --code: #26343e;
+        font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        font-size: 16px;
+        letter-spacing: 0;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        min-width: 320px;
+        color: var(--text);
+        background: var(--page);
+      }
+
+      button,
+      input {
+        font: inherit;
+        letter-spacing: 0;
+      }
+
+      button {
+        min-height: 38px;
+        border: 1px solid var(--border-strong);
+        border-radius: 5px;
+        padding: 0.5rem 0.75rem;
+        color: var(--text);
+        background: var(--surface);
+        cursor: pointer;
+      }
+
+      button:hover:not(:disabled) {
+        border-color: var(--accent);
+        color: var(--accent);
+      }
+
+      button:focus-visible,
+      input:focus-visible {
+        outline: 3px solid rgba(0, 109, 119, 0.22);
+        outline-offset: 2px;
+      }
+
+      button:disabled {
+        cursor: default;
+        opacity: 0.52;
+      }
+
+      code {
+        color: var(--code);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.9em;
+      }
+
+      .page-header {
+        border-bottom: 1px solid var(--border);
+        background: var(--surface);
+      }
+
+      .header-inner,
+      main {
+        width: min(1180px, calc(100% - 32px));
+        margin: 0 auto;
+      }
+
+      .header-inner {
+        padding: 24px 0 20px;
+      }
+
+      .prototype-label {
+        display: inline-flex;
+        align-items: center;
+        min-height: 26px;
+        border: 1px solid var(--warning);
+        border-radius: 4px;
+        padding: 0.2rem 0.45rem;
+        color: var(--warning);
+        background: var(--warning-soft);
+        font-size: 0.78rem;
+        font-weight: 700;
+      }
+
+      h1,
+      h2,
+      h3,
+      p {
+        margin-top: 0;
+      }
+
+      h1 {
+        margin: 10px 0 7px;
+        font-size: 1.75rem;
+        line-height: 1.25;
+      }
+
+      h2 {
+        margin-bottom: 6px;
+        font-size: 1.12rem;
+      }
+
+      h3 {
+        margin-bottom: 5px;
+        font-size: 0.98rem;
+      }
+
+      .intro {
+        max-width: 900px;
+        margin-bottom: 0;
+        color: var(--muted);
+        line-height: 1.6;
+      }
+
+      main {
+        padding: 22px 0 48px;
+      }
+
+      .state-band {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface);
+        overflow: hidden;
+      }
+
+      .state-item {
+        min-width: 0;
+        padding: 14px 16px;
+        border-right: 1px solid var(--border);
+      }
+
+      .state-item:last-child {
+        border-right: 0;
+      }
+
+      .state-label {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--muted);
+        font-size: 0.78rem;
+      }
+
+      .state-value {
+        display: block;
+        overflow-wrap: anywhere;
+        font-size: 0.95rem;
+        font-weight: 700;
+        line-height: 1.35;
+      }
+
+      .state-value.success {
+        color: var(--success);
+      }
+
+      .state-value.danger {
+        color: var(--danger);
+      }
+
+      .state-value.warning {
+        color: var(--warning);
+      }
+
+      .workbench {
+        display: grid;
+        grid-template-columns: minmax(0, 1.08fr) minmax(360px, 0.92fr);
+        gap: 18px;
+        margin-top: 18px;
+      }
+
+      .tool-panel {
+        min-width: 0;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+
+      .panel-heading {
+        padding: 16px 18px 13px;
+        border-bottom: 1px solid var(--border);
+      }
+
+      .panel-heading p {
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: 0.88rem;
+        line-height: 1.5;
+      }
+
+      .panel-body {
+        padding: 16px 18px 18px;
+      }
+
+      .field-label {
+        display: block;
+        margin-bottom: 7px;
+        color: var(--muted);
+        font-size: 0.8rem;
+        font-weight: 700;
+      }
+
+      .segmented {
+        display: grid;
+        grid-template-columns: repeat(var(--segments, 2), minmax(0, 1fr));
+        gap: 0;
+        width: 100%;
+        border: 1px solid var(--border-strong);
+        border-radius: 5px;
+        overflow: hidden;
+      }
+
+      .segmented button {
+        min-width: 0;
+        border: 0;
+        border-right: 1px solid var(--border-strong);
+        border-radius: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .segmented button:last-child {
+        border-right: 0;
+      }
+
+      .segmented button[aria-pressed="true"] {
+        color: #ffffff;
+        background: var(--accent);
+      }
+
+      .strategy-summary {
+        margin: 12px 0 16px;
+        padding: 11px 13px;
+        border-left: 3px solid var(--accent);
+        color: var(--muted);
+        background: var(--accent-soft);
+        font-size: 0.88rem;
+        line-height: 1.55;
+      }
+
+      .action-grid {
+        display: grid;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+        gap: 8px;
+      }
+
+      .action-grid button {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .action-grid .primary {
+        border-color: var(--accent);
+        color: #ffffff;
+        background: var(--accent);
+      }
+
+      .action-grid .danger-action {
+        border-color: #d7a4a0;
+        color: var(--danger);
+        background: var(--danger-soft);
+      }
+
+      .last-result {
+        min-height: 100px;
+        margin-top: 14px;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 12px 13px;
+        background: var(--surface-muted);
+      }
+
+      .result-line {
+        display: flex;
+        align-items: flex-start;
+        justify-content: space-between;
+        gap: 12px;
+        margin-bottom: 7px;
+      }
+
+      .result-line:last-child {
+        margin-bottom: 0;
+      }
+
+      .result-key {
+        flex: 0 0 auto;
+        color: var(--muted);
+        font-size: 0.82rem;
+      }
+
+      .result-data {
+        min-width: 0;
+        text-align: right;
+        overflow-wrap: anywhere;
+        font-size: 0.86rem;
+        font-weight: 650;
+      }
+
+      .status-pill {
+        display: inline-flex;
+        align-items: center;
+        min-height: 24px;
+        border-radius: 4px;
+        padding: 0.12rem 0.42rem;
+        font-size: 0.76rem;
+        font-weight: 800;
+      }
+
+      .status-pill.pass {
+        color: var(--success);
+        background: var(--success-soft);
+      }
+
+      .status-pill.fail {
+        color: var(--danger);
+        background: var(--danger-soft);
+      }
+
+      .status-pill.neutral {
+        color: var(--muted);
+        background: #e7ecef;
+      }
+
+      .route-fields {
+        display: grid;
+        gap: 13px;
+      }
+
+      .method-row {
+        --segments: 4;
+      }
+
+      .path-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: 8px;
+      }
+
+      .path-row input {
+        width: 100%;
+        min-width: 0;
+        height: 40px;
+        border: 1px solid var(--border-strong);
+        border-radius: 5px;
+        padding: 0 0.7rem;
+        color: var(--text);
+        background: var(--surface);
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+      }
+
+      .quick-paths {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 7px;
+      }
+
+      .quick-paths button {
+        min-height: 32px;
+        padding: 0.32rem 0.55rem;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.78rem;
+      }
+
+      .http-result {
+        min-height: 150px;
+        margin-top: 14px;
+        border: 1px solid var(--border);
+        border-radius: 5px;
+        padding: 13px;
+        background: var(--code);
+        color: #f4f7f8;
+      }
+
+      .http-result.empty {
+        display: grid;
+        place-items: center;
+        color: #b9c3c9;
+      }
+
+      .http-status {
+        display: flex;
+        align-items: baseline;
+        gap: 10px;
+        margin-bottom: 11px;
+      }
+
+      .http-status strong {
+        font-size: 1.45rem;
+      }
+
+      .http-grid {
+        display: grid;
+        grid-template-columns: 110px minmax(0, 1fr);
+        gap: 6px 10px;
+        font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.78rem;
+        line-height: 1.45;
+      }
+
+      .http-grid span:nth-child(odd) {
+        color: #aab7bf;
+      }
+
+      .http-grid span:nth-child(even) {
+        min-width: 0;
+        overflow-wrap: anywhere;
+      }
+
+      .walkthroughs {
+        margin-top: 18px;
+        border: 1px solid var(--border);
+        border-radius: 6px;
+        background: var(--surface);
+      }
+
+      .walkthrough-heading {
+        padding: 16px 18px 12px;
+      }
+
+      .walkthrough-heading p {
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: 0.88rem;
+      }
+
+      .tabs {
+        display: flex;
+        gap: 0;
+        padding: 0 18px;
+        border-bottom: 1px solid var(--border);
+        overflow-x: auto;
+      }
+
+      .tabs button {
+        flex: 0 0 auto;
+        min-height: 42px;
+        border: 0;
+        border-bottom: 3px solid transparent;
+        border-radius: 0;
+        padding: 0.55rem 0.85rem;
+        color: var(--muted);
+      }
+
+      .tabs button[aria-selected="true"] {
+        border-bottom-color: var(--accent);
+        color: var(--accent);
+        font-weight: 750;
+      }
+
+      .walkthrough-body {
+        display: grid;
+        grid-template-columns: minmax(220px, 0.36fr) minmax(0, 0.64fr);
+        gap: 22px;
+        padding: 18px;
+      }
+
+      .walkthrough-copy p {
+        margin-bottom: 0;
+        color: var(--muted);
+        font-size: 0.88rem;
+        line-height: 1.55;
+      }
+
+      .steps {
+        display: grid;
+        gap: 8px;
+      }
+
+      .step-button {
+        display: grid;
+        grid-template-columns: 28px minmax(0, 1fr) auto;
+        align-items: center;
+        gap: 10px;
+        width: 100%;
+        min-height: 46px;
+        text-align: left;
+      }
+
+      .step-number {
+        display: grid;
+        place-items: center;
+        width: 26px;
+        height: 26px;
+        border: 1px solid var(--border-strong);
+        border-radius: 50%;
+        color: var(--muted);
+        font-size: 0.76rem;
+        font-weight: 800;
+      }
+
+      .step-button.current {
+        border-color: var(--accent);
+        color: var(--accent);
+        background: var(--accent-soft);
+      }
+
+      .step-button.done .step-number {
+        border-color: var(--success);
+        color: #ffffff;
+        background: var(--success);
+      }
+
+      .step-outcome {
+        color: var(--muted);
+        font-size: 0.74rem;
+      }
+
+      .event-log {
+        margin-top: 18px;
+        border-top: 1px solid var(--border);
+        padding-top: 16px;
+      }
+
+      .event-log ol {
+        display: grid;
+        gap: 5px;
+        margin: 8px 0 0;
+        padding-left: 1.35rem;
+        color: var(--muted);
+        font-size: 0.82rem;
+        line-height: 1.45;
+      }
+
+      .event-log li::marker {
+        color: var(--border-strong);
+      }
+
+      .footer-note {
+        margin: 18px 0 0;
+        color: var(--muted);
+        font-size: 0.8rem;
+        line-height: 1.5;
+      }
+
+      @media (max-width: 900px) {
+        .state-band {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .state-item:nth-child(2) {
+          border-right: 0;
+        }
+
+        .state-item:nth-child(-n + 2) {
+          border-bottom: 1px solid var(--border);
+        }
+
+        .workbench {
+          grid-template-columns: 1fr;
+        }
+
+        .walkthrough-body {
+          grid-template-columns: 1fr;
+        }
+      }
+
+      @media (max-width: 620px) {
+        .header-inner,
+        main {
+          width: min(100% - 20px, 1180px);
+        }
+
+        .header-inner {
+          padding-top: 18px;
+        }
+
+        h1 {
+          font-size: 1.45rem;
+        }
+
+        .state-band {
+          grid-template-columns: 1fr;
+        }
+
+        .state-item,
+        .state-item:nth-child(2) {
+          border-right: 0;
+          border-bottom: 1px solid var(--border);
+        }
+
+        .state-item:last-child {
+          border-bottom: 0;
+        }
+
+        .action-grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .path-row {
+          grid-template-columns: 1fr;
+        }
+
+        .method-row {
+          --segments: 2;
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+
+        .method-row button:nth-child(2) {
+          border-right: 0;
+        }
+
+        .method-row button:nth-child(-n + 2) {
+          border-bottom: 1px solid var(--border-strong);
+        }
+
+        .http-grid {
+          grid-template-columns: 92px minmax(0, 1fr);
+        }
+
+        .tabs {
+          padding: 0 10px;
+        }
+
+        .walkthrough-body,
+        .panel-body,
+        .panel-heading,
+        .walkthrough-heading {
+          padding-left: 13px;
+          padding-right: 13px;
+        }
+
+        .step-button {
+          grid-template-columns: 28px minmax(0, 1fr);
+        }
+
+        .step-outcome {
+          display: none;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <header class="page-header">
+      <div class="header-inner">
+        <span class="prototype-label">规划原型，不进入生产</span>
+        <h1>Vite MPA 到 Go 嵌入路径</h1>
+        <p class="intro">
+          这个原型呈现已确认的首版约束：所有 ycy 二进制都无条件嵌入完整 Web 资源，构建必须先生成并验证 Vite 产物；三个命令适配器同时继续复现 Bun 制品的路由与 HTTP 方法行为。
+        </p>
+      </div>
+    </header>
+
+    <main>
+      <div id="app"></div>
+    </main>
+
+    <script>
+      const model = (() => {
+        const strategyDetails = {
+          paired: {
+            name: '配对构建约束',
+            summary: '无标签 Go 检查使用类型化 stub；只有 make build 加 embedded_web 才生成可发布二进制。',
+          },
+          unconditional: {
+            name: '无条件嵌入',
+            summary: '所有 Go 构建都要求 web/dist 已生成；干净检出的 Go 检查因此依赖 pnpm/Vite 的先后顺序。',
+          },
+        }
+
+        const phaseDetails = {
+          clean: { label: '干净检出，无 web/dist', tone: 'warning' },
+          ready: { label: 'Vite 输出已验证', tone: 'success' },
+          missing: { label: '资源文件缺失', tone: 'danger' },
+          stale: { label: 'HTML 引用陈旧哈希', tone: 'danger' },
+        }
+
+        const initialState = (guide = 'recommended') => ({
+          strategy: 'unconditional',
+          phase: 'clean',
+          artifact: '无',
+          releasable: false,
+          last: {
+            command: '尚未运行',
+            outcome: 'neutral',
+            detail: '选择操作或运行下方 walkthrough。',
+          },
+          route: {
+            app: 'diff',
+            method: 'GET',
+            path: '/deep/link',
+            response: null,
+          },
+          guide: { id: guide, step: 0 },
+          events: ['原型已重置为干净检出。'],
+        })
+
+        function appendEvent(state, message) {
+          return [...state.events, message].slice(-8)
+        }
+
+        function isShellRoute(app, path) {
+          if (app === 'fs')
+            return path === '/' || path === '/browse' || path.startsWith('/browse/')
+          if (app === 'tunnel')
+            return path === '/' || path === '/clients' || path.startsWith('/clients/') || path === '/server' || path === '/accounts'
+          return true
+        }
+
+        function evaluateRoute(state, input) {
+          if (state.phase !== 'ready' || !state.releasable) {
+            return {
+              status: '未启动',
+              reason: state.strategy === 'paired' && state.artifact === '开发二进制'
+                ? 'ErrWebAssetsUnavailable'
+                : '没有通过 make build 的发布制品',
+              contentType: '-',
+              cache: '-',
+              handler: '启动前失败',
+            }
+          }
+
+          const { app, method, path } = input
+          const knownAsset = path === '/assets/app-deadbeef.js'
+          if (knownAsset && (method === 'GET' || method === 'HEAD')) {
+            return {
+              status: 200,
+              reason: '真实生成资源',
+              contentType: 'text/javascript; charset=utf-8',
+              cache: 'public, max-age=31536000, immutable',
+              handler: 'webassets.ServeAsset',
+            }
+          }
+
+          if (app === 'diff') {
+            if (path.startsWith('/api/')) {
+              return {
+                status: 404,
+                reason: 'API route not found',
+                contentType: 'application/json; charset=utf-8',
+                cache: 'no-store',
+                handler: 'Diff API adapter',
+              }
+            }
+            if (path === '/mcp') {
+              return {
+                status: 200,
+                reason: '精确 MCP handler',
+                contentType: 'application/json',
+                cache: 'no-store',
+                handler: 'Diff MCP adapter',
+              }
+            }
+            return {
+              status: 200,
+              reason: 'Bun 兼容的广域 fallback',
+              contentType: 'text/html; charset=utf-8',
+              cache: 'no-store',
+              handler: 'webassets.ServeShell',
+            }
+          }
+
+          if (app === 'fs') {
+            if (isShellRoute(app, path)) {
+              if (method === 'GET' || method === 'HEAD') {
+                return {
+                  status: 200,
+                  reason: 'FS shell route',
+                  contentType: 'text/html; charset=utf-8',
+                  cache: 'no-store',
+                  handler: 'webassets.ServeShell',
+                }
+              }
+              return {
+                status: 405,
+                reason: 'Use GET',
+                contentType: 'application/json; charset=utf-8',
+                cache: 'no-store',
+                handler: 'FS HTTP adapter',
+              }
+            }
+            return {
+              status: 404,
+              reason: 'Route not found',
+              contentType: 'application/json; charset=utf-8',
+              cache: 'no-store',
+              handler: 'FS HTTP adapter',
+            }
+          }
+
+          if (isShellRoute(app, path) && (method === 'GET' || method === 'HEAD')) {
+            return {
+              status: 200,
+              reason: 'Tunnel shell route',
+              contentType: 'text/html; charset=utf-8',
+              cache: 'no-store',
+              handler: 'webassets.ServeShell',
+            }
+          }
+          return {
+            status: 404,
+            reason: 'Route not found',
+            contentType: 'application/json; charset=utf-8',
+            cache: 'no-store',
+            handler: 'Tunnel HTTP adapter',
+          }
+        }
+
+        function applyCore(state, action) {
+          if (action.type === 'reset')
+            return initialState(state.guide.id)
+
+          if (action.type === 'select-strategy') {
+            const next = initialState(state.guide.id)
+            return {
+              ...next,
+              strategy: action.strategy,
+              events: [`已选择${strategyDetails[action.strategy].name}，回到干净检出。`],
+            }
+          }
+
+          if (action.type === 'go-test') {
+            const passes = state.strategy === 'paired' || state.phase === 'ready'
+            return {
+              ...state,
+              last: {
+                command: 'CGO_ENABLED=0 go test ./...',
+                outcome: passes ? 'pass' : 'fail',
+                detail: passes
+                  ? state.strategy === 'paired' && state.phase === 'clean'
+                    ? 'stub 被选中；Go-only 测试通过，不伪装成发布制品。'
+                    : '真实嵌入输入存在；测试通过。'
+                  : 'go:embed dist 在包编译前找不到匹配文件。',
+              },
+              events: appendEvent(state, passes ? 'Go-only 测试通过。' : 'Go-only 测试被缺失的 web/dist 阻断。'),
+            }
+          }
+
+          if (action.type === 'raw-build') {
+            const passes = state.strategy === 'paired' || state.phase === 'ready'
+            const artifact = passes
+              ? state.strategy === 'paired' && state.phase === 'clean'
+                ? '开发二进制'
+                : '未验证的完整二进制'
+              : '无'
+            return {
+              ...state,
+              artifact,
+              releasable: false,
+              last: {
+                command: 'go build ./cmd/ycy',
+                outcome: passes ? 'pass' : 'fail',
+                detail: passes
+                  ? artifact === '开发二进制'
+                    ? '构建成功；Web 命令启动时返回 ErrWebAssetsUnavailable。'
+                    : '嵌入现有 dist，但未经过 canonical 资产验证，不能发布。'
+                  : '缺少 web/dist，编译直接失败。',
+              },
+              events: appendEvent(state, passes ? `生成${artifact}。` : '原始 Go 构建失败。'),
+            }
+          }
+
+          if (action.type === 'make-build' || action.type === 'rebuild') {
+            return {
+              ...state,
+              phase: 'ready',
+              artifact: '完整发布候选',
+              releasable: true,
+              last: {
+                command: 'make build',
+                outcome: 'pass',
+                detail: '冻结安装 -> Vite MPA -> 资产图验证 -> CGO-free Go 构建（无 build tag/stub 分支）。',
+              },
+              events: appendEvent(state, 'Vite 输出通过验证，并嵌入完整发布候选。'),
+            }
+          }
+
+          if (action.type === 'verify') {
+            const passes = state.phase === 'ready'
+            const details = {
+              clean: '三个固定 shell 不存在。',
+              missing: '导入的文件或 worker 输出缺失。',
+              stale: 'HTML 指向不存在的旧哈希。',
+              ready: 'shell、共享资源、worker、文件资产和哈希命名全部一致。',
+            }
+            return {
+              ...state,
+              last: {
+                command: 'pnpm --dir web run verify',
+                outcome: passes ? 'pass' : 'fail',
+                detail: details[state.phase],
+              },
+              events: appendEvent(state, passes ? '资产图验证通过。' : `资产图验证失败：${details[state.phase]}`),
+            }
+          }
+
+          if (action.type === 'remove-asset' || action.type === 'stale-shell') {
+            const phase = action.type === 'remove-asset' ? 'missing' : 'stale'
+            const label = action.type === 'remove-asset' ? '移除一个已解析资源' : '让 shell 引用旧哈希'
+            return {
+              ...state,
+              phase,
+              artifact: '无效发布候选',
+              releasable: false,
+              last: {
+                command: label,
+                outcome: 'neutral',
+                detail: '故障已注入；运行资产验证观察 fail-closed 行为。',
+              },
+              events: appendEvent(state, `${label}，发布候选失效。`),
+            }
+          }
+
+          if (action.type === 'set-app' || action.type === 'set-method') {
+            return {
+              ...state,
+              route: {
+                ...state.route,
+                ...(action.type === 'set-app' ? { app: action.app } : { method: action.method }),
+                response: null,
+              },
+            }
+          }
+
+          if (action.type === 'request' || action.type === 'preset-request') {
+            const route = {
+              app: action.app ?? state.route.app,
+              method: action.method ?? state.route.method,
+              path: action.path ?? state.route.path,
+            }
+            const response = evaluateRoute(state, route)
+            return {
+              ...state,
+              route: { ...route, response },
+              last: {
+                command: `${route.method} ${route.path}`,
+                outcome: response.status === '未启动' ? 'fail' : 'pass',
+                detail: `${route.app} -> ${response.status} ${response.contentType}`,
+              },
+              events: appendEvent(state, `${route.app} ${route.method} ${route.path} -> ${response.status}。`),
+            }
+          }
+
+          return state
+        }
+
+        const walkthroughs = {
+          recommended: {
+            title: '已选构建路径',
+            description: '无条件嵌入把“任何二进制都开箱即用”设为不变量；干净检出的 Go 编译必须等待 Vite 产物。',
+            steps: [
+              { label: '选择无条件嵌入', outcome: '回到干净检出', action: { type: 'select-strategy', strategy: 'unconditional' } },
+              { label: '直接运行 Go-only 测试', outcome: '缺 dist，明确失败', action: { type: 'go-test' } },
+              { label: '运行 canonical make build', outcome: '完整候选', action: { type: 'make-build' } },
+              { label: '打开 FS 深链', outcome: '200 HTML', action: { type: 'preset-request', app: 'fs', method: 'GET', path: '/browse/projects/demo' } },
+            ],
+          },
+          failure: {
+            title: '缺失与陈旧产物',
+            description: '故障不能悄悄进入二进制；验证器必须在 Go 嵌入之前阻断构建。',
+            steps: [
+              { label: '生成完整发布候选', outcome: '验证通过', action: { type: 'make-build' } },
+              { label: '移除一个文件资产', outcome: '候选失效', action: { type: 'remove-asset' } },
+              { label: '运行资产图验证', outcome: '明确失败', action: { type: 'verify' } },
+              { label: '重新执行 make build', outcome: '恢复完整', action: { type: 'rebuild' } },
+              { label: '再次验证资产图', outcome: '通过', action: { type: 'verify' } },
+            ],
+          },
+          parity: {
+            title: 'Bun 路由怪癖',
+            description: '同一个静态模块不替三个命令统一产品行为；每个命令适配器保留自己的 method 与 fallback 结果。',
+            steps: [
+              { label: '生成完整发布候选', outcome: '服务器可用', action: { type: 'make-build' } },
+              { label: 'Diff POST 缺失资源', outcome: '200 HTML', action: { type: 'preset-request', app: 'diff', method: 'POST', path: '/assets/missing.js' } },
+              { label: 'FS POST 浏览深链', outcome: '405 JSON', action: { type: 'preset-request', app: 'fs', method: 'POST', path: '/browse/deep' } },
+              { label: 'Tunnel HEAD 客户端深链', outcome: '200 HTML', action: { type: 'preset-request', app: 'tunnel', method: 'HEAD', path: '/clients/demo' } },
+            ],
+          },
+        }
+
+        function reducer(state, action) {
+          if (action.type === 'select-guide')
+            return initialState(action.guide)
+          if (action.type === 'guide-step') {
+            const guide = walkthroughs[state.guide.id]
+            const step = guide.steps[state.guide.step]
+            if (!step)
+              return state
+            const next = applyCore(state, step.action)
+            return { ...next, guide: { ...state.guide, step: state.guide.step + 1 } }
+          }
+          return applyCore(state, action)
+        }
+
+        return { initialState, phaseDetails, reducer, strategyDetails, walkthroughs }
+      })()
+
+      const escapeHTML = value => String(value)
+        .replaceAll('&', '&amp;')
+        .replaceAll('<', '&lt;')
+        .replaceAll('>', '&gt;')
+        .replaceAll('"', '&quot;')
+        .replaceAll("'", '&#039;')
+
+      const appNames = { diff: 'Diff', fs: 'FS', tunnel: 'Tunnel Server' }
+      let state = model.initialState()
+
+      function toneForArtifact() {
+        if (state.releasable)
+          return 'success'
+        if (state.artifact === '无效发布候选')
+          return 'danger'
+        return 'warning'
+      }
+
+      function renderHTTPResult() {
+        const response = state.route.response
+        if (!response)
+          return '<div class="http-result empty">尚未发送模拟请求</div>'
+        return `
+          <div class="http-result" aria-live="polite">
+            <div class="http-status"><strong>${escapeHTML(response.status)}</strong><span>${escapeHTML(response.reason)}</span></div>
+            <div class="http-grid">
+              <span>Content-Type</span><span>${escapeHTML(response.contentType)}</span>
+              <span>Cache-Control</span><span>${escapeHTML(response.cache)}</span>
+              <span>Handler</span><span>${escapeHTML(response.handler)}</span>
+            </div>
+          </div>
+        `
+      }
+
+      function renderWalkthroughs() {
+        const selected = model.walkthroughs[state.guide.id]
+        const tabs = Object.entries(model.walkthroughs).map(([id, guide]) => `
+          <button type="button" role="tab" aria-selected="${id === state.guide.id}" data-guide="${id}">${escapeHTML(guide.title)}</button>
+        `).join('')
+        const steps = selected.steps.map((step, index) => {
+          const done = index < state.guide.step
+          const current = index === state.guide.step
+          return `
+            <button type="button" class="step-button ${done ? 'done' : ''} ${current ? 'current' : ''}" data-guide-step="${index}" ${current ? '' : 'disabled'}>
+              <span class="step-number">${done ? '&#10003;' : index + 1}</span>
+              <span>${escapeHTML(step.label)}</span>
+              <span class="step-outcome">${escapeHTML(step.outcome)}</span>
+            </button>
+          `
+        }).join('')
+        return `
+          <section class="walkthroughs" aria-labelledby="walkthrough-title">
+            <div class="walkthrough-heading">
+              <h2 id="walkthrough-title">Guided walkthroughs</h2>
+              <p>切换场景会回到已知初始状态；每次只执行当前步骤。</p>
+            </div>
+            <div class="tabs" role="tablist" aria-label="验证场景">${tabs}</div>
+            <div class="walkthrough-body" role="tabpanel">
+              <div class="walkthrough-copy">
+                <h3>${escapeHTML(selected.title)}</h3>
+                <p>${escapeHTML(selected.description)}</p>
+              </div>
+              <div class="steps">${steps}</div>
+            </div>
+          </section>
+        `
+      }
+
+      function render() {
+        const phase = model.phaseDetails[state.phase]
+        const strategy = model.strategyDetails[state.strategy]
+        const outcomeLabel = state.last.outcome === 'pass' ? '通过' : state.last.outcome === 'fail' ? '失败' : '已记录'
+        const events = state.events.map(event => `<li>${escapeHTML(event)}</li>`).join('')
+        document.querySelector('#app').innerHTML = `
+          <section class="state-band" aria-label="当前状态">
+            <div class="state-item"><span class="state-label">构建方案</span><span class="state-value">${escapeHTML(strategy.name)}</span></div>
+            <div class="state-item"><span class="state-label">Web 输入</span><span class="state-value ${phase.tone}">${escapeHTML(phase.label)}</span></div>
+            <div class="state-item"><span class="state-label">当前制品</span><span class="state-value ${toneForArtifact()}">${escapeHTML(state.artifact)}</span></div>
+            <div class="state-item"><span class="state-label">可发布</span><span class="state-value ${state.releasable ? 'success' : 'warning'}">${state.releasable ? '是' : '否'}</span></div>
+          </section>
+
+          <div class="workbench">
+            <section class="tool-panel" aria-labelledby="build-title">
+              <div class="panel-heading">
+                <h2 id="build-title">构建状态机</h2>
+                <p>比较干净检出、完整构建和故障注入时的真实保证。</p>
+              </div>
+              <div class="panel-body">
+                <span class="field-label">方案对照（已选无条件嵌入）</span>
+                <div class="segmented" style="--segments: 2" aria-label="构建方案">
+                  <button type="button" data-strategy="paired" aria-pressed="${state.strategy === 'paired'}">配对构建约束</button>
+                  <button type="button" data-strategy="unconditional" aria-pressed="${state.strategy === 'unconditional'}">无条件嵌入</button>
+                </div>
+                <div class="strategy-summary">${escapeHTML(strategy.summary)}</div>
+
+                <span class="field-label">自由操作</span>
+                <div class="action-grid">
+                  <button type="button" data-action="go-test"><code>go test</code></button>
+                  <button type="button" data-action="raw-build"><code>go build</code></button>
+                  <button type="button" class="primary" data-action="make-build"><code>make build</code></button>
+                  <button type="button" data-action="verify">验证资产图</button>
+                  <button type="button" class="danger-action" data-action="remove-asset">移除资源</button>
+                  <button type="button" class="danger-action" data-action="stale-shell">陈旧 shell</button>
+                  <button type="button" data-action="rebuild">重新构建</button>
+                  <button type="button" data-action="reset">重置</button>
+                </div>
+
+                <div class="last-result" aria-live="polite">
+                  <div class="result-line"><span class="result-key">最近操作</span><span class="result-data"><code>${escapeHTML(state.last.command)}</code></span></div>
+                  <div class="result-line"><span class="result-key">结果</span><span class="status-pill ${state.last.outcome}">${outcomeLabel}</span></div>
+                  <div class="result-line"><span class="result-key">含义</span><span class="result-data">${escapeHTML(state.last.detail)}</span></div>
+                </div>
+              </div>
+            </section>
+
+            <section class="tool-panel" aria-labelledby="route-title">
+              <div class="panel-heading">
+                <h2 id="route-title">Bun 路由兼容模拟</h2>
+                <p>发布候选就绪后，观察三个命令各自的 method、fallback 与缓存结果。</p>
+              </div>
+              <div class="panel-body">
+                <div class="route-fields">
+                  <div>
+                    <span class="field-label">命令</span>
+                    <div class="segmented" style="--segments: 3" aria-label="命令">
+                      ${Object.entries(appNames).map(([id, name]) => `<button type="button" data-app="${id}" aria-pressed="${state.route.app === id}">${name}</button>`).join('')}
+                    </div>
+                  </div>
+                  <div>
+                    <span class="field-label">HTTP method</span>
+                    <div class="segmented method-row" aria-label="HTTP method">
+                      ${['GET', 'HEAD', 'POST', 'OPTIONS'].map(method => `<button type="button" data-method="${method}" aria-pressed="${state.route.method === method}">${method}</button>`).join('')}
+                    </div>
+                  </div>
+                  <div>
+                    <label class="field-label" for="route-path">路径</label>
+                    <div class="path-row">
+                      <input id="route-path" value="${escapeHTML(state.route.path)}" spellcheck="false" aria-label="请求路径">
+                      <button type="button" data-action="request">发送请求</button>
+                    </div>
+                  </div>
+                  <div class="quick-paths" aria-label="常用路径">
+                    <button type="button" data-preset-path="/deep/link">/deep/link</button>
+                    <button type="button" data-preset-path="/browse/deep">/browse/deep</button>
+                    <button type="button" data-preset-path="/clients/demo">/clients/demo</button>
+                    <button type="button" data-preset-path="/assets/app-deadbeef.js">真实资源</button>
+                    <button type="button" data-preset-path="/assets/missing.js">缺失资源</button>
+                    <button type="button" data-preset-path="/api/missing">/api/missing</button>
+                  </div>
+                </div>
+                ${renderHTTPResult()}
+              </div>
+            </section>
+          </div>
+
+          ${renderWalkthroughs()}
+
+          <section class="event-log" aria-labelledby="event-title">
+            <h2 id="event-title">状态记录</h2>
+            <ol>${events}</ol>
+          </section>
+
+          <p class="footer-note">该页面只呈现已完成探针的决策模型；它不会启动 Bun、Vite、Go 服务，也不会写入持久数据。</p>
+        `
+        bindEvents()
+      }
+
+      function dispatch(action) {
+        state = model.reducer(state, action)
+        render()
+      }
+
+      function bindEvents() {
+        document.querySelectorAll('[data-strategy]').forEach(button => button.addEventListener('click', () => {
+          dispatch({ type: 'select-strategy', strategy: button.dataset.strategy })
+        }))
+        document.querySelectorAll('[data-action]').forEach(button => button.addEventListener('click', () => {
+          if (button.dataset.action === 'request') {
+            dispatch({ type: 'request', path: document.querySelector('#route-path').value || '/' })
+            return
+          }
+          dispatch({ type: button.dataset.action })
+        }))
+        document.querySelectorAll('[data-app]').forEach(button => button.addEventListener('click', () => {
+          dispatch({ type: 'set-app', app: button.dataset.app })
+        }))
+        document.querySelectorAll('[data-method]').forEach(button => button.addEventListener('click', () => {
+          dispatch({ type: 'set-method', method: button.dataset.method })
+        }))
+        document.querySelectorAll('[data-preset-path]').forEach(button => button.addEventListener('click', () => {
+          dispatch({ type: 'request', path: button.dataset.presetPath })
+        }))
+        document.querySelectorAll('[data-guide]').forEach(button => button.addEventListener('click', () => {
+          dispatch({ type: 'select-guide', guide: button.dataset.guide })
+        }))
+        document.querySelectorAll('[data-guide-step]').forEach(button => button.addEventListener('click', () => {
+          dispatch({ type: 'guide-step' })
+        }))
+        document.querySelector('#route-path').addEventListener('keydown', event => {
+          if (event.key === 'Enter')
+            dispatch({ type: 'request', path: event.currentTarget.value || '/' })
+        })
+      }
+
+      render()
+    </script>
+  </body>
+</html>
