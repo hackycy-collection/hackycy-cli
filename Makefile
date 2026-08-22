@@ -1,0 +1,74 @@
+GO_TOOLCHAIN ?= go1.26.7
+GO ?= go
+PNPM ?= pnpm
+VERSION ?= 0.0.0-dev
+
+GO_FILES := $(shell find cmd internal tools/hookctl tools/check-no-bun web -type f -name '*.go' 2>/dev/null)
+
+.PHONY: help bootstrap hooks-install hooks-doctor hooks-uninstall fmt check check-web check-go check-locks check-no-bun build cross-build ensure-web-deps ensure-web-dist
+
+help:
+	@printf '%s\n' 'Targets: bootstrap, hooks-install, hooks-doctor, hooks-uninstall, fmt, check, build, cross-build'
+
+bootstrap:
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) $(GO) version
+	@node --version
+	@test "$$($(PNPM) --version)" = "11.13.0" || { printf '%s\n' 'pnpm 11.13.0 is required'; exit 1; }
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) mod download
+	@cd tools/lefthook && GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) mod download all
+	@mkdir -p tools/lefthook/bin
+	@cd tools/lefthook && GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off GOPROXY=off $(GO) build -mod=readonly -o bin/lefthook github.com/evilmartians/lefthook/v2
+	@$(PNPM) --dir web install --frozen-lockfile
+
+hooks-install:
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) run ./tools/hookctl install
+
+hooks-doctor:
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) run ./tools/hookctl doctor
+
+hooks-uninstall:
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) run ./tools/hookctl uninstall
+
+fmt:
+	@gofmt -w $(GO_FILES)
+	@$(PNPM) --dir web exec eslint --fix .
+
+ensure-web-deps:
+	@test -d web/node_modules || { printf '%s\n' 'web dependencies are unavailable; run make bootstrap'; exit 1; }
+
+ensure-web-dist:
+	@test -d web/dist || { printf '%s\n' 'web output is unavailable; run make build or make check-web'; exit 1; }
+
+check-web: ensure-web-deps
+	@$(PNPM) --dir web run lint
+	@$(PNPM) --dir web run typecheck
+	@$(PNPM) --dir web run test
+	@$(PNPM) --dir web run build
+
+check-go: check-web ensure-web-dist
+	@unformatted="$$(gofmt -l $(GO_FILES))"; test -z "$$unformatted" || { printf '%s\n%s\n' 'Run make fmt; these Go files are not formatted:' "$$unformatted"; exit 1; }
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 $(GO) vet ./...
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 $(GO) test ./...
+
+check-locks: ensure-web-deps
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) mod verify
+	@cd tools/lefthook && GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) mod verify
+	@$(PNPM) --dir web install --frozen-lockfile --offline --ignore-scripts
+
+check-no-bun:
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) run ./tools/check-no-bun
+
+check: check-locks check-no-bun check-go
+
+build: check-web
+	@mkdir -p build
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/ycy ./cmd/ycy
+
+cross-build: check-web
+	@mkdir -p build/cross
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-macos-x64 ./cmd/ycy
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-macos-arm64 ./cmd/ycy
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-linux-x64 ./cmd/ycy
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-linux-arm64 ./cmd/ycy
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-windows-x64.exe ./cmd/ycy
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=windows GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-windows-arm64.exe ./cmd/ycy

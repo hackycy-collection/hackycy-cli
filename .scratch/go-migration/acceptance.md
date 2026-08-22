@@ -3,7 +3,7 @@
 First Go release: `v0.1.0`
 Migration build identity: `0.0.0-dev`
 Roadmap: [Approve the command-by-command migration roadmap](issues/16-approve-command-migration-roadmap.md)
-Status: planning template
+Status: Foundation Gate integrated; later Units and release evidence remain pending
 
 ## Recording rules
 
@@ -33,7 +33,7 @@ Status: planning template
 
 | Migration Unit | State | Owning source | Integration commit and evidence | Native/artifact evidence | Outstanding gates | Compatibility decision |
 | --- | --- | --- | --- | --- | --- | --- |
-| Foundation Gate | pending | Cutover, CLI, embed, layout, hooks | - | - | All selected gates | - |
+| Foundation Gate | integrated | Cutover, CLI, embed, layout, hooks | Cutover Commit (this commit): 2026-08-23 clean staged checkout passed `make bootstrap`, hook install/doctor, `make check`, `make build`, host CLI smoke, `make cross-build`, and the actual Lefthook pre-commit. | macOS arm64 host; Go 1.26.7 with `CGO_ENABLED=0`; all three embedded shells validated at startup; fixed Mach-O x64/arm64, static ELF x64/arm64, and PE x64/arm64 artifacts inspected; host links only system libraries. | Release-accepted Artifact Gate and later applicable native evidence | - |
 | `export env` | pending | Core inventory | - | - | All selected gates | - |
 | `appconfig` foundation | pending | Core inventory | - | - | All selected gates | - |
 | `config fork list` | pending | Core inventory | - | - | All selected gates | - |
