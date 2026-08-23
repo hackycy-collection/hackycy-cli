@@ -58,12 +58,12 @@ func TestConfigForkListStandaloneBinary(t *testing.T) {
 	}
 
 	helpOutput, err := runStandalone(binary, environment, "config", "fork", "--help")
-	if err != nil || !strings.Contains(string(helpOutput), "list") || !strings.Contains(string(helpOutput), "add") || strings.Contains(string(helpOutput), "remove") {
+	if err != nil || !strings.Contains(string(helpOutput), "list") || !strings.Contains(string(helpOutput), "add") || !strings.Contains(string(helpOutput), "remove") {
 		t.Fatalf("fork help = (%v, %q)", err, helpOutput)
 	}
 	missingOutput, err := runStandalone(binary, environment, "config", "fork", "remove")
-	if err == nil || string(missingOutput) != "error: unknown command 'remove'\n" {
-		t.Fatalf("absent sibling = (%v, %q)", err, missingOutput)
+	if err != nil || !strings.Contains(string(missingOutput), "Cancelled") {
+		t.Fatalf("remove EOF cancellation = (%v, %q)", err, missingOutput)
 	}
 }
 
@@ -151,6 +151,88 @@ func TestConfigForkAddStandaloneBinary(t *testing.T) {
 	failureOutput, err := runStandaloneWithInput(binary, failureEnvironment, "work\ngitlab.example\n1\n1\nsecret-token\n", "config", "fork", "add")
 	if err == nil || !strings.Contains(string(failureOutput), "error:") || strings.Contains(string(failureOutput), "added successfully") || strings.Contains(string(failureOutput), "secret-token") {
 		t.Fatalf("save failure = (%v, %q)", err, failureOutput)
+	}
+}
+
+func TestConfigForkRemoveStandaloneBinary(t *testing.T) {
+	root := repositoryRoot(t)
+	binary := filepath.Join(t.TempDir(), "ycy")
+	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
+	build.Dir = root
+	build.Env = environmentWith(map[string]string{
+		"CGO_ENABLED": "0",
+		"GOTOOLCHAIN": "go1.26.7",
+		"GOWORK":      "off",
+	})
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build standalone binary: %v\n%s", err, output)
+	}
+
+	home := t.TempDir()
+	environment := environmentWith(map[string]string{"HOME": home, "USERPROFILE": ""})
+	if output, err := runStandaloneWithInput(binary, environment, "work\ngitlab.example\n1\n1\nwork-token\n", "config", "fork", "add"); err != nil || strings.Contains(string(output), "work-token") {
+		t.Fatalf("add work = (%v, %q)", err, output)
+	}
+	if output, err := runStandaloneWithInput(binary, environment, "keep\ngithub.example\n2\n2\nkeep-token\n", "config", "fork", "add"); err != nil || strings.Contains(string(output), "keep-token") {
+		t.Fatalf("add keep = (%v, %q)", err, output)
+	}
+
+	output, err := runStandaloneWithInput(binary, environment, "1\ny\n", "config", "fork", "remove")
+	if err != nil || !strings.Contains(string(output), "Instance work removed") || strings.Contains(string(output), "work-token") {
+		t.Fatalf("confirmed removal = (%v, %q)", err, output)
+	}
+	contents, err := os.ReadFile(filepath.Join(home, ".ycy-cli", "config.json"))
+	if err != nil {
+		t.Fatalf("read removed config: %v", err)
+	}
+	var document standaloneForkDocument
+	if err := json.Unmarshal(contents, &document); err != nil {
+		t.Fatalf("decode removed config: %v", err)
+	}
+	if _, found := document.Fork.Instances["work"]; found {
+		t.Fatalf("removed config still contains work: %q", contents)
+	}
+	if _, found := document.Fork.Instances["keep"]; !found || strings.Contains(string(contents), "keep-token") {
+		t.Fatalf("removed config did not retain encrypted keep instance: %q", contents)
+	}
+
+	listOutput, err := runStandalone(binary, environment, "config", "fork", "list")
+	if err != nil || !strings.Contains(string(listOutput), "keep") || strings.Contains(string(listOutput), "work-token") || strings.Contains(string(listOutput), "keep-token") {
+		t.Fatalf("list after removal = (%v, %q)", err, listOutput)
+	}
+
+	beforeCancellation := string(contents)
+	cancelledOutput, err := runStandaloneWithInput(binary, environment, "", "config", "fork", "remove")
+	if err != nil || !strings.Contains(string(cancelledOutput), "Cancelled") {
+		t.Fatalf("selection cancellation = (%v, %q)", err, cancelledOutput)
+	}
+	contents, err = os.ReadFile(filepath.Join(home, ".ycy-cli", "config.json"))
+	if err != nil || string(contents) != beforeCancellation {
+		t.Fatalf("selection cancellation changed config = (%v, %q)", err, contents)
+	}
+
+	declinedOutput, err := runStandaloneWithInput(binary, environment, "1\n\n", "config", "fork", "remove")
+	if err != nil || !strings.Contains(string(declinedOutput), "Cancelled") {
+		t.Fatalf("negative confirmation = (%v, %q)", err, declinedOutput)
+	}
+	contents, err = os.ReadFile(filepath.Join(home, ".ycy-cli", "config.json"))
+	if err != nil || string(contents) != beforeCancellation {
+		t.Fatalf("negative confirmation changed config = (%v, %q)", err, contents)
+	}
+
+	emptyHome := t.TempDir()
+	emptyEnvironment := environmentWith(map[string]string{"HOME": emptyHome, "USERPROFILE": ""})
+	emptyOutput, err := runStandalone(binary, emptyEnvironment, "config", "fork", "remove")
+	if err != nil || !strings.Contains(string(emptyOutput), "No instances configured") || !strings.Contains(string(emptyOutput), "Nothing to remove") {
+		t.Fatalf("empty removal = (%v, %q)", err, emptyOutput)
+	}
+	if _, err := os.Stat(filepath.Join(emptyHome, ".ycy-cli", "config.json")); !os.IsNotExist(err) {
+		t.Fatalf("empty removal created config: %v", err)
+	}
+
+	helpOutput, err := runStandalone(binary, environment, "config", "fork", "--help")
+	if err != nil || !strings.Contains(string(helpOutput), "list") || !strings.Contains(string(helpOutput), "add") || !strings.Contains(string(helpOutput), "remove") {
+		t.Fatalf("fork help = (%v, %q)", err, helpOutput)
 	}
 }
 

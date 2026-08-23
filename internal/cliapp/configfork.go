@@ -13,6 +13,9 @@ type ConfigForkListHandler func(context.Context, configfork.Input) (configfork.R
 // ConfigForkAddHandler is the fixed typed handler for config fork add.
 type ConfigForkAddHandler func(context.Context, configfork.AddRequest) (configfork.AddResult, error)
 
+// ConfigForkRemoveHandler is the fixed typed handler for config fork remove.
+type ConfigForkRemoveHandler func(context.Context, configfork.RemoveRequest) (configfork.RemoveResult, error)
+
 func (app *App) registerConfigFork(root *cobra.Command, configureLogging func() error) {
 	configCommand := &cobra.Command{
 		Use:   "config",
@@ -65,6 +68,21 @@ func (app *App) registerConfigFork(root *cobra.Command, configureLogging func() 
 			},
 		}
 		forkCommand.AddCommand(addCommand)
+	}
+	if app.configForkRemove != nil {
+		removeCommand := &cobra.Command{
+			Use:   "remove",
+			Short: "Remove a provider instance",
+			Args:  cobra.NoArgs,
+			PreRunE: func(*cobra.Command, []string) error {
+				return configureLogging()
+			},
+			RunE: func(command *cobra.Command, _ []string) error {
+				_, err := app.configForkRemove(command.Context(), configfork.RemoveRequest{})
+				return err
+			},
+		}
+		forkCommand.AddCommand(removeCommand)
 	}
 	configCommand.AddCommand(forkCommand)
 	root.AddCommand(configCommand)

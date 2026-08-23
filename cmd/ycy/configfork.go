@@ -40,3 +40,22 @@ func newConfigForkAddHandler(input io.Reader, output io.Writer) cliapp.ConfigFor
 		return module.Run(context, request)
 	}
 }
+
+func newConfigForkRemoveHandler(input io.Reader, output io.Writer) cliapp.ConfigForkRemoveHandler {
+	return func(context context.Context, request configfork.RemoveRequest) (configfork.RemoveResult, error) {
+		store, err := appconfig.New(appconfig.Dependencies{})
+		if err != nil {
+			return configfork.RemoveResult{}, err
+		}
+		module, err := configfork.NewRemove(configfork.RemoveDependencies{
+			Reader:    store,
+			Prompter:  newTerminalForkRemovePrompter(input, output),
+			Writer:    store,
+			Presenter: terminalForkRemovePresenter{output: output},
+		})
+		if err != nil {
+			return configfork.RemoveResult{}, err
+		}
+		return module.Run(context, request)
+	}
+}

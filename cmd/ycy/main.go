@@ -30,10 +30,11 @@ func main() {
 		os.Exit(1)
 	}
 	app, err := cliapp.New(cliapp.BuildInfo{Version: version}, cliapp.Dependencies{
-		Logging:        runtime,
-		ExportEnv:      exportEnv.Run,
-		ConfigForkList: newConfigForkListHandler(os.Stdout),
-		ConfigForkAdd:  newConfigForkAddHandler(os.Stdin, os.Stdout),
+		Logging:          runtime,
+		ExportEnv:        exportEnv.Run,
+		ConfigForkList:   newConfigForkListHandler(os.Stdout),
+		ConfigForkAdd:    newConfigForkAddHandler(os.Stdin, os.Stdout),
+		ConfigForkRemove: newConfigForkRemoveHandler(os.Stdin, os.Stdout),
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)
