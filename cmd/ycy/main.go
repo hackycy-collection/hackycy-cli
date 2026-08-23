@@ -23,7 +23,16 @@ func main() {
 	context, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
 	runtime := logging.NewRuntime(logging.Options{Writer: os.Stderr, Color: terminal(os.Stderr)})
-	app, err := cliapp.New(cliapp.BuildInfo{Version: version}, cliapp.Dependencies{Logging: runtime})
+	exportEnv, err := newExportEnvModule(os.Stdin, os.Stdout)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stdout)
+		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
+		os.Exit(1)
+	}
+	app, err := cliapp.New(cliapp.BuildInfo{Version: version}, cliapp.Dependencies{
+		Logging:   runtime,
+		ExportEnv: exportEnv.Run,
+	})
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)
 		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)

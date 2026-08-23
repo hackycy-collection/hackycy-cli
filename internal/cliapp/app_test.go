@@ -3,9 +3,11 @@ package cliapp
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/hackycy/hackycy-cli/internal/commands/exportenv"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 )
 
@@ -60,6 +62,49 @@ func TestPanicMappingRedactsAndAddsDebugStack(t *testing.T) {
 	})
 	if outcome.Code != 1 || output.String() != "\n" || strings.Contains(errors.String(), "not-for-output") || !strings.Contains(errors.String(), "token=[REDACTED]") || !strings.Contains(errors.String(), "goroutine") {
 		t.Fatalf("panic outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
+	}
+}
+
+func TestExportEnvBindingPassesTypedInputAndGlobalLogLevel(t *testing.T) {
+	output := &bytes.Buffer{}
+	errors := &bytes.Buffer{}
+	runtime := logging.NewRuntime(logging.Options{Writer: errors})
+	var inputs []exportenv.Input
+	app, err := New(BuildInfo{Version: "0.0.0-dev"}, Dependencies{
+		Out:     output,
+		Err:     errors,
+		Logging: runtime,
+		ExportEnv: func(_ context.Context, input exportenv.Input) (exportenv.Result, error) {
+			inputs = append(inputs, input)
+			return exportenv.Result{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New returned an error: %v", err)
+	}
+
+	outcome := app.Execute(context.Background(), []string{
+		"--log-level", "warn",
+		"export", "env", "project",
+		"-e", "production",
+		"--merge",
+		"-o", "output.json",
+	})
+
+	if outcome.Code != 0 || outcome.Err != nil {
+		t.Fatalf("outcome = %#v, stderr = %q", outcome, errors.String())
+	}
+	want := []exportenv.Input{{
+		Directory:   "project",
+		Environment: "production",
+		Merge:       true,
+		Output:      "output.json",
+	}}
+	if !reflect.DeepEqual(inputs, want) {
+		t.Fatalf("inputs = %#v, want %#v", inputs, want)
+	}
+	if runtime.Level() != logging.Warn {
+		t.Fatalf("log level = %v, want %v", runtime.Level(), logging.Warn)
 	}
 }
 

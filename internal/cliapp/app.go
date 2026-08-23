@@ -24,6 +24,7 @@ type Dependencies struct {
 	Err         io.Writer
 	Environment func(string) string
 	Logging     *logging.Runtime
+	ExportEnv   ExportEnvHandler
 }
 
 // Outcome leaves process exit ownership with cmd/ycy.
@@ -39,6 +40,7 @@ type App struct {
 	err         io.Writer
 	environment func(string) string
 	logging     *logging.Runtime
+	exportEnv   ExportEnvHandler
 }
 
 // New creates the current foundation command tree. Business leaves are added only with their own units.
@@ -64,6 +66,7 @@ func New(build BuildInfo, dependencies Dependencies) (*App, error) {
 		err:         dependencies.Err,
 		environment: dependencies.Environment,
 		logging:     dependencies.Logging,
+		exportEnv:   dependencies.ExportEnv,
 	}, nil
 }
 
@@ -123,6 +126,11 @@ func (app *App) rootCommand() *cobra.Command {
 	root.SetErr(app.err)
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, or error")
 	root.Flags().BoolVarP(&showVersion, "version", "V", false, "Print version")
+	if app.exportEnv != nil {
+		app.registerExportEnv(root, func() error {
+			return app.configureLogging(logLevel)
+		})
+	}
 	return root
 }
 
