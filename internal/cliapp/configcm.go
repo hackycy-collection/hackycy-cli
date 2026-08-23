@@ -19,8 +19,11 @@ type ConfigCMUseHandler func(context.Context, configcm.UseRequest) (configcm.Use
 // ConfigCMSetHandler is the fixed typed handler for config cm set.
 type ConfigCMSetHandler func(context.Context, configcm.SetRequest) (configcm.SetResult, error)
 
+// ConfigCMRemoveHandler is the fixed typed handler for config cm remove.
+type ConfigCMRemoveHandler func(context.Context, configcm.RemoveRequest) (configcm.RemoveResult, error)
+
 func (app *App) registerConfigCM(configCommand *cobra.Command, configureLogging func() error) {
-	if app.configCMList == nil && app.configCMAdd == nil && app.configCMUse == nil && app.configCMSet == nil {
+	if app.configCMList == nil && app.configCMAdd == nil && app.configCMUse == nil && app.configCMSet == nil && app.configCMRemove == nil {
 		return
 	}
 	cmCommand := &cobra.Command{
@@ -97,6 +100,21 @@ func (app *App) registerConfigCM(configCommand *cobra.Command, configureLogging 
 			},
 		}
 		cmCommand.AddCommand(setCommand)
+	}
+	if app.configCMRemove != nil {
+		removeCommand := &cobra.Command{
+			Use:   "remove <profile>",
+			Short: "Remove a commit message provider profile",
+			Args:  cobra.ExactArgs(1),
+			PreRunE: func(*cobra.Command, []string) error {
+				return configureLogging()
+			},
+			RunE: func(command *cobra.Command, arguments []string) error {
+				_, err := app.configCMRemove(command.Context(), configcm.RemoveRequest{Profile: arguments[0]})
+				return err
+			},
+		}
+		cmCommand.AddCommand(removeCommand)
 	}
 	configCommand.AddCommand(cmCommand)
 }

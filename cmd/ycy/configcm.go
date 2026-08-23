@@ -87,3 +87,21 @@ func newConfigCMSetHandler(output io.Writer) cliapp.ConfigCMSetHandler {
 		return module.Run(context, request)
 	}
 }
+
+func newConfigCMRemoveHandler(input io.Reader, output io.Writer) cliapp.ConfigCMRemoveHandler {
+	return func(context context.Context, request configcm.RemoveRequest) (configcm.RemoveResult, error) {
+		store, err := appconfig.New(appconfig.Dependencies{})
+		if err != nil {
+			return configcm.RemoveResult{}, err
+		}
+		module, err := configcm.NewRemove(configcm.RemoveDependencies{
+			Prompter:  newTerminalCMRemovePrompter(input, output),
+			Writer:    store,
+			Presenter: terminalCMPresenter{output: output},
+		})
+		if err != nil {
+			return configcm.RemoveResult{}, err
+		}
+		return module.Run(context, request)
+	}
+}
