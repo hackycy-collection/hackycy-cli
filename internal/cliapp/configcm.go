@@ -22,8 +22,11 @@ type ConfigCMSetHandler func(context.Context, configcm.SetRequest) (configcm.Set
 // ConfigCMRemoveHandler is the fixed typed handler for config cm remove.
 type ConfigCMRemoveHandler func(context.Context, configcm.RemoveRequest) (configcm.RemoveResult, error)
 
+// ConfigCMTestHandler is the fixed typed handler for config cm test.
+type ConfigCMTestHandler func(context.Context, configcm.TestRequest) (configcm.TestResult, error)
+
 func (app *App) registerConfigCM(configCommand *cobra.Command, configureLogging func() error) {
-	if app.configCMList == nil && app.configCMAdd == nil && app.configCMUse == nil && app.configCMSet == nil && app.configCMRemove == nil {
+	if app.configCMList == nil && app.configCMAdd == nil && app.configCMUse == nil && app.configCMSet == nil && app.configCMRemove == nil && app.configCMTest == nil {
 		return
 	}
 	cmCommand := &cobra.Command{
@@ -115,6 +118,25 @@ func (app *App) registerConfigCM(configCommand *cobra.Command, configureLogging 
 			},
 		}
 		cmCommand.AddCommand(removeCommand)
+	}
+	if app.configCMTest != nil {
+		testCommand := &cobra.Command{
+			Use:   "test [profile]",
+			Short: "Test a commit message provider profile",
+			Args:  cobra.MaximumNArgs(1),
+			PreRunE: func(*cobra.Command, []string) error {
+				return configureLogging()
+			},
+			RunE: func(command *cobra.Command, arguments []string) error {
+				request := configcm.TestRequest{}
+				if len(arguments) == 1 {
+					request.Profile = arguments[0]
+				}
+				_, err := app.configCMTest(command.Context(), request)
+				return err
+			},
+		}
+		cmCommand.AddCommand(testCommand)
 	}
 	configCommand.AddCommand(cmCommand)
 }

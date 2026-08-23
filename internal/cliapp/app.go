@@ -33,6 +33,7 @@ type Dependencies struct {
 	ConfigCMUse      ConfigCMUseHandler
 	ConfigCMSet      ConfigCMSetHandler
 	ConfigCMRemove   ConfigCMRemoveHandler
+	ConfigCMTest     ConfigCMTestHandler
 }
 
 // Outcome leaves process exit ownership with cmd/ycy.
@@ -57,6 +58,7 @@ type App struct {
 	configCMUse      ConfigCMUseHandler
 	configCMSet      ConfigCMSetHandler
 	configCMRemove   ConfigCMRemoveHandler
+	configCMTest     ConfigCMTestHandler
 }
 
 // New creates the current foundation command tree. Business leaves are added only with their own units.
@@ -91,6 +93,7 @@ func New(build BuildInfo, dependencies Dependencies) (*App, error) {
 		configCMUse:      dependencies.ConfigCMUse,
 		configCMSet:      dependencies.ConfigCMSet,
 		configCMRemove:   dependencies.ConfigCMRemove,
+		configCMTest:     dependencies.ConfigCMTest,
 	}, nil
 }
 
@@ -155,7 +158,7 @@ func (app *App) rootCommand() *cobra.Command {
 			return app.configureLogging(logLevel)
 		})
 	}
-	if app.configForkList != nil || app.configForkAdd != nil || app.configForkRemove != nil || app.configCMList != nil || app.configCMAdd != nil || app.configCMUse != nil || app.configCMSet != nil || app.configCMRemove != nil {
+	if app.configForkList != nil || app.configForkAdd != nil || app.configForkRemove != nil || app.configCMList != nil || app.configCMAdd != nil || app.configCMUse != nil || app.configCMSet != nil || app.configCMRemove != nil || app.configCMTest != nil {
 		app.registerConfig(root, func() error {
 			return app.configureLogging(logLevel)
 		})

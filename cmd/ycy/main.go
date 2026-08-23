@@ -40,6 +40,7 @@ func main() {
 		ConfigCMUse:      newConfigCMUseHandler(os.Stdout),
 		ConfigCMSet:      newConfigCMSetHandler(os.Stdout),
 		ConfigCMRemove:   newConfigCMRemoveHandler(os.Stdin, os.Stdout),
+		ConfigCMTest:     newConfigCMTestHandler(os.Stdout),
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)
