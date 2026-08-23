@@ -25,7 +25,12 @@ func (app *App) registerGit(root *cobra.Command, configureLogging func() error) 
 			return errHelpRequested
 		},
 	}
-	git.AddCommand(app.gitHeatCommand(configureLogging))
+	if app.gitHeat != nil {
+		git.AddCommand(app.gitHeatCommand(configureLogging))
+	}
+	if app.gitPulse != nil {
+		git.AddCommand(app.gitPulseCommand(configureLogging))
+	}
 	root.AddCommand(git)
 }
 

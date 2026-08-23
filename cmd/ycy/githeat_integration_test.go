@@ -65,16 +65,12 @@ func TestGitHeatStandaloneBinaryUsesAContainedGitRepository(t *testing.T) {
 	}
 
 	helpOutput, err := runGitHeatStandalone(binary, nested, environment, "git", "--help")
-	if err != nil || !strings.Contains(string(helpOutput), "heat") || strings.Contains(string(helpOutput), "pulse") {
+	if err != nil || !strings.Contains(string(helpOutput), "heat") || !strings.Contains(string(helpOutput), "pulse") {
 		t.Fatalf("git help = (%v, %q)", err, helpOutput)
 	}
 	invalidOutput, err := runGitHeatStandalone(binary, nested, environment, "git", "heat", "-n", "1", "-d", "1")
 	if exitCode(err) != 1 || !strings.Contains(string(invalidOutput), "Please use either -n/--limit or -d/--days, not both.") {
 		t.Fatalf("mutually exclusive ranges = (%v, %q)", err, invalidOutput)
-	}
-	unknownOutput, err := runGitHeatStandalone(binary, nested, environment, "git", "pulse")
-	if exitCode(err) != 1 || !strings.Contains(string(unknownOutput), "unknown command 'pulse'") {
-		t.Fatalf("absent sibling = (%v, %q)", err, unknownOutput)
 	}
 }
 

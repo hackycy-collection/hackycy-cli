@@ -46,6 +46,12 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
 		os.Exit(1)
 	}
+	gitPulseModule, err := newGitPulseModule(os.Stdin, os.Stdout)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stdout)
+		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
+		os.Exit(1)
+	}
 	app, err := cliapp.New(cliapp.BuildInfo{Version: version}, cliapp.Dependencies{
 		Logging:          runtime,
 		ExportEnv:        exportEnv.Run,
@@ -61,6 +67,7 @@ func main() {
 		RM:               rmModule.Run,
 		Run:              runModule.Run,
 		GitHeat:          gitHeatModule.Run,
+		GitPulse:         gitPulseModule.Run,
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)
