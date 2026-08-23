@@ -16,18 +16,7 @@ type ConfigForkAddHandler func(context.Context, configfork.AddRequest) (configfo
 // ConfigForkRemoveHandler is the fixed typed handler for config fork remove.
 type ConfigForkRemoveHandler func(context.Context, configfork.RemoveRequest) (configfork.RemoveResult, error)
 
-func (app *App) registerConfigFork(root *cobra.Command, configureLogging func() error) {
-	configCommand := &cobra.Command{
-		Use:   "config",
-		Short: "Manage ycy configuration",
-		Args:  cobra.NoArgs,
-		RunE: func(command *cobra.Command, _ []string) error {
-			if err := command.Help(); err != nil {
-				return err
-			}
-			return errHelpRequested
-		},
-	}
+func (app *App) registerConfigFork(configCommand *cobra.Command, configureLogging func() error) {
 	forkCommand := &cobra.Command{
 		Use:   "fork",
 		Short: "Manage git fork provider instances",
@@ -85,5 +74,4 @@ func (app *App) registerConfigFork(root *cobra.Command, configureLogging func() 
 		forkCommand.AddCommand(removeCommand)
 	}
 	configCommand.AddCommand(forkCommand)
-	root.AddCommand(configCommand)
 }

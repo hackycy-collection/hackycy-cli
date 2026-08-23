@@ -35,6 +35,7 @@ func main() {
 		ConfigForkList:   newConfigForkListHandler(os.Stdout),
 		ConfigForkAdd:    newConfigForkAddHandler(os.Stdin, os.Stdout),
 		ConfigForkRemove: newConfigForkRemoveHandler(os.Stdin, os.Stdout),
+		ConfigCMList:     newConfigCMListHandler(os.Stdout),
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)
