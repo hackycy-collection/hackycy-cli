@@ -38,6 +38,7 @@ func main() {
 		ConfigCMList:     newConfigCMListHandler(os.Stdout),
 		ConfigCMAdd:      newConfigCMAddHandler(os.Stdin, os.Stdout),
 		ConfigCMUse:      newConfigCMUseHandler(os.Stdout),
+		ConfigCMSet:      newConfigCMSetHandler(os.Stdout),
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)

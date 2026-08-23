@@ -168,9 +168,12 @@ type standaloneCMConfigDocument struct {
 }
 
 type standaloneCMProfileData struct {
-	BaseURL string `json:"baseURL"`
-	Model   string `json:"model"`
-	APIKey  string `json:"apiKey"`
+	BaseURL         string  `json:"baseURL"`
+	Model           string  `json:"model"`
+	APIKey          string  `json:"apiKey"`
+	Temperature     float64 `json:"temperature"`
+	TimeoutMS       int     `json:"timeoutMs"`
+	MaxOutputTokens int     `json:"maxOutputTokens"`
 }
 
 func standaloneCMConfig(t *testing.T, contents []byte) standaloneCMConfigDocument {

@@ -211,6 +211,191 @@ func TestSetDefaultCMProfilePersistsSelectionWithoutChangingSharedConfiguration(
 	}
 }
 
+func TestSetCMProfileStringFieldsNormalizeAndPreserveSharedConfiguration(t *testing.T) {
+	store := semanticStore(t, nil)
+	if err := store.SaveForkInstance("github", ForkInput{Host: "github.com", Type: "github", Token: "fork-token"}); err != nil {
+		t.Fatalf("SaveForkInstance() returned an error: %v", err)
+	}
+	if err := store.AddCMProfile("work", "https://old.example/v1", "old-model", "work-key"); err != nil {
+		t.Fatalf("AddCMProfile() returned an error: %v", err)
+	}
+	if err := store.SetCMProfileValue("work", "baseURL", " not a URL/// "); err != nil {
+		t.Fatalf("SetCMProfileValue(baseURL) returned an error: %v", err)
+	}
+	if err := store.SetCMProfileValue("work", "model", "  "); err != nil {
+		t.Fatalf("SetCMProfileValue(model) returned an error: %v", err)
+	}
+
+	contents, err := os.ReadFile(store.configPath())
+	if err != nil {
+		t.Fatalf("read persisted config: %v", err)
+	}
+	var persisted struct {
+		Fork struct {
+			Instances map[string]struct {
+				Host string `json:"host"`
+			} `json:"instances"`
+		} `json:"fork"`
+		CM struct {
+			DefaultProfile string `json:"defaultProfile"`
+			Profiles       map[string]struct {
+				BaseURL string `json:"baseURL"`
+				Model   string `json:"model"`
+				APIKey  string `json:"apiKey"`
+			} `json:"profiles"`
+		} `json:"cm"`
+	}
+	if err := json.Unmarshal(contents, &persisted); err != nil {
+		t.Fatalf("decode persisted config: %v", err)
+	}
+	profile := persisted.CM.Profiles["work"]
+	if profile.BaseURL != "not a URL" || profile.Model != "" || profile.APIKey == "work-key" {
+		t.Fatalf("persisted work profile = %#v", profile)
+	}
+	if persisted.CM.DefaultProfile != "work" || persisted.Fork.Instances["github"].Host != "github.com" {
+		t.Fatalf("persisted shared configuration = %#v", persisted)
+	}
+}
+
+func TestSetCMProfileAPIKeyEncryptsAndPreservesExistingFields(t *testing.T) {
+	store := semanticStore(t, nil)
+	if err := store.SaveForkInstance("github", ForkInput{Host: "github.com", Type: "github", Token: "fork-token"}); err != nil {
+		t.Fatalf("SaveForkInstance() returned an error: %v", err)
+	}
+	if err := store.AddCMProfile("work", "https://provider.example/v1", "work-model", "initial-api-key"); err != nil {
+		t.Fatalf("AddCMProfile() returned an error: %v", err)
+	}
+	if err := store.SetCMProfileValue("work", "apiKey", "rotated-api-key"); err != nil {
+		t.Fatalf("SetCMProfileValue(apiKey) returned an error: %v", err)
+	}
+
+	resolved, err := store.ResolveCMProfile(CMResolveOptions{ProfileName: "work"})
+	if err != nil || resolved.BaseURL != "https://provider.example/v1" || resolved.Model != "work-model" || resolved.APIKey != "rotated-api-key" {
+		t.Fatalf("ResolveCMProfile() = (%#v, %v)", resolved, err)
+	}
+	contents, err := os.ReadFile(store.configPath())
+	if err != nil {
+		t.Fatalf("read persisted config: %v", err)
+	}
+	for _, secret := range []string{"initial-api-key", "rotated-api-key", "fork-token"} {
+		if strings.Contains(string(contents), secret) {
+			t.Fatalf("persisted config contains plaintext %q", secret)
+		}
+	}
+	instances, err := store.ListForkInstances()
+	if err != nil || len(instances) != 1 || instances[0].Name != "github" || instances[0].Host != "github.com" {
+		t.Fatalf("ListForkInstances() = (%#v, %v)", instances, err)
+	}
+}
+
+func TestSetCMProfileNumericFieldsMatchLegacyParserBoundaries(t *testing.T) {
+	for _, update := range []struct {
+		name        string
+		key         string
+		value       string
+		temperature float64
+		timeout     float64
+		maximum     float64
+	}{
+		{name: "temperature accepts empty Number input", key: "temperature", value: "", temperature: 0, timeout: 300000, maximum: 1000},
+		{name: "temperature accepts hexadecimal Number input", key: "temperature", value: "0x2", temperature: 2, timeout: 300000, maximum: 1000},
+		{name: "temperature accepts binary Number input", key: "temperature", value: "0b1", temperature: 1, timeout: 300000, maximum: 1000},
+		{name: "temperature accepts octal Number input", key: "temperature", value: "0o2", temperature: 2, timeout: 300000, maximum: 1000},
+		{name: "temperature accepts BOM whitespace", key: "temperature", value: "\uFEFF1.25", temperature: 1.25, timeout: 300000, maximum: 1000},
+		{name: "timeout accepts decimal prefix", key: "timeoutMs", value: "+1000suffix", temperature: 0.2, timeout: 1000, maximum: 1000},
+		{name: "timeout accepts fractional prefix", key: "timeoutMs", value: "1001.9", temperature: 0.2, timeout: 1001, maximum: 1000},
+		{name: "timeout accepts BOM whitespace", key: "timeoutMs", value: "\uFEFF1002tail", temperature: 0.2, timeout: 1002, maximum: 1000},
+		{name: "maximum accepts decimal prefix", key: "maxOutputTokens", value: "32suffix", temperature: 0.2, timeout: 300000, maximum: 32},
+		{name: "maximum accepts fractional prefix", key: "maxOutputTokens", value: "33.9", temperature: 0.2, timeout: 300000, maximum: 33},
+	} {
+		update := update
+		t.Run(update.name, func(t *testing.T) {
+			store := semanticStore(t, nil)
+			if err := store.AddCMProfile("work", "https://provider.example/v1", "work-model", "work-key"); err != nil {
+				t.Fatalf("AddCMProfile() returned an error: %v", err)
+			}
+			if err := store.SetCMProfileValue("work", update.key, update.value); err != nil {
+				t.Fatalf("SetCMProfileValue(%q, %q) returned an error: %v", update.key, update.value, err)
+			}
+			resolved, err := store.ResolveCMProfile(CMResolveOptions{ProfileName: "work"})
+			if err != nil || resolved.Temperature != update.temperature || resolved.TimeoutMS != update.timeout || resolved.MaxOutputTokens != update.maximum {
+				t.Fatalf("ResolveCMProfile() = (%#v, %v)", resolved, err)
+			}
+		})
+	}
+
+	store := semanticStore(t, nil)
+	if err := store.AddCMProfile("work", "https://provider.example/v1", "work-model", "work-key"); err != nil {
+		t.Fatalf("AddCMProfile() returned an error: %v", err)
+	}
+	for _, update := range []struct {
+		key   string
+		value string
+		want  string
+	}{
+		{key: "temperature", value: "-0.1", want: "temperature must be a number between 0 and 2"},
+		{key: "temperature", value: "2.0001", want: "temperature must be a number between 0 and 2"},
+		{key: "temperature", value: "1suffix", want: "temperature must be a number between 0 and 2"},
+		{key: "temperature", value: "Infinity", want: "temperature must be a number between 0 and 2"},
+		{key: "timeoutMs", value: "999suffix", want: "timeoutMs must be an integer greater than or equal to 1000"},
+		{key: "timeoutMs", value: "no-number", want: "timeoutMs must be an integer greater than or equal to 1000"},
+		{key: "maxOutputTokens", value: "31.9", want: "maxOutputTokens must be an integer greater than or equal to 32"},
+		{key: "maxOutputTokens", value: "no-number", want: "maxOutputTokens must be an integer greater than or equal to 32"},
+	} {
+		err := store.SetCMProfileValue("work", update.key, update.value)
+		if err == nil || err.Error() != update.want {
+			t.Fatalf("SetCMProfileValue(%q, %q) error = %v, want %q", update.key, update.value, err, update.want)
+		}
+	}
+}
+
+func TestSetCMProfileFailuresDoNotPublishOrMutateConfiguration(t *testing.T) {
+	t.Run("missing profile does not publish configuration", func(t *testing.T) {
+		store := semanticStore(t, nil)
+
+		err := store.SetCMProfileValue("missing", "model", "next")
+		if err == nil || err.Error() != "CM profile not found: missing" {
+			t.Fatalf("SetCMProfileValue() error = %v", err)
+		}
+		if _, err := os.Stat(store.configPath()); !os.IsNotExist(err) {
+			t.Fatalf("missing profile update published configuration: %v", err)
+		}
+	})
+
+	t.Run("invalid updates leave the persisted document unchanged", func(t *testing.T) {
+		store := semanticStore(t, nil)
+		if err := store.AddCMProfile("work", "https://provider.example/v1", "work-model", "work-key"); err != nil {
+			t.Fatalf("AddCMProfile() returned an error: %v", err)
+		}
+		before, err := os.ReadFile(store.configPath())
+		if err != nil {
+			t.Fatalf("read config before invalid updates: %v", err)
+		}
+		for _, update := range []struct {
+			key   string
+			value string
+			want  string
+		}{
+			{key: "unsupported", value: "value", want: "Unsupported key. Use baseURL, model, apiKey, temperature, timeoutMs, or maxOutputTokens."},
+			{key: "temperature", value: "2.1", want: "temperature must be a number between 0 and 2"},
+			{key: "timeoutMs", value: "999", want: "timeoutMs must be an integer greater than or equal to 1000"},
+			{key: "maxOutputTokens", value: "31", want: "maxOutputTokens must be an integer greater than or equal to 32"},
+		} {
+			err := store.SetCMProfileValue("work", update.key, update.value)
+			if err == nil || err.Error() != update.want {
+				t.Fatalf("SetCMProfileValue(%q, %q) error = %v, want %q", update.key, update.value, err, update.want)
+			}
+		}
+		after, err := os.ReadFile(store.configPath())
+		if err != nil {
+			t.Fatalf("read config after invalid updates: %v", err)
+		}
+		if string(after) != string(before) {
+			t.Fatalf("invalid updates changed config\nbefore: %s\nafter: %s", before, after)
+		}
+	})
+}
+
 func TestSetDefaultCMProfileMissingDoesNotPublishConfiguration(t *testing.T) {
 	store := semanticStore(t, nil)
 

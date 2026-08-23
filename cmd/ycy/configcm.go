@@ -70,3 +70,20 @@ func newConfigCMUseHandler(output io.Writer) cliapp.ConfigCMUseHandler {
 		return module.Run(context, request)
 	}
 }
+
+func newConfigCMSetHandler(output io.Writer) cliapp.ConfigCMSetHandler {
+	return func(context context.Context, request configcm.SetRequest) (configcm.SetResult, error) {
+		store, err := appconfig.New(appconfig.Dependencies{})
+		if err != nil {
+			return configcm.SetResult{}, err
+		}
+		module, err := configcm.NewSet(configcm.SetDependencies{
+			Writer:    store,
+			Presenter: terminalCMPresenter{output: output},
+		})
+		if err != nil {
+			return configcm.SetResult{}, err
+		}
+		return module.Run(context, request)
+	}
+}

@@ -281,25 +281,37 @@ func parseCMEnvironmentNumber(value string) (float64, bool) {
 }
 
 func parseFiniteJavaScriptNumber(value string) (float64, bool) {
-	trimmed := strings.TrimSpace(value)
+	trimmed := trimJavaScriptWhitespace(value)
 	if trimmed == "" {
 		return 0, true
+	}
+	if len(trimmed) > 2 && trimmed[0] == '0' {
+		base := 0
+		switch trimmed[1] {
+		case 'x', 'X':
+			base = 16
+		case 'b', 'B':
+			base = 2
+		case 'o', 'O':
+			base = 8
+		}
+		if base != 0 {
+			integer, err := strconv.ParseUint(trimmed[2:], base, 64)
+			if err == nil {
+				return float64(integer), true
+			}
+			return 0, false
+		}
 	}
 	parsed, err := strconv.ParseFloat(trimmed, 64)
 	if err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
 		return parsed, true
 	}
-	if strings.HasPrefix(trimmed, "0x") || strings.HasPrefix(trimmed, "0X") {
-		integer, integerErr := strconv.ParseUint(trimmed[2:], 16, 64)
-		if integerErr == nil {
-			return float64(integer), true
-		}
-	}
 	return 0, false
 }
 
 func parseIntegerPrefix(value string) (int, bool) {
-	trimmed := strings.TrimLeftFunc(value, unicode.IsSpace)
+	trimmed := trimJavaScriptWhitespace(value)
 	if trimmed == "" {
 		return 0, false
 	}
@@ -319,4 +331,10 @@ func parseIntegerPrefix(value string) (int, bool) {
 		return 0, false
 	}
 	return int(parsed), true
+}
+
+func trimJavaScriptWhitespace(value string) string {
+	return strings.TrimFunc(value, func(character rune) bool {
+		return unicode.IsSpace(character) || character == '\uFEFF'
+	})
 }

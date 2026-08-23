@@ -16,8 +16,11 @@ type ConfigCMAddHandler func(context.Context, configcm.AddRequest) (configcm.Add
 // ConfigCMUseHandler is the fixed typed handler for config cm use.
 type ConfigCMUseHandler func(context.Context, configcm.UseRequest) (configcm.UseResult, error)
 
+// ConfigCMSetHandler is the fixed typed handler for config cm set.
+type ConfigCMSetHandler func(context.Context, configcm.SetRequest) (configcm.SetResult, error)
+
 func (app *App) registerConfigCM(configCommand *cobra.Command, configureLogging func() error) {
-	if app.configCMList == nil && app.configCMAdd == nil && app.configCMUse == nil {
+	if app.configCMList == nil && app.configCMAdd == nil && app.configCMUse == nil && app.configCMSet == nil {
 		return
 	}
 	cmCommand := &cobra.Command{
@@ -75,6 +78,25 @@ func (app *App) registerConfigCM(configCommand *cobra.Command, configureLogging 
 			},
 		}
 		cmCommand.AddCommand(useCommand)
+	}
+	if app.configCMSet != nil {
+		setCommand := &cobra.Command{
+			Use:   "set <profile> <key> <value>",
+			Short: "Set an optional commit message provider profile value",
+			Args:  cobra.ExactArgs(3),
+			PreRunE: func(*cobra.Command, []string) error {
+				return configureLogging()
+			},
+			RunE: func(command *cobra.Command, arguments []string) error {
+				_, err := app.configCMSet(command.Context(), configcm.SetRequest{
+					Profile: arguments[0],
+					Key:     arguments[1],
+					Value:   arguments[2],
+				})
+				return err
+			},
+		}
+		cmCommand.AddCommand(setCommand)
 	}
 	configCommand.AddCommand(cmCommand)
 }

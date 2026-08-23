@@ -142,3 +142,53 @@ func TestConfigCMUseBindingPassesTypedProfileAndExposesOnlyRealLeaves(t *testing
 		t.Fatalf("cm help outcome = %#v, stdout = %q", outcome, output.String())
 	}
 }
+
+func TestConfigCMSetBindingPassesTypedRequestAndExposesOnlyRealLeaves(t *testing.T) {
+	output := &bytes.Buffer{}
+	errors := &bytes.Buffer{}
+	runtime := logging.NewRuntime(logging.Options{Writer: errors})
+	var requests []configcm.SetRequest
+	app, err := New(BuildInfo{Version: "0.0.0-dev"}, Dependencies{
+		Out:     output,
+		Err:     errors,
+		Logging: runtime,
+		ConfigCMList: func(context.Context, configcm.Input) (configcm.Result, error) {
+			return configcm.Result{}, nil
+		},
+		ConfigCMAdd: func(context.Context, configcm.AddRequest) (configcm.AddResult, error) {
+			return configcm.AddResult{}, nil
+		},
+		ConfigCMUse: func(context.Context, configcm.UseRequest) (configcm.UseResult, error) {
+			return configcm.UseResult{}, nil
+		},
+		ConfigCMSet: func(_ context.Context, request configcm.SetRequest) (configcm.SetResult, error) {
+			requests = append(requests, request)
+			return configcm.SetResult{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() returned an error: %v", err)
+	}
+
+	outcome := app.Execute(context.Background(), []string{"--log-level", "warn", "config", "cm", "set", "work", "timeoutMs", "1000suffix"})
+	if outcome.Code != 0 || outcome.Err != nil {
+		t.Fatalf("set outcome = %#v, stderr = %q", outcome, errors.String())
+	}
+	if got, want := requests, []configcm.SetRequest{{Profile: "work", Key: "timeoutMs", Value: "1000suffix"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("set requests = %#v, want %#v", got, want)
+	}
+	if runtime.Level() != logging.Warn {
+		t.Fatalf("log level = %v, want %v", runtime.Level(), logging.Warn)
+	}
+
+	output.Reset()
+	errors.Reset()
+	if outcome := app.Execute(context.Background(), []string{"config", "cm", "set", "work", "model"}); outcome.Code != 1 || len(requests) != 1 || !strings.Contains(errors.String(), "accepts 3 arg(s), received 2") {
+		t.Fatalf("missing set operand outcome = %#v, requests = %#v, stderr = %q", outcome, requests, errors.String())
+	}
+	output.Reset()
+	errors.Reset()
+	if outcome := app.Execute(context.Background(), []string{"config", "cm", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "list") || !strings.Contains(output.String(), "add") || !strings.Contains(output.String(), "use") || !strings.Contains(output.String(), "set") || strings.Contains(output.String(), "remove") || strings.Contains(output.String(), "test") {
+		t.Fatalf("cm help outcome = %#v, stdout = %q", outcome, output.String())
+	}
+}
