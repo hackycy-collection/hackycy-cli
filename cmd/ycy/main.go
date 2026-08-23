@@ -33,6 +33,7 @@ func main() {
 		Logging:        runtime,
 		ExportEnv:      exportEnv.Run,
 		ConfigForkList: newConfigForkListHandler(os.Stdout),
+		ConfigForkAdd:  newConfigForkAddHandler(os.Stdin, os.Stdout),
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)

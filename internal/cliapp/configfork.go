@@ -10,7 +10,10 @@ import (
 // ConfigForkListHandler is the fixed typed handler for config fork list.
 type ConfigForkListHandler func(context.Context, configfork.Input) (configfork.Result, error)
 
-func (app *App) registerConfigForkList(root *cobra.Command, configureLogging func() error) {
+// ConfigForkAddHandler is the fixed typed handler for config fork add.
+type ConfigForkAddHandler func(context.Context, configfork.AddRequest) (configfork.AddResult, error)
+
+func (app *App) registerConfigFork(root *cobra.Command, configureLogging func() error) {
 	configCommand := &cobra.Command{
 		Use:   "config",
 		Short: "Manage ycy configuration",
@@ -33,19 +36,36 @@ func (app *App) registerConfigForkList(root *cobra.Command, configureLogging fun
 			return errHelpRequested
 		},
 	}
-	listCommand := &cobra.Command{
-		Use:   "list",
-		Short: "List configured provider instances",
-		Args:  cobra.NoArgs,
-		PreRunE: func(*cobra.Command, []string) error {
-			return configureLogging()
-		},
-		RunE: func(command *cobra.Command, _ []string) error {
-			_, err := app.configForkList(command.Context(), configfork.Input{})
-			return err
-		},
+	if app.configForkList != nil {
+		listCommand := &cobra.Command{
+			Use:   "list",
+			Short: "List configured provider instances",
+			Args:  cobra.NoArgs,
+			PreRunE: func(*cobra.Command, []string) error {
+				return configureLogging()
+			},
+			RunE: func(command *cobra.Command, _ []string) error {
+				_, err := app.configForkList(command.Context(), configfork.Input{})
+				return err
+			},
+		}
+		forkCommand.AddCommand(listCommand)
 	}
-	forkCommand.AddCommand(listCommand)
+	if app.configForkAdd != nil {
+		addCommand := &cobra.Command{
+			Use:   "add",
+			Short: "Add a provider instance",
+			Args:  cobra.NoArgs,
+			PreRunE: func(*cobra.Command, []string) error {
+				return configureLogging()
+			},
+			RunE: func(command *cobra.Command, _ []string) error {
+				_, err := app.configForkAdd(command.Context(), configfork.AddRequest{})
+				return err
+			},
+		}
+		forkCommand.AddCommand(addCommand)
+	}
 	configCommand.AddCommand(forkCommand)
 	root.AddCommand(configCommand)
 }

@@ -22,3 +22,21 @@ func newConfigForkListHandler(output io.Writer) cliapp.ConfigForkListHandler {
 		return module.Run(context, input)
 	}
 }
+
+func newConfigForkAddHandler(input io.Reader, output io.Writer) cliapp.ConfigForkAddHandler {
+	return func(context context.Context, request configfork.AddRequest) (configfork.AddResult, error) {
+		store, err := appconfig.New(appconfig.Dependencies{})
+		if err != nil {
+			return configfork.AddResult{}, err
+		}
+		module, err := configfork.NewAdd(configfork.AddDependencies{
+			Prompter:  newTerminalForkAddPrompter(input, output),
+			Writer:    store,
+			Presenter: terminalForkAddPresenter{output: output},
+		})
+		if err != nil {
+			return configfork.AddResult{}, err
+		}
+		return module.Run(context, request)
+	}
+}
