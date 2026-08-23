@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/hackycy/hackycy-cli/internal/cliapp"
+	zipcommand "github.com/hackycy/hackycy-cli/internal/commands/zip"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/hackycy/hackycy-cli/web"
 )
@@ -29,6 +30,12 @@ func main() {
 		os.Exit(1)
 	}
 	rmModule, err := newRMModule(os.Stdin, os.Stdout)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stdout)
+		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
+		os.Exit(1)
+	}
+	zipModule, err := newZipModule(os.Stdin, os.Stdout)
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)
 		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
@@ -65,9 +72,12 @@ func main() {
 		ConfigCMRemove:   newConfigCMRemoveHandler(os.Stdin, os.Stdout),
 		ConfigCMTest:     newConfigCMTestHandler(os.Stdout),
 		RM:               rmModule.Run,
-		Run:              runModule.Run,
-		GitHeat:          gitHeatModule.Run,
-		GitPulse:         gitPulseModule.Run,
+		ZIP: func(_ context.Context, input zipcommand.Input) (zipcommand.Result, error) {
+			return zipModule.Run(input)
+		},
+		Run:      runModule.Run,
+		GitHeat:  gitHeatModule.Run,
+		GitPulse: gitPulseModule.Run,
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)

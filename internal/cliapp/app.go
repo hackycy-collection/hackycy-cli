@@ -38,6 +38,7 @@ type Dependencies struct {
 	Run              RunHandler
 	GitHeat          GitHeatHandler
 	GitPulse         GitPulseHandler
+	ZIP              ZipHandler
 }
 
 // Outcome leaves process exit ownership with cmd/ycy.
@@ -67,6 +68,7 @@ type App struct {
 	run              RunHandler
 	gitHeat          GitHeatHandler
 	gitPulse         GitPulseHandler
+	zip              ZipHandler
 }
 
 // New creates the current foundation command tree. Business leaves are added only with their own units.
@@ -106,6 +108,7 @@ func New(build BuildInfo, dependencies Dependencies) (*App, error) {
 		run:              dependencies.Run,
 		gitHeat:          dependencies.GitHeat,
 		gitPulse:         dependencies.GitPulse,
+		zip:              dependencies.ZIP,
 	}, nil
 }
 
@@ -199,6 +202,11 @@ func (app *App) rootCommand() *cobra.Command {
 	}
 	if app.gitHeat != nil || app.gitPulse != nil {
 		app.registerGit(root, func() error {
+			return app.configureLogging(logLevel)
+		})
+	}
+	if app.zip != nil {
+		app.registerZIP(root, func() error {
 			return app.configureLogging(logLevel)
 		})
 	}
