@@ -21,3 +21,5 @@ Record exact defaults, prompts, exit codes, partial-success reporting, rollback 
 ## Answer
 
 Closed as out of scope for the parity-first Go release. `git heat`, `git pulse`, `git fork`, and `git cm` are ported from the Git compatibility inventory, including observable legacy quirks and defects. The proposed validation, transactional, credential-transport, redaction, race, and safety redesign remains post-parity hardening. A narrow decision may be opened during a Git leaf's implementation only if a parity test proves that Go cannot reproduce the Bun behavior under the migration's hard constraints.
+
+2026-08-23 parity clarification for G18: `git cm --stage-all --dry-run` follows frozen `legacy/bun/src/commands/git/cm/run.ts`, which selects the `all-uncommitted` snapshot scope after suppressing `shouldStageAll` for dry runs. This deliberate first-release behavior supersedes the prior contradictory inventory wording.

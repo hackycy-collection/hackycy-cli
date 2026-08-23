@@ -241,7 +241,7 @@ Leaf options are:
 - `--stage-push [remote]` is `--stage` plus commit and push. `--push [remote]` is accepted only with a commit-producing stage/staged mode. Omitted remote means `origin`.
 - `--body` permits a validated multiline message. Without it, model output must be one line.
 - Stage/stage-push conflicts with stage-all and dry-run; any push conflicts with dry-run; push alone fails. Other redundant/contradictory combinations are accepted.
-- Notably, `--stage-all --dry-run` does **not** stage all: it silently generates from whatever is already staged. `--stage --staged` is accepted. When both push forms are present, `stagePush || push` can ignore the requested `--push` remote. Preserve these defects for first-release parity; correction is post-parity work.
+- Notably, `--stage-all --dry-run` does **not** stage all: it silently generates from all uncommitted changes, because frozen `run.ts` computes `stagedOnly` after suppressing `shouldStageAll`. This source-derived behavior was explicitly accepted during G18. `--stage --staged` is accepted. When both push forms are present, `stagePush || push` can ignore the requested `--push` remote. Preserve these defects for first-release parity; correction is post-parity work.
 
 Optional flag values are Commander-specific. Cobra/pflag does not consume the following bare token identically, so `Prove the Go CLI compatibility approach` must test long/short, omitted, `=remote`, bare remote, and next-flag forms.
 

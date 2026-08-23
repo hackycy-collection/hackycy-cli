@@ -7,8 +7,14 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
 
 	runcommand "github.com/hackycy/hackycy-cli/internal/commands/run"
+)
+
+const (
+	runGroupSignalAttempts   = 3
+	runGroupSignalRetryDelay = 10 * time.Millisecond
 )
 
 func configureRunChild(child *exec.Cmd) {
@@ -36,9 +42,16 @@ func reapRunChild(process *os.Process) error {
 }
 
 func signalRunChildGroup(process *os.Process, signal syscall.Signal) error {
-	err := syscall.Kill(-process.Pid, signal)
-	if errors.Is(err, syscall.ESRCH) {
-		return nil
+	var err error
+	for attempt := 0; attempt < runGroupSignalAttempts; attempt++ {
+		err = syscall.Kill(-process.Pid, signal)
+		if err == nil || errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		if !errors.Is(err, syscall.EPERM) || attempt == runGroupSignalAttempts-1 {
+			return err
+		}
+		time.Sleep(runGroupSignalRetryDelay)
 	}
 	return err
 }

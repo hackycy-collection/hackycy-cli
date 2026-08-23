@@ -39,6 +39,7 @@ type Dependencies struct {
 	GitHeat          GitHeatHandler
 	GitPulse         GitPulseHandler
 	GitFork          GitForkHandler
+	GitCM            GitCMHandler
 	ZIP              ZipHandler
 }
 
@@ -70,6 +71,7 @@ type App struct {
 	gitHeat          GitHeatHandler
 	gitPulse         GitPulseHandler
 	gitFork          GitForkHandler
+	gitCM            GitCMHandler
 	zip              ZipHandler
 }
 
@@ -111,6 +113,7 @@ func New(build BuildInfo, dependencies Dependencies) (*App, error) {
 		gitHeat:          dependencies.GitHeat,
 		gitPulse:         dependencies.GitPulse,
 		gitFork:          dependencies.GitFork,
+		gitCM:            dependencies.GitCM,
 		zip:              dependencies.ZIP,
 	}, nil
 }
@@ -119,6 +122,9 @@ func New(build BuildInfo, dependencies Dependencies) (*App, error) {
 func (app *App) Execute(context context.Context, arguments []string) Outcome {
 	return app.execute(func() error {
 		root := app.rootCommand()
+		if app.gitCM != nil {
+			arguments = normalizeGitCMArguments(arguments)
+		}
 		root.SetArgs(arguments)
 		return root.ExecuteContext(context)
 	})
@@ -203,7 +209,7 @@ func (app *App) rootCommand() *cobra.Command {
 			return app.configureLogging(logLevel)
 		})
 	}
-	if app.gitHeat != nil || app.gitPulse != nil || app.gitFork != nil {
+	if app.gitHeat != nil || app.gitPulse != nil || app.gitFork != nil || app.gitCM != nil {
 		app.registerGit(root, func() error {
 			return app.configureLogging(logLevel)
 		})

@@ -19,11 +19,20 @@ type gitProcessOutput struct {
 
 // runGitProcess contains the external-Git invariants shared by the heat and pulse adapters.
 func runGitProcess(ctx context.Context, executable string, arguments []string) (gitProcessOutput, error) {
+	return runGitProcessInput(ctx, executable, arguments, nil)
+}
+
+// runGitProcessInput preserves the shared Git lifecycle while allowing the
+// byte-oriented plumbing commands owned by Git CM to receive standard input.
+func runGitProcessInput(ctx context.Context, executable string, arguments []string, input []byte) (gitProcessOutput, error) {
 	if err := ctx.Err(); err != nil {
 		return gitProcessOutput{}, err
 	}
 
 	child := exec.Command(executable, arguments...)
+	if input != nil {
+		child.Stdin = bytes.NewReader(input)
+	}
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	child.Stdout = &stdout

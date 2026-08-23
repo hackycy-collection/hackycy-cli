@@ -79,6 +79,7 @@ func main() {
 		GitHeat:  gitHeatModule.Run,
 		GitPulse: gitPulseModule.Run,
 		GitFork:  newGitForkHandler(os.Stdin, os.Stdout),
+		GitCM:    newGitCMHandler(os.Stdin, os.Stdout),
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)
