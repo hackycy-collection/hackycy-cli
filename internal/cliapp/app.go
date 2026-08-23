@@ -20,11 +20,12 @@ type BuildInfo struct {
 
 // Dependencies are process facts supplied by the composition root.
 type Dependencies struct {
-	Out         io.Writer
-	Err         io.Writer
-	Environment func(string) string
-	Logging     *logging.Runtime
-	ExportEnv   ExportEnvHandler
+	Out            io.Writer
+	Err            io.Writer
+	Environment    func(string) string
+	Logging        *logging.Runtime
+	ExportEnv      ExportEnvHandler
+	ConfigForkList ConfigForkListHandler
 }
 
 // Outcome leaves process exit ownership with cmd/ycy.
@@ -35,12 +36,13 @@ type Outcome struct {
 
 // App owns Cobra, global options, diagnostics, and fresh root-tree construction.
 type App struct {
-	build       BuildInfo
-	out         io.Writer
-	err         io.Writer
-	environment func(string) string
-	logging     *logging.Runtime
-	exportEnv   ExportEnvHandler
+	build          BuildInfo
+	out            io.Writer
+	err            io.Writer
+	environment    func(string) string
+	logging        *logging.Runtime
+	exportEnv      ExportEnvHandler
+	configForkList ConfigForkListHandler
 }
 
 // New creates the current foundation command tree. Business leaves are added only with their own units.
@@ -61,12 +63,13 @@ func New(build BuildInfo, dependencies Dependencies) (*App, error) {
 		dependencies.Logging = logging.NewRuntime(logging.Options{Writer: dependencies.Err})
 	}
 	return &App{
-		build:       build,
-		out:         dependencies.Out,
-		err:         dependencies.Err,
-		environment: dependencies.Environment,
-		logging:     dependencies.Logging,
-		exportEnv:   dependencies.ExportEnv,
+		build:          build,
+		out:            dependencies.Out,
+		err:            dependencies.Err,
+		environment:    dependencies.Environment,
+		logging:        dependencies.Logging,
+		exportEnv:      dependencies.ExportEnv,
+		configForkList: dependencies.ConfigForkList,
 	}, nil
 }
 
@@ -128,6 +131,11 @@ func (app *App) rootCommand() *cobra.Command {
 	root.Flags().BoolVarP(&showVersion, "version", "V", false, "Print version")
 	if app.exportEnv != nil {
 		app.registerExportEnv(root, func() error {
+			return app.configureLogging(logLevel)
+		})
+	}
+	if app.configForkList != nil {
+		app.registerConfigForkList(root, func() error {
 			return app.configureLogging(logLevel)
 		})
 	}

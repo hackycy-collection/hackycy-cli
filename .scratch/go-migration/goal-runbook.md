@@ -59,8 +59,8 @@
 | G0: Foundation Gate | passed | none | `implementation-plan.md` -> `G0: Foundation Gate` | no predecessor |
 | G1: export env | passed | G0 | `implementation-plan.md` -> `G1: export env` | G0 passed |
 | G2: appconfig foundation | passed | G1 | `implementation-plan.md` -> `G2: appconfig foundation` | all G2 Exit conditions accepted |
-| G3: config fork list | active | G2 | `implementation-plan.md` -> `G3: config fork list` | G2 passed |
-| G4: config fork add | planned | G3 | `implementation-plan.md` -> `G4: config fork add` | G3 pending |
+| G3: config fork list | passed | G2 | `implementation-plan.md` -> `G3: config fork list` | G2 passed |
+| G4: config fork add | active | G3 | `implementation-plan.md` -> `G4: config fork add` | G3 passed |
 | G5: config fork remove | planned | G4 | `implementation-plan.md` -> `G5: config fork remove` | G4 pending |
 | G6: config cm list | planned | G5 | `implementation-plan.md` -> `G6: config cm list` | G5 pending |
 | G7: config cm add | planned | G6 | `implementation-plan.md` -> `G7: config cm add` | G6 pending |
@@ -133,10 +133,16 @@
 
 - 2026-08-23: initialized as `planned`; no implementation evidence.
 - 2026-08-23: activated as `active`; not started.
+- 2026-08-23: slice `secret-safe Fork read projection` completed. Modified files: `internal/commands/config/fork/read.go`, `internal/commands/config/fork/read_test.go`. Verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/commands/config/fork`, `make check`, and `make build` passed. The focused inventory-derived cases preserve persisted order and field equivalence, retain only appconfig's ciphertext-derived preview, and reject plaintext or full-ciphertext disclosure. Risk: no terminal presentation or CLI surface exists; appconfig remains the sole config/crypto owner. Next: add the empty and populated stable list rendering without registering a command.
+- 2026-08-23: slice `Fork list presentation` completed. Modified files: `internal/commands/config/fork/presentation.go`, `internal/commands/config/fork/presentation_test.go`. Verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/commands/config/fork`, `make check`, and `make build` passed. Empty state provides the inventory add hint; populated output contains only the equivalent name, type, defaulted scheme, host, and ciphertext-derived preview fields in stored order. Risk: output is command-local and no Cobra route or production composition exists yet; the existing Vite large-chunk advisory remains informational. Next: add the typed `config fork list` CLI binder while keeping the product handler absent.
+- 2026-08-23: slice `unpublished config fork list CLI binder` completed. Modified files: `internal/commands/config/fork/input.go`, `internal/cliapp/app.go`, `internal/cliapp/configfork.go`, `internal/cliapp/app_test.go`. Verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/commands/config/fork ./internal/cliapp`, `make check`, and `make build` passed. The binder sends typed empty input, applies global logging, exposes only `config fork list`, and rejects absent `add`; the production `build/ycy --help` still lists no `config` command and `build/ycy config` exits with the expected unknown-command error because the handler remains uncomposed. Risk: registration and the real terminal/appconfig composition remain intentionally absent; no sibling is represented by a placeholder. Next: compose the real list handler and register only this leaf in the Integration Slice.
+- 2026-08-23: slice `config fork list integration` completed. Modified files: `internal/commands/config/fork/run.go`, `internal/commands/config/fork/run_test.go`, `cmd/ycy/configfork.go`, `cmd/ycy/configfork_test.go`, and `cmd/ycy/main.go`. Verification: focused `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/commands/config/fork ./internal/cliapp ./cmd/ycy` passed; `make check`, `make build`, `build/ycy --version`, an isolated empty-config `build/ycy config fork list` smoke, the standalone populated-list test, and `make cross-build` passed. Six nonempty target files were inspected as Mach-O x64/arm64, static ELF x64/arm64, and PE x64/arm64; host candidate SHA-256 is recorded in `acceptance.md`. Risk: the existing Vite large-chunk advisory remains informational; no G3 Stop condition occurred. Next: record Exit-condition acceptance and activate only G4 without starting it.
+- 2026-08-23: final G3 acceptance completed. Exit 1: focused projection, presentation, and standalone binary tests prove the empty hint, appconfig read path, persisted ordering, name/type/defaulted scheme/host/ciphertext-preview field equivalence, and plaintext/full-ciphertext non-disclosure. Exit 2: `cliapp` and standalone tests prove that only `config fork list` is registered and `add`/`remove` remain absent rather than placeholders. Exit 3: the `config fork list` Unit is `integrated` in `acceptance.md` with `make check`, `make build`, host smoke, six-target cross-build, artifact inspection, and host SHA-256 evidence. G3 is `passed`; G4 is activated but not started. Risk: Vite's existing Monaco large-chunk advisory remains informational. Next: end this Goal; a new Goal owns G4.
 
 ### G4: config fork add
 
 - 2026-08-23: initialized as `planned`; no implementation evidence.
+- 2026-08-23: activated as `active`; not started.
 
 ### G5: config fork remove
 
