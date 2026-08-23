@@ -1,6 +1,7 @@
 package appconfig
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -150,6 +151,75 @@ func TestSemanticForkAndCMOperationsEncryptAndPreserveOrder(t *testing.T) {
 		if strings.Contains(string(contents), plaintext) {
 			t.Fatalf("persisted config contains plaintext %q", plaintext)
 		}
+	}
+}
+
+func TestSetDefaultCMProfilePersistsSelectionWithoutChangingSharedConfiguration(t *testing.T) {
+	store := semanticStore(t, nil)
+	if err := store.SaveForkInstance("github", ForkInput{Host: "github.com", Type: "github", Token: "fork-token"}); err != nil {
+		t.Fatalf("SaveForkInstance() returned an error: %v", err)
+	}
+	if err := store.AddCMProfile("primary", "https://primary.example/v1", "primary-model", "primary-key"); err != nil {
+		t.Fatalf("AddCMProfile(primary) returned an error: %v", err)
+	}
+	if err := store.AddCMProfile("work", "https://work.example/v1", "work-model", "work-key"); err != nil {
+		t.Fatalf("AddCMProfile(work) returned an error: %v", err)
+	}
+
+	if err := store.SetDefaultCMProfile("work"); err != nil {
+		t.Fatalf("SetDefaultCMProfile(work) returned an error: %v", err)
+	}
+
+	profiles, err := store.ListCMProfiles()
+	if err != nil {
+		t.Fatalf("ListCMProfiles() returned an error: %v", err)
+	}
+	if profiles.DefaultProfile != "work" || !sameStrings(profileNames(profiles.Profiles), []string{"primary", "work"}) {
+		t.Fatalf("ListCMProfiles() = %#v", profiles)
+	}
+	resolved, err := store.ResolveCMProfile(CMResolveOptions{})
+	if err != nil || resolved.Name != "work" || resolved.BaseURL != "https://work.example/v1" || resolved.Model != "work-model" || resolved.APIKey != "work-key" {
+		t.Fatalf("ResolveCMProfile() = (%#v, %v)", resolved, err)
+	}
+	primary, err := store.ResolveCMProfile(CMResolveOptions{ProfileName: "primary"})
+	if err != nil || primary.BaseURL != "https://primary.example/v1" || primary.Model != "primary-model" || primary.APIKey != "primary-key" {
+		t.Fatalf("ResolveCMProfile(primary) = (%#v, %v)", primary, err)
+	}
+	instances, err := store.ListForkInstances()
+	if err != nil || len(instances) != 1 || instances[0].Name != "github" || instances[0].Host != "github.com" {
+		t.Fatalf("ListForkInstances() = (%#v, %v)", instances, err)
+	}
+
+	contents, err := os.ReadFile(store.configPath())
+	if err != nil {
+		t.Fatalf("read persisted config: %v", err)
+	}
+	var persisted struct {
+		CM struct {
+			DefaultProfile string `json:"defaultProfile"`
+			Profiles       map[string]struct {
+				BaseURL string `json:"baseURL"`
+				Model   string `json:"model"`
+			} `json:"profiles"`
+		} `json:"cm"`
+	}
+	if err := json.Unmarshal(contents, &persisted); err != nil {
+		t.Fatalf("decode persisted config: %v", err)
+	}
+	if persisted.CM.DefaultProfile != "work" || persisted.CM.Profiles["primary"].BaseURL != "https://primary.example/v1" || persisted.CM.Profiles["primary"].Model != "primary-model" || persisted.CM.Profiles["work"].BaseURL != "https://work.example/v1" || persisted.CM.Profiles["work"].Model != "work-model" {
+		t.Fatalf("persisted CM = %#v", persisted.CM)
+	}
+}
+
+func TestSetDefaultCMProfileMissingDoesNotPublishConfiguration(t *testing.T) {
+	store := semanticStore(t, nil)
+
+	err := store.SetDefaultCMProfile("missing")
+	if err == nil || err.Error() != "CM profile not found: missing" {
+		t.Fatalf("SetDefaultCMProfile(missing) error = %v", err)
+	}
+	if _, err := os.Stat(store.configPath()); !os.IsNotExist(err) {
+		t.Fatalf("missing selection published configuration: %v", err)
 	}
 }
 

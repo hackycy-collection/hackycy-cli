@@ -2,12 +2,25 @@ package main
 
 import (
 	"context"
+	"fmt"
 	"io"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
 	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	configcm "github.com/hackycy/hackycy-cli/internal/commands/config/cm"
 )
+
+type terminalCMPresenter struct {
+	output io.Writer
+}
+
+func (presenter terminalCMPresenter) Cancel(message string) {
+	_, _ = fmt.Fprintln(presenter.output, message)
+}
+
+func (presenter terminalCMPresenter) Success(message string) {
+	_, _ = fmt.Fprintln(presenter.output, message)
+}
 
 func newConfigCMListHandler(output io.Writer) cliapp.ConfigCMListHandler {
 	return func(context context.Context, input configcm.Input) (configcm.Result, error) {
@@ -32,10 +45,27 @@ func newConfigCMAddHandler(input io.Reader, output io.Writer) cliapp.ConfigCMAdd
 		module, err := configcm.NewAdd(configcm.AddDependencies{
 			Prompter:  newTerminalCMAddPrompter(input, output),
 			Writer:    store,
-			Presenter: terminalCMAddPresenter{output: output},
+			Presenter: terminalCMPresenter{output: output},
 		})
 		if err != nil {
 			return configcm.AddResult{}, err
+		}
+		return module.Run(context, request)
+	}
+}
+
+func newConfigCMUseHandler(output io.Writer) cliapp.ConfigCMUseHandler {
+	return func(context context.Context, request configcm.UseRequest) (configcm.UseResult, error) {
+		store, err := appconfig.New(appconfig.Dependencies{})
+		if err != nil {
+			return configcm.UseResult{}, err
+		}
+		module, err := configcm.NewUse(configcm.UseDependencies{
+			Writer:    store,
+			Presenter: terminalCMPresenter{output: output},
+		})
+		if err != nil {
+			return configcm.UseResult{}, err
 		}
 		return module.Run(context, request)
 	}

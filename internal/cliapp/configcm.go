@@ -13,8 +13,11 @@ type ConfigCMListHandler func(context.Context, configcm.Input) (configcm.Result,
 // ConfigCMAddHandler is the fixed typed handler for config cm add.
 type ConfigCMAddHandler func(context.Context, configcm.AddRequest) (configcm.AddResult, error)
 
+// ConfigCMUseHandler is the fixed typed handler for config cm use.
+type ConfigCMUseHandler func(context.Context, configcm.UseRequest) (configcm.UseResult, error)
+
 func (app *App) registerConfigCM(configCommand *cobra.Command, configureLogging func() error) {
-	if app.configCMList == nil && app.configCMAdd == nil {
+	if app.configCMList == nil && app.configCMAdd == nil && app.configCMUse == nil {
 		return
 	}
 	cmCommand := &cobra.Command{
@@ -57,6 +60,21 @@ func (app *App) registerConfigCM(configCommand *cobra.Command, configureLogging 
 			},
 		}
 		cmCommand.AddCommand(addCommand)
+	}
+	if app.configCMUse != nil {
+		useCommand := &cobra.Command{
+			Use:   "use <profile>",
+			Short: "Set the default commit message provider profile",
+			Args:  cobra.ExactArgs(1),
+			PreRunE: func(*cobra.Command, []string) error {
+				return configureLogging()
+			},
+			RunE: func(command *cobra.Command, arguments []string) error {
+				_, err := app.configCMUse(command.Context(), configcm.UseRequest{Profile: arguments[0]})
+				return err
+			},
+		}
+		cmCommand.AddCommand(useCommand)
 	}
 	configCommand.AddCommand(cmCommand)
 }

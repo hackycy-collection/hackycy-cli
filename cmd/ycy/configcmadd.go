@@ -83,15 +83,3 @@ func (prompter *terminalCMAddPrompter) readPassword() (string, bool) {
 	}
 	return prompter.readLine()
 }
-
-type terminalCMAddPresenter struct {
-	output io.Writer
-}
-
-func (presenter terminalCMAddPresenter) Cancel(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
-}
-
-func (presenter terminalCMAddPresenter) Success(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
-}

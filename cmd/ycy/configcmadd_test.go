@@ -59,9 +59,9 @@ func TestTerminalCMAddPrompterTreatsEOFAsCancellation(t *testing.T) {
 	}
 }
 
-func TestTerminalCMAddPresenterWritesOutcomeMessages(t *testing.T) {
+func TestTerminalCMPresenterWritesOutcomeMessages(t *testing.T) {
 	output := &bytes.Buffer{}
-	presenter := terminalCMAddPresenter{output: output}
+	presenter := terminalCMPresenter{output: output}
 
 	presenter.Cancel("Cancelled")
 	presenter.Success("Profile work added")
