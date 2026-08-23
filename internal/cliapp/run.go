@@ -20,6 +20,10 @@ func (outcome *runChildOutcome) Error() string {
 	return "run child outcome"
 }
 
+func (outcome *runChildOutcome) ExitCode() int {
+	return outcome.code
+}
+
 func (app *App) registerRun(root *cobra.Command, configureLogging func(string) error) {
 	root.AddCommand(app.runCommand(app.run, configureLogging))
 }

@@ -36,6 +36,7 @@ type Dependencies struct {
 	ConfigCMTest     ConfigCMTestHandler
 	RM               RmHandler
 	Run              RunHandler
+	GitHeat          GitHeatHandler
 }
 
 // Outcome leaves process exit ownership with cmd/ycy.
@@ -63,6 +64,7 @@ type App struct {
 	configCMTest     ConfigCMTestHandler
 	rm               RmHandler
 	run              RunHandler
+	gitHeat          GitHeatHandler
 }
 
 // New creates the current foundation command tree. Business leaves are added only with their own units.
@@ -100,6 +102,7 @@ func New(build BuildInfo, dependencies Dependencies) (*App, error) {
 		configCMTest:     dependencies.ConfigCMTest,
 		rm:               dependencies.RM,
 		run:              dependencies.Run,
+		gitHeat:          dependencies.GitHeat,
 	}, nil
 }
 
@@ -122,9 +125,9 @@ func (app *App) execute(invoke func() error) (outcome Outcome) {
 	}()
 
 	if err := invoke(); err != nil {
-		var childOutcome *runChildOutcome
-		if errors.As(err, &childOutcome) {
-			return Outcome{Code: childOutcome.code}
+		var exitOutcome exitCodedError
+		if errors.As(err, &exitOutcome) {
+			return Outcome{Code: exitOutcome.ExitCode()}
 		}
 		if errors.Is(err, errHelpRequested) {
 			return Outcome{Code: 1, Err: err}
@@ -134,6 +137,11 @@ func (app *App) execute(invoke func() error) (outcome Outcome) {
 		return Outcome{Code: 1, Err: err}
 	}
 	return Outcome{}
+}
+
+type exitCodedError interface {
+	error
+	ExitCode() int
 }
 
 func (app *App) rootCommand() *cobra.Command {
@@ -183,6 +191,11 @@ func (app *App) rootCommand() *cobra.Command {
 			if override != "" {
 				return app.configureLogging(override)
 			}
+			return app.configureLogging(logLevel)
+		})
+	}
+	if app.gitHeat != nil {
+		app.registerGit(root, func() error {
 			return app.configureLogging(logLevel)
 		})
 	}
