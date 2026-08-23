@@ -86,6 +86,13 @@ func inspectGoFile(root, path string) []string {
 		}
 	}
 	ast.Inspect(file, func(node ast.Node) bool {
+		literal, ok := node.(*ast.BasicLit)
+		if ok && literal.Kind == token.STRING && relativeDir != "internal/appconfig" {
+			value, err := strconv.Unquote(literal.Value)
+			if err == nil && (value == "config.json" || value == ".config.lock") {
+				violations = append(violations, path+": config persistence is owned only by internal/appconfig")
+			}
+		}
 		call, ok := node.(*ast.CallExpr)
 		if !ok {
 			return true

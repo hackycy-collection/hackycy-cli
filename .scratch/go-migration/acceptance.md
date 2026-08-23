@@ -3,7 +3,7 @@
 First Go release: `v0.1.0`
 Migration build identity: `0.0.0-dev`
 Roadmap: [Approve the command-by-command migration roadmap](issues/16-approve-command-migration-roadmap.md)
-Status: Foundation Gate integrated; later Units and release evidence remain pending
+Status: Foundation Gate, export env, and appconfig foundation integrated; later Units and release evidence remain pending
 
 ## Recording rules
 
@@ -35,7 +35,7 @@ Status: Foundation Gate integrated; later Units and release evidence remain pend
 | --- | --- | --- | --- | --- | --- | --- |
 | Foundation Gate | integrated | Cutover, CLI, embed, layout, hooks | Cutover Commit (this commit): 2026-08-23 clean staged checkout passed `make bootstrap`, hook install/doctor, `make check`, `make build`, host CLI smoke, `make cross-build`, and the actual Lefthook pre-commit. | macOS arm64 host; Go 1.26.7 with `CGO_ENABLED=0`; all three embedded shells validated at startup; fixed Mach-O x64/arm64, static ELF x64/arm64, and PE x64/arm64 artifacts inspected; host links only system libraries. | Release-accepted Artifact Gate and later applicable native evidence | - |
 | `export env` | integrated | Core inventory | Integration Commit (this commit): 2026-08-23 focused `go test ./internal/commands/exportenv ./internal/cliapp ./cmd/ycy`, `make check`, and `make build` passed; host binary help/version, named merge/stdout, cwd-relative output, missing-file, missing-environment, and EOF-cancellation probes passed. | macOS arm64 host (Darwin 25.5.0); Go 1.26.7 with `CGO_ENABLED=0`; host `build/ycy` SHA-256 `26f92bea2312947337ef5eaad938e62f4423d45284f293792f62c2bb7403dac4`; `make cross-build` produced six nonempty Mach-O/ELF/PE artifacts. | Release-accepted Artifact Gate and later applicable native evidence | - |
-| `appconfig` foundation | pending | Core inventory | - | - | All selected gates | - |
+| `appconfig` foundation | integrated | Core inventory | Integration Commit (this commit): 2026-08-23 focused `go test -count=1 ./internal/appconfig ./internal/cliapp ./cmd/ycy`, `make check`, and `make build` passed; direct current/legacy encrypted config, ordering, semantic concurrency, publication failure, architecture ownership, and no-command evidence passed. | macOS arm64 host (Darwin 25.5.0); Go 1.26.7 with `CGO_ENABLED=0`; host `build/ycy` SHA-256 `0ec04fdcee79418cfd1c8cf887c9fbb46c147fb68aef885b238728c21e92f437`; native macOS machine-ID/lock/permission/replacement tests passed; `make cross-build` produced six nonempty Mach-O/ELF/PE artifacts with matching target metadata. | Release-accepted Artifact Gate and native Linux/Windows machine-ID, locking, permission, and replacement execution evidence | [data scope](issues/12-choose-data-compatibility-mechanisms.md), [module ownership](issues/13-choose-go-module-seams.md), [parity policy](issues/17-choose-corrected-core-command-contracts.md) |
 | `config fork list` | pending | Core inventory | - | - | All selected gates | - |
 | `config fork add` | pending | Core inventory | - | - | All selected gates | - |
 | `config fork remove` | pending | Core inventory | - | - | All selected gates | - |

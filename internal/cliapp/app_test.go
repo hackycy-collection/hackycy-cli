@@ -55,6 +55,19 @@ func TestGlobalLogPrecedenceAndVersionBypass(t *testing.T) {
 	}
 }
 
+func TestAppconfigFoundationDoesNotExposeACommand(t *testing.T) {
+	app, output, errors, _ := testApp(t, nil)
+
+	if outcome := app.Execute(context.Background(), []string{"--help"}); outcome.Code != 0 || strings.Contains(output.String(), "config") {
+		t.Fatalf("help outcome = %#v, stdout = %q", outcome, output.String())
+	}
+	output.Reset()
+	errors.Reset()
+	if outcome := app.Execute(context.Background(), []string{"config"}); outcome.Code != 1 || errors.String() != "error: unknown command 'config'\n" {
+		t.Fatalf("config outcome = %#v, stderr = %q", outcome, errors.String())
+	}
+}
+
 func TestPanicMappingRedactsAndAddsDebugStack(t *testing.T) {
 	app, output, errors, _ := testApp(t, map[string]string{"DEBUG": "1"})
 	outcome := app.execute(func() error {
