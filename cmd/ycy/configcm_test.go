@@ -57,7 +57,7 @@ func TestConfigCMListStandaloneBinary(t *testing.T) {
 	}
 
 	helpOutput, err := runStandalone(binary, environment, "config", "cm", "--help")
-	if err != nil || !strings.Contains(string(helpOutput), "list") || strings.Contains(string(helpOutput), "add") || strings.Contains(string(helpOutput), "use") || strings.Contains(string(helpOutput), "set") || strings.Contains(string(helpOutput), "remove") || strings.Contains(string(helpOutput), "test") {
+	if err != nil || !strings.Contains(string(helpOutput), "list") || !strings.Contains(string(helpOutput), "add") || strings.Contains(string(helpOutput), "use") || strings.Contains(string(helpOutput), "set") || strings.Contains(string(helpOutput), "remove") || strings.Contains(string(helpOutput), "test") {
 		t.Fatalf("cm help = (%v, %q)", err, helpOutput)
 	}
 }

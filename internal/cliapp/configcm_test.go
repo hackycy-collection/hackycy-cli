@@ -51,3 +51,47 @@ func TestConfigCMListBindingPassesTypedInputAndExposesNoSibling(t *testing.T) {
 		t.Fatalf("absent sibling outcome = %#v, stderr = %q", outcome, errors.String())
 	}
 }
+
+func TestConfigCMAddBindingPassesTypedRequestAndExposesOnlyRealLeaves(t *testing.T) {
+	output := &bytes.Buffer{}
+	errors := &bytes.Buffer{}
+	runtime := logging.NewRuntime(logging.Options{Writer: errors})
+	var addRequests []configcm.AddRequest
+	app, err := New(BuildInfo{Version: "0.0.0-dev"}, Dependencies{
+		Out:     output,
+		Err:     errors,
+		Logging: runtime,
+		ConfigCMList: func(context.Context, configcm.Input) (configcm.Result, error) {
+			return configcm.Result{}, nil
+		},
+		ConfigCMAdd: func(_ context.Context, request configcm.AddRequest) (configcm.AddResult, error) {
+			addRequests = append(addRequests, request)
+			return configcm.AddResult{}, nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() returned an error: %v", err)
+	}
+
+	outcome := app.Execute(context.Background(), []string{"--log-level", "warn", "config", "cm", "add"})
+	if outcome.Code != 0 || outcome.Err != nil {
+		t.Fatalf("add outcome = %#v, stderr = %q", outcome, errors.String())
+	}
+	if got, want := addRequests, []configcm.AddRequest{{}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("add requests = %#v, want %#v", got, want)
+	}
+	if runtime.Level() != logging.Warn {
+		t.Fatalf("log level = %v, want %v", runtime.Level(), logging.Warn)
+	}
+
+	output.Reset()
+	errors.Reset()
+	if outcome := app.Execute(context.Background(), []string{"config", "cm", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "list") || !strings.Contains(output.String(), "add") || strings.Contains(output.String(), "use") || strings.Contains(output.String(), "set") || strings.Contains(output.String(), "remove") || strings.Contains(output.String(), "test") {
+		t.Fatalf("cm help outcome = %#v, stdout = %q", outcome, output.String())
+	}
+	output.Reset()
+	errors.Reset()
+	if outcome := app.Execute(context.Background(), []string{"config", "cm", "use"}); outcome.Code != 1 || errors.String() != "error: unknown command 'use'\n" {
+		t.Fatalf("absent sibling outcome = %#v, stderr = %q", outcome, errors.String())
+	}
+}

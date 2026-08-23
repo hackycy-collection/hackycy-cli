@@ -22,3 +22,21 @@ func newConfigCMListHandler(output io.Writer) cliapp.ConfigCMListHandler {
 		return module.Run(context, input)
 	}
 }
+
+func newConfigCMAddHandler(input io.Reader, output io.Writer) cliapp.ConfigCMAddHandler {
+	return func(context context.Context, request configcm.AddRequest) (configcm.AddResult, error) {
+		store, err := appconfig.New(appconfig.Dependencies{})
+		if err != nil {
+			return configcm.AddResult{}, err
+		}
+		module, err := configcm.NewAdd(configcm.AddDependencies{
+			Prompter:  newTerminalCMAddPrompter(input, output),
+			Writer:    store,
+			Presenter: terminalCMAddPresenter{output: output},
+		})
+		if err != nil {
+			return configcm.AddResult{}, err
+		}
+		return module.Run(context, request)
+	}
+}
