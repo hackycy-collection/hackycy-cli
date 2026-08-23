@@ -47,6 +47,12 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
 		os.Exit(1)
 	}
+	diffModule, err := newDiffModule(os.Stdout)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stdout)
+		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
+		os.Exit(1)
+	}
 	gitHeatModule, err := newGitHeatModule(os.Stdout, terminal(os.Stdout) && os.Getenv("NO_COLOR") == "")
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)
@@ -76,6 +82,7 @@ func main() {
 			return zipModule.Run(input)
 		},
 		Run:      runModule.Run,
+		Diff:     diffModule.Run,
 		GitHeat:  gitHeatModule.Run,
 		GitPulse: gitPulseModule.Run,
 		GitFork:  newGitForkHandler(os.Stdin, os.Stdout),

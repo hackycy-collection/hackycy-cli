@@ -41,6 +41,7 @@ type Dependencies struct {
 	GitFork          GitForkHandler
 	GitCM            GitCMHandler
 	ZIP              ZipHandler
+	Diff             DiffHandler
 }
 
 // Outcome leaves process exit ownership with cmd/ycy.
@@ -73,6 +74,7 @@ type App struct {
 	gitFork          GitForkHandler
 	gitCM            GitCMHandler
 	zip              ZipHandler
+	diff             DiffHandler
 }
 
 // New creates the current foundation command tree. Business leaves are added only with their own units.
@@ -115,6 +117,7 @@ func New(build BuildInfo, dependencies Dependencies) (*App, error) {
 		gitFork:          dependencies.GitFork,
 		gitCM:            dependencies.GitCM,
 		zip:              dependencies.ZIP,
+		diff:             dependencies.Diff,
 	}, nil
 }
 
@@ -216,6 +219,11 @@ func (app *App) rootCommand() *cobra.Command {
 	}
 	if app.zip != nil {
 		app.registerZIP(root, func() error {
+			return app.configureLogging(logLevel)
+		})
+	}
+	if app.diff != nil {
+		app.registerDiff(root, func() error {
 			return app.configureLogging(logLevel)
 		})
 	}
