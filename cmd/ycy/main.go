@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/signal"
 
 	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	"github.com/hackycy/hackycy-cli/internal/logging"
@@ -20,7 +19,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	context, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	ctx, stop := newYcySignalContext(context.Background())
 	defer stop()
 	runtime := logging.NewRuntime(logging.Options{Writer: os.Stderr, Color: terminal(os.Stderr)})
 	exportEnv, err := newExportEnvModule(os.Stdin, os.Stdout)
@@ -30,6 +29,12 @@ func main() {
 		os.Exit(1)
 	}
 	rmModule, err := newRMModule(os.Stdin, os.Stdout)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stdout)
+		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
+		os.Exit(1)
+	}
+	runModule, err := newRunModule(os.Stdin, os.Stdout, os.Stderr)
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)
 		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
@@ -48,13 +53,14 @@ func main() {
 		ConfigCMRemove:   newConfigCMRemoveHandler(os.Stdin, os.Stdout),
 		ConfigCMTest:     newConfigCMTestHandler(os.Stdout),
 		RM:               rmModule.Run,
+		Run:              runModule.Run,
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)
 		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
 		os.Exit(1)
 	}
-	result := app.Execute(context, os.Args[1:])
+	result := app.Execute(ctx, os.Args[1:])
 	os.Exit(result.Code)
 }
 
