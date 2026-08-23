@@ -31,6 +31,9 @@ func (app *App) registerGit(root *cobra.Command, configureLogging func() error) 
 	if app.gitPulse != nil {
 		git.AddCommand(app.gitPulseCommand(configureLogging))
 	}
+	if app.gitFork != nil {
+		git.AddCommand(app.gitForkCommand(configureLogging))
+	}
 	root.AddCommand(git)
 }
 

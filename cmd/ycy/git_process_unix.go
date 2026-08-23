@@ -8,6 +8,12 @@ import (
 	"os"
 	"os/exec"
 	"syscall"
+	"time"
+)
+
+const (
+	gitGroupSignalAttempts   = 3
+	gitGroupSignalRetryDelay = 10 * time.Millisecond
 )
 
 func configureGitChild(child *exec.Cmd) {
@@ -35,9 +41,16 @@ func reapGitChild(process *os.Process) error {
 }
 
 func signalGitGroup(process *os.Process, signal syscall.Signal) error {
-	err := syscall.Kill(-process.Pid, signal)
-	if errors.Is(err, syscall.ESRCH) {
-		return nil
+	var err error
+	for attempt := 0; attempt < gitGroupSignalAttempts; attempt++ {
+		err = syscall.Kill(-process.Pid, signal)
+		if err == nil || errors.Is(err, syscall.ESRCH) {
+			return nil
+		}
+		if !errors.Is(err, syscall.EPERM) || attempt == gitGroupSignalAttempts-1 {
+			return err
+		}
+		time.Sleep(gitGroupSignalRetryDelay)
 	}
 	return err
 }
