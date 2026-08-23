@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func TestLoadValidatesFixedShells(t *testing.T) {
@@ -35,6 +36,41 @@ func TestServeAssetUsesImmutableHeaders(t *testing.T) {
 	}
 	if site.ServeAsset(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/assets/missing.js", nil)) {
 		t.Fatal("ServeAsset accepted a missing asset")
+	}
+}
+
+func TestServeAssetUsesDeterministicMIMEAndHEADResponses(t *testing.T) {
+	site := &Site{files: fstest.MapFS{
+		"assets/app.js":      {Data: []byte("console.log('ready')")},
+		"assets/app.css":     {Data: []byte("body{}")},
+		"assets/font.ttf":    {Data: []byte("font")},
+		"assets/logo.svg":    {Data: []byte("<svg/>")},
+		"assets/unknown.bin": {Data: []byte("bytes")},
+	}}
+	for _, testCase := range []struct {
+		path        string
+		contentType string
+	}{
+		{path: "assets/app.js", contentType: "text/javascript; charset=utf-8"},
+		{path: "assets/app.css", contentType: "text/css; charset=utf-8"},
+		{path: "assets/font.ttf", contentType: "font/ttf"},
+		{path: "assets/logo.svg", contentType: "image/svg+xml"},
+		{path: "assets/unknown.bin", contentType: "application/octet-stream"},
+	} {
+		t.Run(testCase.path, func(t *testing.T) {
+			for _, method := range []string{http.MethodGet, http.MethodHead} {
+				response := httptest.NewRecorder()
+				if !site.ServeAsset(response, httptest.NewRequest(method, "/"+testCase.path, nil)) {
+					t.Fatalf("ServeAsset did not serve %s", testCase.path)
+				}
+				if response.Code != http.StatusOK || response.Header().Get("Content-Type") != testCase.contentType || response.Header().Get("Cache-Control") != "public, max-age=31536000, immutable" || response.Header().Get("Referrer-Policy") != "no-referrer" || response.Header().Get("X-Content-Type-Options") != "nosniff" {
+					t.Fatalf("unexpected %s response for %s: code=%d headers=%v", method, testCase.path, response.Code, response.Header())
+				}
+				if method == http.MethodHead && response.Body.Len() != 0 {
+					t.Fatalf("HEAD response for %s included a body", testCase.path)
+				}
+			}
+		})
 	}
 }
 

@@ -3,12 +3,12 @@ GO ?= go
 PNPM ?= pnpm
 VERSION ?= 0.0.0-dev
 
-GO_FILES := $(shell find cmd internal tools/hookctl tools/check-no-bun web -type f -name '*.go' 2>/dev/null)
+GO_FILES := $(shell find cmd internal tools/hookctl tools/check-no-bun tools/web-browser-harness web -type f -name '*.go' 2>/dev/null)
 
-.PHONY: help bootstrap hooks-install hooks-doctor hooks-uninstall fmt check check-web check-go check-locks check-no-bun build cross-build ensure-web-deps ensure-web-dist
+.PHONY: help bootstrap hooks-install hooks-doctor hooks-uninstall fmt check check-web check-go check-locks check-no-bun build cross-build web-browser-harness ensure-web-deps ensure-web-dist
 
 help:
-	@printf '%s\n' 'Targets: bootstrap, hooks-install, hooks-doctor, hooks-uninstall, fmt, check, build, cross-build'
+	@printf '%s\n' 'Targets: bootstrap, hooks-install, hooks-doctor, hooks-uninstall, fmt, check, build, cross-build, web-browser-harness'
 
 bootstrap:
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) $(GO) version
@@ -72,3 +72,6 @@ cross-build: check-web
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-linux-arm64 ./cmd/ycy
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-windows-x64.exe ./cmd/ycy
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=windows GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-windows-arm64.exe ./cmd/ycy
+
+web-browser-harness: check-web
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 $(GO) run ./tools/web-browser-harness

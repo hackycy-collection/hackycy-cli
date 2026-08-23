@@ -4,7 +4,6 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
-	"mime"
 	"net/http"
 	"path"
 	"strings"
@@ -19,6 +18,26 @@ var applications = map[string]string{
 	"diff":          "diff/index.html",
 	"fs":            "fs/index.html",
 	"tunnel-server": "tunnel-server/index.html",
+}
+
+var assetContentTypes = map[string]string{
+	".avif":  "image/avif",
+	".css":   "text/css; charset=utf-8",
+	".gif":   "image/gif",
+	".ico":   "image/vnd.microsoft.icon",
+	".jpeg":  "image/jpeg",
+	".jpg":   "image/jpeg",
+	".js":    "text/javascript; charset=utf-8",
+	".json":  "application/json",
+	".mjs":   "text/javascript; charset=utf-8",
+	".otf":   "font/otf",
+	".png":   "image/png",
+	".svg":   "image/svg+xml",
+	".ttf":   "font/ttf",
+	".wasm":  "application/wasm",
+	".webp":  "image/webp",
+	".woff":  "font/woff",
+	".woff2": "font/woff2",
 }
 
 // Site is one selected Vite shell and the shared generated asset tree.
@@ -69,16 +88,19 @@ func (site *Site) ServeAsset(writer http.ResponseWriter, request *http.Request) 
 	writer.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
 	writer.Header().Set("Referrer-Policy", "no-referrer")
 	writer.Header().Set("X-Content-Type-Options", "nosniff")
-	contentType := mime.TypeByExtension(path.Ext(asset))
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
-	writer.Header().Set("Content-Type", contentType)
+	writer.Header().Set("Content-Type", assetContentType(asset))
 	writer.WriteHeader(http.StatusOK)
 	if request.Method == http.MethodGet {
 		_, _ = writer.Write(contents)
 	}
 	return true
+}
+
+func assetContentType(asset string) string {
+	if contentType, ok := assetContentTypes[strings.ToLower(path.Ext(asset))]; ok {
+		return contentType
+	}
+	return "application/octet-stream"
 }
 
 // ServeShell writes the selected shell with the common no-store headers.
