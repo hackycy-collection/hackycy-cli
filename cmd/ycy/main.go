@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/hackycy/hackycy-cli/internal/cliapp"
+	fscommand "github.com/hackycy/hackycy-cli/internal/commands/fs"
 	zipcommand "github.com/hackycy/hackycy-cli/internal/commands/zip"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/hackycy/hackycy-cli/web"
@@ -14,6 +15,14 @@ import (
 var version = "0.0.0-dev"
 
 func main() {
+	if fscommand.IsThumbnailWorkerInvocation(os.Args[1:]) {
+		if err := fscommand.RunThumbnailWorker(os.Stdin, os.Stdout); err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "thumbnail worker error: %s\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
 	if err := webassets.Validate(); err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)
 		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
@@ -53,6 +62,12 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
 		os.Exit(1)
 	}
+	fsModule, err := newFSModule(os.Stdout)
+	if err != nil {
+		_, _ = fmt.Fprintln(os.Stdout)
+		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
+		os.Exit(1)
+	}
 	gitHeatModule, err := newGitHeatModule(os.Stdout, terminal(os.Stdout) && os.Getenv("NO_COLOR") == "")
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)
@@ -83,6 +98,7 @@ func main() {
 		},
 		Run:      runModule.Run,
 		Diff:     diffModule.Run,
+		FS:       fsModule.Run,
 		GitHeat:  gitHeatModule.Run,
 		GitPulse: gitPulseModule.Run,
 		GitFork:  newGitForkHandler(os.Stdin, os.Stdout),

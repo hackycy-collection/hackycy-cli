@@ -20,6 +20,42 @@ type ReadinessHandlerOptions struct {
 	MCP http.Handler
 }
 
+// NewFSProductionHandler joins the FS command adapter to the retained FS
+// application without widening the browser shell's route ownership.
+func NewFSProductionHandler(adapter http.Handler) (http.Handler, error) {
+	if adapter == nil {
+		return nil, fmt.Errorf("FS production handler requires an adapter")
+	}
+	site, err := Load("fs")
+	if err != nil {
+		return nil, err
+	}
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if fsAdapterRoute(request.URL.Path) {
+			adapter.ServeHTTP(writer, request)
+			return
+		}
+		if site.ServeAsset(writer, request) {
+			return
+		}
+		if request.URL.Path == "/" || request.URL.Path == "/browse" || strings.HasPrefix(request.URL.Path, "/browse/") {
+			if request.Method != http.MethodGet && request.Method != http.MethodHead {
+				writeReadinessRouteError(writer, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED", "Use GET")
+				return
+			}
+			site.ServeShell(writer, request, fsReadinessCSP)
+			return
+		}
+		writeReadinessRouteError(writer, http.StatusNotFound, "NOT_FOUND", "Route not found")
+	}), nil
+}
+
+func fsAdapterRoute(path string) bool {
+	return path == "/api" || strings.HasPrefix(path, "/api/") ||
+		path == "/files" || strings.HasPrefix(path, "/files/") ||
+		path == "/thumbnails" || strings.HasPrefix(path, "/thumbnails/")
+}
+
 // NewReadinessHandler creates the G19 static-only route harness for one
 // embedded application. Command adapters continue to own their APIs and
 // lifecycle behavior, so this handler intentionally returns only route errors

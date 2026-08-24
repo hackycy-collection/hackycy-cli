@@ -22,6 +22,9 @@ coverage.out
 playwright-report/
 test-results/
 
+# Generated target-specific 7-Zip embedding payloads
+/internal/commands/fs/sevenzipruntime/payload/
+
 # Pinned development-tool binary and local caches
 /tools/lefthook/bin/
 

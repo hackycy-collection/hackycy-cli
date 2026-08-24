@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -23,7 +24,7 @@ var (
 
 var temporaryWorkspaceNames = []*regexp.Regexp{
 	regexp.MustCompile(`(?i)^\.download-[0-9a-f-]{36}\.tmp$`),
-	regexp.MustCompile(`(?i)^\.extract-[0-9a-f-]{36}\.tmp(?:\.outer)?$`),
+	regexp.MustCompile(`(?i)^\.extract-[0-9a-f-]{36}\.tmp(?:\.outer|\.source)?$`),
 	regexp.MustCompile(`(?i)^\.edit-[0-9a-f-]{36}\.tmp$`),
 	regexp.MustCompile(`(?i)^\.upload-[0-9a-f-]{36}\.tmp$`),
 }
@@ -78,8 +79,10 @@ func (file *OpenedFile) Identity() FileIdentity {
 // Workspace owns a Browse Root handle. All child access uses WorkspacePath,
 // so operating-system paths cannot cross this boundary after construction.
 type Workspace struct {
-	root     *os.Root
-	rootName string
+	root          *os.Root
+	rootDirectory string
+	rootName      string
+	writes        sync.Mutex
 }
 
 func OpenWorkspace(directory string) (*Workspace, error) {
@@ -108,7 +111,7 @@ func OpenWorkspace(directory string) (*Workspace, error) {
 	if err != nil {
 		return nil, fmt.Errorf("%w: open workspace root: %v", ErrWorkspaceUnavailable, err)
 	}
-	return &Workspace{root: root, rootName: filepath.Base(resolved)}, nil
+	return &Workspace{root: root, rootDirectory: resolved, rootName: filepath.Base(resolved)}, nil
 }
 
 func (workspace *Workspace) Close() error {

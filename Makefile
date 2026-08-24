@@ -5,7 +5,7 @@ VERSION ?= 0.0.0-dev
 
 GO_FILES := $(shell find cmd internal tools/hookctl tools/check-no-bun tools/web-browser-harness web -type f -name '*.go' 2>/dev/null)
 
-.PHONY: help bootstrap hooks-install hooks-doctor hooks-uninstall fmt check check-web check-go check-locks check-no-bun build cross-build web-browser-harness ensure-web-deps ensure-web-dist
+.PHONY: help bootstrap hooks-install hooks-doctor hooks-uninstall fmt check check-web check-go check-locks check-no-bun build cross-build web-browser-harness ensure-web-deps ensure-web-dist prepare-7zip prepare-7zip-all
 
 help:
 	@printf '%s\n' 'Targets: bootstrap, hooks-install, hooks-doctor, hooks-uninstall, fmt, check, build, cross-build, web-browser-harness'
@@ -45,7 +45,13 @@ check-web: ensure-web-deps
 	@$(PNPM) --dir web run test
 	@$(PNPM) --dir web run build
 
-check-go: check-web ensure-web-dist
+prepare-7zip:
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) run ./tools/prepare-sevenzip --target "$$($(GO) env GOOS)-$$($(GO) env GOARCH)"
+
+prepare-7zip-all: prepare-7zip
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) run ./tools/prepare-sevenzip --all
+
+check-go: check-web ensure-web-dist prepare-7zip
 	@unformatted="$$(gofmt -l $(GO_FILES))"; test -z "$$unformatted" || { printf '%s\n%s\n' 'Run make fmt; these Go files are not formatted:' "$$unformatted"; exit 1; }
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 $(GO) vet ./...
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 $(GO) test ./...
@@ -60,11 +66,11 @@ check-no-bun:
 
 check: check-locks check-no-bun check-go
 
-build: check-web
+build: check-web prepare-7zip
 	@mkdir -p build
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/ycy ./cmd/ycy
 
-cross-build: check-web
+cross-build: check-web prepare-7zip-all
 	@mkdir -p build/cross
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-macos-x64 ./cmd/ycy
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-macos-arm64 ./cmd/ycy
