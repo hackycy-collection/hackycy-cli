@@ -69,6 +69,19 @@ func TestAppconfigFoundationDoesNotExposeACommand(t *testing.T) {
 	}
 }
 
+func TestFSFoundationDoesNotExposeACommand(t *testing.T) {
+	app, output, errors, _ := testApp(t, nil)
+
+	if outcome := app.Execute(context.Background(), []string{"--help"}); outcome.Code != 0 || strings.Contains(output.String(), "\n  fs") {
+		t.Fatalf("help outcome = %#v, stdout = %q", outcome, output.String())
+	}
+	output.Reset()
+	errors.Reset()
+	if outcome := app.Execute(context.Background(), []string{"fs"}); outcome.Code != 1 || errors.String() != "error: unknown command 'fs'\n" {
+		t.Fatalf("fs outcome = %#v, stderr = %q", outcome, errors.String())
+	}
+}
+
 func TestPanicMappingRedactsAndAddsDebugStack(t *testing.T) {
 	app, output, errors, _ := testApp(t, map[string]string{"DEBUG": "1"})
 	outcome := app.execute(func() error {
