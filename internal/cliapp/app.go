@@ -46,6 +46,7 @@ type Dependencies struct {
 	FS                FSHandler
 	TunnelServer      TunnelServerHandler
 	TunnelConnect     TunnelConnectHandler
+	Upgrade           UpgradeHandler
 }
 
 // Outcome leaves process exit ownership with cmd/ycy.
@@ -83,6 +84,7 @@ type App struct {
 	fs                FSHandler
 	tunnelServer      TunnelServerHandler
 	tunnelConnect     TunnelConnectHandler
+	upgrade           UpgradeHandler
 }
 
 // New creates the current foundation command tree. Business leaves are added only with their own units.
@@ -141,6 +143,7 @@ func New(build BuildInfo, dependencies Dependencies) (*App, error) {
 		fs:                dependencies.FS,
 		tunnelServer:      dependencies.TunnelServer,
 		tunnelConnect:     dependencies.TunnelConnect,
+		upgrade:           dependencies.Upgrade,
 	}, nil
 }
 
@@ -257,6 +260,11 @@ func (app *App) rootCommand() *cobra.Command {
 	}
 	if app.tunnelServer != nil || app.tunnelConnect != nil {
 		app.registerTunnel(root, func() error {
+			return app.configureLogging(logLevel)
+		})
+	}
+	if app.upgrade != nil {
+		app.registerUpgrade(root, func() error {
 			return app.configureLogging(logLevel)
 		})
 	}

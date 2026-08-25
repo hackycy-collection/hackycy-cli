@@ -15,12 +15,25 @@ import (
 var version = "0.0.0-dev"
 
 func main() {
-	if fscommand.IsThumbnailWorkerInvocation(os.Args[1:]) {
+	arguments := os.Args[1:]
+	if handled, err := runHiddenUpgrade(arguments); handled {
+		if err != nil {
+			_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+
+	if fscommand.IsThumbnailWorkerInvocation(arguments) {
 		if err := fscommand.RunThumbnailWorker(os.Stdin, os.Stdout); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "thumbnail worker error: %s\n", err)
 			os.Exit(1)
 		}
 		return
+	}
+	if err := consumeUpgradeStartup(arguments, os.Stdout, os.Stderr); err != nil {
+		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
+		os.Exit(1)
 	}
 
 	if err := webassets.Validate(); err != nil {
@@ -101,6 +114,7 @@ func main() {
 		FS:            fsModule.Run,
 		TunnelServer:  newTunnelServerHandler(runtime.Logger("tunnel.server")),
 		TunnelConnect: newTunnelConnectHandler(os.Stdin, os.Stdout, runtime.Logger("tunnel.client"), version),
+		Upgrade:       newUpgradeHandler(os.Stdout, os.Stderr, version),
 		GitHeat:       gitHeatModule.Run,
 		GitPulse:      gitPulseModule.Run,
 		GitFork:       newGitForkHandler(os.Stdin, os.Stdout),
@@ -111,7 +125,7 @@ func main() {
 		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
 		os.Exit(1)
 	}
-	result := app.Execute(ctx, os.Args[1:])
+	result := app.Execute(ctx, arguments)
 	os.Exit(result.Code)
 }
 
