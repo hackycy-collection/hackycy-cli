@@ -2,13 +2,15 @@ GO_TOOLCHAIN ?= go1.26.7
 GO ?= go
 PNPM ?= pnpm
 VERSION ?= 0.0.0-dev
+RELEASE_VERSION ?= 0.1.0
+RELEASE_DIR := release/$(RELEASE_VERSION)
 
-GO_FILES := $(shell find cmd internal tools/hookctl tools/check-no-bun tools/web-browser-harness web -type f -name '*.go' 2>/dev/null)
+GO_FILES := $(shell find cmd internal tools/hookctl tools/check-no-bun tools/release-artifacts tools/web-browser-harness web -type f -name '*.go' 2>/dev/null)
 
-.PHONY: help bootstrap hooks-install hooks-doctor hooks-uninstall fmt check check-web check-go check-locks check-no-bun build cross-build web-browser-harness ensure-web-deps ensure-web-dist prepare-7zip prepare-7zip-all
+.PHONY: help bootstrap hooks-install hooks-doctor hooks-uninstall fmt check check-web check-go check-locks check-no-bun build cross-build release-clean release-candidate release-untracked web-browser-harness ensure-web-deps ensure-web-dist prepare-7zip prepare-7zip-all
 
 help:
-	@printf '%s\n' 'Targets: bootstrap, hooks-install, hooks-doctor, hooks-uninstall, fmt, check, build, cross-build, web-browser-harness'
+	@printf '%s\n' 'Targets: bootstrap, hooks-install, hooks-doctor, hooks-uninstall, fmt, check, build, cross-build, release-candidate, web-browser-harness'
 
 bootstrap:
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) $(GO) version
@@ -78,6 +80,30 @@ cross-build: check-web prepare-7zip-all
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-linux-arm64 ./cmd/ycy
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-windows-x64.exe ./cmd/ycy
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=windows GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.version=$(VERSION)" -o build/cross/ycy-windows-arm64.exe ./cmd/ycy
+
+release-clean:
+	@test "$(RELEASE_VERSION)" = "0.1.0" || { printf '%s\n' 'release-candidate requires RELEASE_VERSION=0.1.0'; exit 1; }
+	@for candidate in web/dist web/node_modules build .cache .tmp release internal/commands/fs/sevenzipruntime/payload tools/lefthook/bin; do \
+		test ! -e "$$candidate" || { printf '%s\n' "release-candidate requires a clean checkout; found $$candidate"; exit 1; }; \
+	done
+
+release-candidate: release-clean
+	@$(MAKE) bootstrap
+	@$(PNPM) --dir web run build
+	@$(MAKE) prepare-7zip-all
+	@mkdir -p $(RELEASE_DIR)
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=darwin GOARCH=amd64 $(GO) build -trimpath -ldflags "-X main.version=$(RELEASE_VERSION)" -o $(RELEASE_DIR)/ycy-macos-x64 ./cmd/ycy
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=darwin GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.version=$(RELEASE_VERSION)" -o $(RELEASE_DIR)/ycy-macos-arm64 ./cmd/ycy
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 $(GO) build -trimpath -ldflags "-X main.version=$(RELEASE_VERSION)" -o $(RELEASE_DIR)/ycy-linux-x64 ./cmd/ycy
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=linux GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.version=$(RELEASE_VERSION)" -o $(RELEASE_DIR)/ycy-linux-arm64 ./cmd/ycy
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=windows GOARCH=amd64 $(GO) build -trimpath -ldflags "-X main.version=$(RELEASE_VERSION)" -o $(RELEASE_DIR)/ycy-windows-x64.exe ./cmd/ycy
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 GOOS=windows GOARCH=arm64 $(GO) build -trimpath -ldflags "-X main.version=$(RELEASE_VERSION)" -o $(RELEASE_DIR)/ycy-windows-arm64.exe ./cmd/ycy
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) run ./tools/release-artifacts --directory $(RELEASE_DIR)
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) run ./tools/release-artifacts --verify --directory $(RELEASE_DIR)
+	@$(MAKE) release-untracked
+
+release-untracked:
+	@tracked="$$(git ls-files -- web/dist web/node_modules build .cache .tmp release internal/commands/fs/sevenzipruntime/payload tools/lefthook/bin)"; test -z "$$tracked" || { printf '%s\n%s\n' 'generated candidate output is tracked:' "$$tracked"; exit 1; }
 
 web-browser-harness: check-web
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 $(GO) run ./tools/web-browser-harness
