@@ -96,13 +96,14 @@ func main() {
 		ZIP: func(_ context.Context, input zipcommand.Input) (zipcommand.Result, error) {
 			return zipModule.Run(input)
 		},
-		Run:      runModule.Run,
-		Diff:     diffModule.Run,
-		FS:       fsModule.Run,
-		GitHeat:  gitHeatModule.Run,
-		GitPulse: gitPulseModule.Run,
-		GitFork:  newGitForkHandler(os.Stdin, os.Stdout),
-		GitCM:    newGitCMHandler(os.Stdin, os.Stdout),
+		Run:          runModule.Run,
+		Diff:         diffModule.Run,
+		FS:           fsModule.Run,
+		TunnelServer: newTunnelServerHandler(runtime.Logger("tunnel.server")),
+		GitHeat:      gitHeatModule.Run,
+		GitPulse:     gitPulseModule.Run,
+		GitFork:      newGitForkHandler(os.Stdin, os.Stdout),
+		GitCM:        newGitCMHandler(os.Stdin, os.Stdout),
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(os.Stdout)

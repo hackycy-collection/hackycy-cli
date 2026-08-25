@@ -50,10 +50,44 @@ func NewFSProductionHandler(adapter http.Handler) (http.Handler, error) {
 	}), nil
 }
 
+// NewTunnelProductionHandler joins the Tunnel control-plane adapter to the
+// retained Tunnel server application without widening shell route ownership.
+func NewTunnelProductionHandler(adapter http.Handler) (http.Handler, error) {
+	if adapter == nil {
+		return nil, fmt.Errorf("Tunnel production handler requires an adapter")
+	}
+	site, err := Load("tunnel-server")
+	if err != nil {
+		return nil, err
+	}
+	return http.HandlerFunc(func(writer http.ResponseWriter, request *http.Request) {
+		if tunnelAdapterRoute(request.URL.Path) {
+			adapter.ServeHTTP(writer, request)
+			return
+		}
+		if site.ServeAsset(writer, request) {
+			return
+		}
+		if tunnelShellRoute(request.URL.Path) && (request.Method == http.MethodGet || request.Method == http.MethodHead) {
+			site.ServeShell(writer, request, tunnelReadinessCSP)
+			return
+		}
+		writeReadinessRouteError(writer, http.StatusNotFound, "NOT_FOUND", "Route not found")
+	}), nil
+}
+
 func fsAdapterRoute(path string) bool {
 	return path == "/api" || strings.HasPrefix(path, "/api/") ||
 		path == "/files" || strings.HasPrefix(path, "/files/") ||
 		path == "/thumbnails" || strings.HasPrefix(path, "/thumbnails/")
+}
+
+func tunnelAdapterRoute(path string) bool {
+	return path == "/healthz" || path == "/api" || strings.HasPrefix(path, "/api/")
+}
+
+func tunnelShellRoute(path string) bool {
+	return path == "/" || path == "/clients" || strings.HasPrefix(path, "/clients/") || path == "/accounts" || path == "/server"
 }
 
 // NewReadinessHandler creates the G19 static-only route harness for one

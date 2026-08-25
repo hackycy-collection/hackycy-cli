@@ -220,24 +220,52 @@ func (manager *Manager) Issue(subject, revision string) (*Session, error) {
 }
 
 func (manager *Manager) Resume(token string, currentRevision func(string) string) (*Session, error) {
+	if token == "" {
+		return nil, nil
+	}
+	hash := tokenHash(token)
+
 	manager.mu.Lock()
 	var notifications []func()
-	defer func() { notify(notifications) }()
-	defer manager.mu.Unlock()
-	if manager.closed || token == "" {
+	if manager.closed {
+		manager.mu.Unlock()
 		return nil, nil
 	}
 	expired, err := manager.clearExpiredLocked()
 	if err != nil {
+		manager.mu.Unlock()
 		return nil, err
 	}
 	notifications = append(notifications, expired...)
-	hash := tokenHash(token)
 	record, found := manager.sessions[hash]
+	manager.mu.Unlock()
+	notify(notifications)
 	if !found {
 		return nil, nil
 	}
-	if currentRevision == nil || currentRevision(record.Subject) != record.Revision {
+
+	revision := ""
+	if currentRevision != nil {
+		revision = currentRevision(record.Subject)
+	}
+
+	manager.mu.Lock()
+	notifications = nil
+	defer func() { notify(notifications) }()
+	defer manager.mu.Unlock()
+	if manager.closed {
+		return nil, nil
+	}
+	expired, err = manager.clearExpiredLocked()
+	if err != nil {
+		return nil, err
+	}
+	notifications = append(notifications, expired...)
+	record, found = manager.sessions[hash]
+	if !found {
+		return nil, nil
+	}
+	if currentRevision == nil || revision != record.Revision {
 		revoked, err := manager.revokeHashLocked(hash)
 		if err != nil {
 			return nil, err

@@ -227,6 +227,35 @@ func TestManagerRevokesAChangedCredentialRevision(t *testing.T) {
 	}
 }
 
+func TestManagerResumeAllowsCredentialRevisionCallbacks(t *testing.T) {
+	manager, err := Open(Options{BaseDirectory: t.TempDir()})
+	if err != nil {
+		t.Fatalf("Open() error = %v", err)
+	}
+	t.Cleanup(func() { _ = manager.Close() })
+	revision, err := manager.CredentialRevision("alice\x00password")
+	if err != nil {
+		t.Fatalf("CredentialRevision() error = %v", err)
+	}
+	issued, err := manager.Issue("alice", revision)
+	if err != nil {
+		t.Fatalf("Issue() error = %v", err)
+	}
+	resumed, err := manager.Resume(issued.Token, func(subject string) string {
+		if subject != "alice" {
+			t.Fatalf("revision subject = %q", subject)
+		}
+		current, revisionErr := manager.CredentialRevision("alice\x00password")
+		if revisionErr != nil {
+			t.Fatalf("CredentialRevision() in callback error = %v", revisionErr)
+		}
+		return current
+	})
+	if err != nil || resumed == nil || resumed.Subject != "alice" {
+		t.Fatalf("Resume() = (%#v, %v)", resumed, err)
+	}
+}
+
 func TestOpenRestoresOnlyGoOwnedRecordsAndRefreshesTheirIdleDeadline(t *testing.T) {
 	base := t.TempDir()
 	now := time.Date(2026, time.August, 24, 3, 0, 0, 0, time.UTC)

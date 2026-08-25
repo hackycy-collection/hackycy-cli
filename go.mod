@@ -10,6 +10,7 @@ require (
 	github.com/gen2brain/vpx v0.2.1
 	github.com/go-git/go-git/v5 v5.19.2
 	github.com/google/jsonschema-go v0.3.0
+	github.com/gorilla/websocket v1.5.3
 	github.com/modelcontextprotocol/go-sdk v1.0.0
 	github.com/ncruces/go-sqlite3 v0.35.3
 	github.com/pelletier/go-toml/v2 v2.4.3

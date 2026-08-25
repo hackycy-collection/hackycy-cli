@@ -20,29 +20,31 @@ type BuildInfo struct {
 
 // Dependencies are process facts supplied by the composition root.
 type Dependencies struct {
-	Out              io.Writer
-	Err              io.Writer
-	Environment      func(string) string
-	Logging          *logging.Runtime
-	ExportEnv        ExportEnvHandler
-	ConfigForkList   ConfigForkListHandler
-	ConfigForkAdd    ConfigForkAddHandler
-	ConfigForkRemove ConfigForkRemoveHandler
-	ConfigCMList     ConfigCMListHandler
-	ConfigCMAdd      ConfigCMAddHandler
-	ConfigCMUse      ConfigCMUseHandler
-	ConfigCMSet      ConfigCMSetHandler
-	ConfigCMRemove   ConfigCMRemoveHandler
-	ConfigCMTest     ConfigCMTestHandler
-	RM               RmHandler
-	Run              RunHandler
-	GitHeat          GitHeatHandler
-	GitPulse         GitPulseHandler
-	GitFork          GitForkHandler
-	GitCM            GitCMHandler
-	ZIP              ZipHandler
-	Diff             DiffHandler
-	FS               FSHandler
+	Out               io.Writer
+	Err               io.Writer
+	Environment       func(string) string
+	EnvironmentLookup func(string) (string, bool)
+	Logging           *logging.Runtime
+	ExportEnv         ExportEnvHandler
+	ConfigForkList    ConfigForkListHandler
+	ConfigForkAdd     ConfigForkAddHandler
+	ConfigForkRemove  ConfigForkRemoveHandler
+	ConfigCMList      ConfigCMListHandler
+	ConfigCMAdd       ConfigCMAddHandler
+	ConfigCMUse       ConfigCMUseHandler
+	ConfigCMSet       ConfigCMSetHandler
+	ConfigCMRemove    ConfigCMRemoveHandler
+	ConfigCMTest      ConfigCMTestHandler
+	RM                RmHandler
+	Run               RunHandler
+	GitHeat           GitHeatHandler
+	GitPulse          GitPulseHandler
+	GitFork           GitForkHandler
+	GitCM             GitCMHandler
+	ZIP               ZipHandler
+	Diff              DiffHandler
+	FS                FSHandler
+	TunnelServer      TunnelServerHandler
 }
 
 // Outcome leaves process exit ownership with cmd/ycy.
@@ -53,30 +55,32 @@ type Outcome struct {
 
 // App owns Cobra, global options, diagnostics, and fresh root-tree construction.
 type App struct {
-	build            BuildInfo
-	out              io.Writer
-	err              io.Writer
-	environment      func(string) string
-	logging          *logging.Runtime
-	exportEnv        ExportEnvHandler
-	configForkList   ConfigForkListHandler
-	configForkAdd    ConfigForkAddHandler
-	configForkRemove ConfigForkRemoveHandler
-	configCMList     ConfigCMListHandler
-	configCMAdd      ConfigCMAddHandler
-	configCMUse      ConfigCMUseHandler
-	configCMSet      ConfigCMSetHandler
-	configCMRemove   ConfigCMRemoveHandler
-	configCMTest     ConfigCMTestHandler
-	rm               RmHandler
-	run              RunHandler
-	gitHeat          GitHeatHandler
-	gitPulse         GitPulseHandler
-	gitFork          GitForkHandler
-	gitCM            GitCMHandler
-	zip              ZipHandler
-	diff             DiffHandler
-	fs               FSHandler
+	build             BuildInfo
+	out               io.Writer
+	err               io.Writer
+	environment       func(string) string
+	environmentLookup func(string) (string, bool)
+	logging           *logging.Runtime
+	exportEnv         ExportEnvHandler
+	configForkList    ConfigForkListHandler
+	configForkAdd     ConfigForkAddHandler
+	configForkRemove  ConfigForkRemoveHandler
+	configCMList      ConfigCMListHandler
+	configCMAdd       ConfigCMAddHandler
+	configCMUse       ConfigCMUseHandler
+	configCMSet       ConfigCMSetHandler
+	configCMRemove    ConfigCMRemoveHandler
+	configCMTest      ConfigCMTestHandler
+	rm                RmHandler
+	run               RunHandler
+	gitHeat           GitHeatHandler
+	gitPulse          GitPulseHandler
+	gitFork           GitForkHandler
+	gitCM             GitCMHandler
+	zip               ZipHandler
+	diff              DiffHandler
+	fs                FSHandler
+	tunnelServer      TunnelServerHandler
 }
 
 // New creates the current foundation command tree. Business leaves are added only with their own units.
@@ -90,37 +94,50 @@ func New(build BuildInfo, dependencies Dependencies) (*App, error) {
 	if dependencies.Err == nil {
 		dependencies.Err = os.Stderr
 	}
-	if dependencies.Environment == nil {
+	providedEnvironment := dependencies.Environment != nil
+	if !providedEnvironment {
 		dependencies.Environment = os.Getenv
+	}
+	if dependencies.EnvironmentLookup == nil {
+		if !providedEnvironment {
+			dependencies.EnvironmentLookup = os.LookupEnv
+		} else {
+			dependencies.EnvironmentLookup = func(key string) (string, bool) {
+				value := dependencies.Environment(key)
+				return value, value != ""
+			}
+		}
 	}
 	if dependencies.Logging == nil {
 		dependencies.Logging = logging.NewRuntime(logging.Options{Writer: dependencies.Err})
 	}
 	return &App{
-		build:            build,
-		out:              dependencies.Out,
-		err:              dependencies.Err,
-		environment:      dependencies.Environment,
-		logging:          dependencies.Logging,
-		exportEnv:        dependencies.ExportEnv,
-		configForkList:   dependencies.ConfigForkList,
-		configForkAdd:    dependencies.ConfigForkAdd,
-		configForkRemove: dependencies.ConfigForkRemove,
-		configCMList:     dependencies.ConfigCMList,
-		configCMAdd:      dependencies.ConfigCMAdd,
-		configCMUse:      dependencies.ConfigCMUse,
-		configCMSet:      dependencies.ConfigCMSet,
-		configCMRemove:   dependencies.ConfigCMRemove,
-		configCMTest:     dependencies.ConfigCMTest,
-		rm:               dependencies.RM,
-		run:              dependencies.Run,
-		gitHeat:          dependencies.GitHeat,
-		gitPulse:         dependencies.GitPulse,
-		gitFork:          dependencies.GitFork,
-		gitCM:            dependencies.GitCM,
-		zip:              dependencies.ZIP,
-		diff:             dependencies.Diff,
-		fs:               dependencies.FS,
+		build:             build,
+		out:               dependencies.Out,
+		err:               dependencies.Err,
+		environment:       dependencies.Environment,
+		environmentLookup: dependencies.EnvironmentLookup,
+		logging:           dependencies.Logging,
+		exportEnv:         dependencies.ExportEnv,
+		configForkList:    dependencies.ConfigForkList,
+		configForkAdd:     dependencies.ConfigForkAdd,
+		configForkRemove:  dependencies.ConfigForkRemove,
+		configCMList:      dependencies.ConfigCMList,
+		configCMAdd:       dependencies.ConfigCMAdd,
+		configCMUse:       dependencies.ConfigCMUse,
+		configCMSet:       dependencies.ConfigCMSet,
+		configCMRemove:    dependencies.ConfigCMRemove,
+		configCMTest:      dependencies.ConfigCMTest,
+		rm:                dependencies.RM,
+		run:               dependencies.Run,
+		gitHeat:           dependencies.GitHeat,
+		gitPulse:          dependencies.GitPulse,
+		gitFork:           dependencies.GitFork,
+		gitCM:             dependencies.GitCM,
+		zip:               dependencies.ZIP,
+		diff:              dependencies.Diff,
+		fs:                dependencies.FS,
+		tunnelServer:      dependencies.TunnelServer,
 	}, nil
 }
 
@@ -232,6 +249,11 @@ func (app *App) rootCommand() *cobra.Command {
 	}
 	if app.fs != nil {
 		app.registerFS(root, func() error {
+			return app.configureLogging(logLevel)
+		})
+	}
+	if app.tunnelServer != nil {
+		app.registerTunnel(root, func() error {
 			return app.configureLogging(logLevel)
 		})
 	}

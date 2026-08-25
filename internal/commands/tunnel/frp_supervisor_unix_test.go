@@ -135,6 +135,28 @@ func TestFRPSupervisorForceKillsAStubbornUnixProcessGroup(t *testing.T) {
 	}
 }
 
+func TestParseFRPSupervisorPIDDistinguishesAnEmptyPublicationFromInvalidData(t *testing.T) {
+	for _, test := range []struct {
+		name      string
+		contents  string
+		wantPID   int
+		wantReady bool
+		wantError bool
+	}{
+		{name: "empty file", contents: "", wantReady: false},
+		{name: "whitespace file", contents: " \n\t", wantReady: false},
+		{name: "valid PID", contents: "12345\n", wantPID: 12345, wantReady: true},
+		{name: "invalid PID", contents: "not-a-pid", wantError: true},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			pid, ready, err := parseFRPSupervisorPID([]byte(test.contents))
+			if (err != nil) != test.wantError || pid != test.wantPID || ready != test.wantReady {
+				t.Fatalf("parseFRPSupervisorPID(%q) = (%d, %t, %v)", test.contents, pid, ready, err)
+			}
+		})
+	}
+}
+
 func TestNewFRPSupervisorRejectsIncompleteConfiguration(t *testing.T) {
 	if _, err := NewFRPSupervisor(FRPSupervisorOptions{Role: FRPRoleClient}); !errors.Is(err, ErrFRPSupervisorConfiguration) {
 		t.Fatalf("empty binary error = %v", err)
@@ -171,14 +193,32 @@ func waitForFRPSupervisorPID(t *testing.T, path string) int {
 		if err != nil {
 			return false
 		}
-		parsed, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+		parsed, ready, err := parseFRPSupervisorPID(contents)
 		if err != nil {
 			t.Fatalf("parse child PID %q: %v", contents, err)
+		}
+		if !ready {
+			return false
 		}
 		pid = parsed
 		return true
 	})
 	return pid
+}
+
+func parseFRPSupervisorPID(contents []byte) (int, bool, error) {
+	value := strings.TrimSpace(string(contents))
+	if value == "" {
+		return 0, false, nil
+	}
+	pid, err := strconv.Atoi(value)
+	if err != nil {
+		return 0, false, err
+	}
+	if pid < 1 {
+		return 0, false, errors.New("PID must be positive")
+	}
+	return pid, true, nil
 }
 
 func waitForFRPSupervisorGone(pid int, timeout time.Duration) bool {
