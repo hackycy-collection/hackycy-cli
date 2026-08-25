@@ -46,11 +46,24 @@ func TestTunnelServerStandaloneBinaryPreservesCLIValidation(t *testing.T) {
 		{arguments: []string{"tunnel", "server", "--control-port", "7000", "--frp-port", "7000"}, message: "Control, FRP bind, and FRP HTTP listener ports must be distinct"},
 		{arguments: []string{"tunnel", "server", "--port-range", "7000-7010"}, message: "Server Port Pool must not include listener port 7000"},
 		{arguments: []string{"tunnel", "server", "--advertise-frp-addr", "https://tunnels.example.test:7000"}, message: "Advertised FRP address must be host:port or [IPv6]:port"},
-		{arguments: []string{"tunnel", "connect"}, message: "unknown command 'connect'"},
+		{arguments: []string{"tunnel", "connect", "--server", "", "--token", "client-token"}, message: "Control plane must not be empty"},
 	} {
 		output, runErr := runDiffStandalone(binary, t.TempDir(), environment, testCase.arguments...)
 		if exitCode(runErr) != 1 || !strings.Contains(string(output), testCase.message) {
 			t.Fatalf("arguments %q = (%v, %q), want %q", testCase.arguments, runErr, output, testCase.message)
+		}
+	}
+
+	connectHelp, err := runDiffStandalone(binary, t.TempDir(), environment, "tunnel", "connect", "--help")
+	if err != nil {
+		t.Fatalf("tunnel connect --help: %v\n%s", err, connectHelp)
+	}
+	for _, expected := range []string{
+		"Connect a native trusted client to a Tunnel Control Plane",
+		"--server", "--token", "Global Flags:", "--log-level",
+	} {
+		if !strings.Contains(string(connectHelp), expected) {
+			t.Fatalf("tunnel connect help omitted %q:\n%s", expected, connectHelp)
 		}
 	}
 

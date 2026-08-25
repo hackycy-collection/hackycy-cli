@@ -125,6 +125,79 @@ func TestTunnelServerBindingRejectsInvalidConfigurationBeforeInvokingTheHandler(
 	}
 }
 
+func TestTunnelConnectBindingPreservesExplicitFlagsAndConfiguresGlobalLogging(t *testing.T) {
+	output := &bytes.Buffer{}
+	errors := &bytes.Buffer{}
+	runtime := logging.NewRuntime(logging.Options{Writer: errors})
+	var inputs []tunnel.ClientOptionInput
+	app, err := New(BuildInfo{Version: "0.0.0-dev"}, Dependencies{
+		Out:     output,
+		Err:     errors,
+		Logging: runtime,
+		TunnelConnect: func(_ context.Context, input tunnel.ClientOptionInput) error {
+			inputs = append(inputs, input)
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	for index, arguments := range [][]string{
+		{"--log-level", "warn", "tunnel", "connect", "--server", "http://control.example.test", "--token", "cli-token"},
+		{"tunnel", "connect", "--server="},
+		{"tunnel", "connect"},
+	} {
+		if outcome := app.Execute(context.Background(), arguments); outcome.Code != 0 || outcome.Err != nil {
+			t.Fatalf("arguments %q outcome = %#v, stderr = %q", arguments, outcome, errors.String())
+		}
+		if index == 0 && runtime.Level() != logging.Warn {
+			t.Fatalf("global log level = %v, want %v", runtime.Level(), logging.Warn)
+		}
+	}
+	if len(inputs) != 3 {
+		t.Fatalf("connect handler calls = %d, want 3", len(inputs))
+	}
+	if got, want := requiredTunnelConnectOption(inputs[0].Server), "http://control.example.test"; got != want {
+		t.Errorf("first server = %q, want %q", got, want)
+	}
+	if got, want := requiredTunnelConnectOption(inputs[0].Token), "cli-token"; got != want {
+		t.Errorf("first token = %q, want %q", got, want)
+	}
+	if inputs[1].Server == nil || *inputs[1].Server != "" || inputs[1].Token != nil {
+		t.Errorf("explicit empty server input = %#v", inputs[1])
+	}
+	if inputs[2].Server != nil || inputs[2].Token != nil {
+		t.Errorf("absent connect options = %#v", inputs[2])
+	}
+	if output.Len() != 0 || errors.Len() != 0 {
+		t.Fatalf("connect binding output = %q stderr = %q", output.String(), errors.String())
+	}
+}
+
+func TestTunnelConnectBindingRegistersOnlyItsOwnLeafAndFlags(t *testing.T) {
+	output := &bytes.Buffer{}
+	errors := &bytes.Buffer{}
+	app, err := New(BuildInfo{Version: "0.0.0-dev"}, Dependencies{
+		Out: output,
+		Err: errors,
+		TunnelConnect: func(context.Context, tunnel.ClientOptionInput) error {
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+	if outcome := app.Execute(context.Background(), []string{"tunnel", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "connect") || strings.Contains(output.String(), "server") {
+		t.Fatalf("tunnel help outcome = %#v, stdout = %q", outcome, output.String())
+	}
+	output.Reset()
+	errors.Reset()
+	if outcome := app.Execute(context.Background(), []string{"tunnel", "connect", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "--server") || !strings.Contains(output.String(), "--token") || strings.Contains(output.String(), "--control-port") || !strings.Contains(output.String(), "Global Flags:\n      --log-level") {
+		t.Fatalf("connect help outcome = %#v, stdout = %q", outcome, output.String())
+	}
+}
+
 func TestTunnelServerBindingExposesOnlyTheIntegratedServerLeaf(t *testing.T) {
 	app, output, errors, _ := testApp(t, nil)
 	if outcome := app.Execute(context.Background(), []string{"--help"}); outcome.Code != 0 || strings.Contains(output.String(), "\n  tunnel") {
@@ -171,6 +244,13 @@ func tunnelServerTestApp(t *testing.T, environment map[string]string) (*App, *by
 		t.Fatalf("New() error = %v", err)
 	}
 	return app, output, errors, &calls
+}
+
+func requiredTunnelConnectOption(value *string) string {
+	if value == nil {
+		return ""
+	}
+	return *value
 }
 
 func tunnelEnvironmentValue(values map[string]string) func(string) string {
