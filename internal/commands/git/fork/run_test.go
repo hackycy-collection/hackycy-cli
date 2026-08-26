@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io/fs"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -23,13 +24,13 @@ func TestModuleUsesTheArchiveAfterDefaultBranchResolution(t *testing.T) {
 	if got, want := result, (Result{
 		Repository:      Repository{Host: "github.com", Scheme: "https", Owner: "owner", Name: "project", ProviderType: providerGitHub},
 		Destination:     "project",
-		DestinationPath: "/workspace/project",
+		DestinationPath: testForkPath("project"),
 		Ref:             "main",
 		Acquisition:     acquisitionArchive,
 	}); !reflect.DeepEqual(got, want) {
 		t.Fatalf("Run() result = %#v, want %#v", got, want)
 	}
-	if got, want := events, []string{"read:/workspace/project", "branch", "archive:main", "extract:/workspace/project"}; !reflect.DeepEqual(got, want) {
+	if got, want := events, []string{"read:" + testForkPath("project"), "branch", "archive:main", "extract:" + testForkPath("project")}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("event order = %#v, want %#v", got, want)
 	}
 }
@@ -46,8 +47,8 @@ func TestModulePresentsTheObservableAcquisitionMilestones(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if got, want := events, []string{
-		"intro", "resolved:github.com/owner/project", "read:/workspace/project", "branch-start", "branch", "branch:main",
-		"archive-start", "archive:main", "extract:/workspace/project", "archive-succeeded", "completed:project",
+		"intro", "resolved:github.com/owner/project", "read:" + testForkPath("project"), "branch-start", "branch", "branch:main",
+		"archive-start", "archive:main", "extract:" + testForkPath("project"), "archive-succeeded", "completed:project",
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("presentation and operation order = %#v, want %#v", got, want)
 	}
@@ -63,7 +64,7 @@ func TestModulePresentsTheObservableAcquisitionMilestones(t *testing.T) {
 	if err != nil || !result.Cancelled {
 		t.Fatalf("cancelled Run() = (%#v, %v)", result, err)
 	}
-	if got, want := events, []string{"intro", "resolved:github.com/owner/project", "read:/workspace/project", "prompt", "cancelled"}; !reflect.DeepEqual(got, want) {
+	if got, want := events, []string{"intro", "resolved:github.com/owner/project", "read:" + testForkPath("project"), "prompt", "cancelled"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("cancellation order = %#v, want %#v", got, want)
 	}
 }
@@ -81,13 +82,13 @@ func TestModuleFallsBackToCloneForArchiveAndDefaultBranchFailures(t *testing.T) 
 			input:      Input{Repository: "owner/project#release/topic", Destination: "chosen"},
 			provider:   &fakeProvider{archiveErr: errors.New("archive unavailable")},
 			wantRef:    "release/topic",
-			wantEvents: []string{"read:/workspace/chosen", "archive:release/topic", "clone", "remove:/workspace/chosen/.git"},
+			wantEvents: []string{"read:" + testForkPath("chosen"), "archive:release/topic", "clone", "remove:" + testForkPath("chosen", ".git")},
 		},
 		{
 			name:       "default branch failure uses remote default clone",
 			input:      Input{Repository: "owner/project"},
 			provider:   &fakeProvider{defaultErr: errors.New("default unavailable")},
-			wantEvents: []string{"read:/workspace/project", "branch", "clone", "remove:/workspace/project/.git"},
+			wantEvents: []string{"read:" + testForkPath("project"), "branch", "clone", "remove:" + testForkPath("project", ".git")},
 		},
 	}
 	for _, test := range tests {
@@ -132,34 +133,34 @@ func TestModuleRetainsLegacyDestinationConfirmationAndReadErrorBehavior(t *testi
 			name:    "accepted nonempty destination is removed before provider work",
 			input:   Input{Repository: "owner/project", Destination: "existing"},
 			entries: []fs.DirEntry{testDirectoryEntry{}}, confirmed: true,
-			wantEvents:      []string{"read:/workspace/existing", "prompt", "remove:/workspace/existing", "branch", "archive:main", "extract:/workspace/existing"},
-			wantRemovePaths: []string{"/workspace/existing"},
+			wantEvents:      []string{"read:" + testForkPath("existing"), "prompt", "remove:" + testForkPath("existing"), "branch", "archive:main", "extract:" + testForkPath("existing")},
+			wantRemovePaths: []string{testForkPath("existing")},
 		},
 		{
 			name:          "declined replacement succeeds without mutation",
 			input:         Input{Repository: "owner/project", Destination: "existing"},
 			entries:       []fs.DirEntry{testDirectoryEntry{}},
 			wantCancelled: true,
-			wantEvents:    []string{"read:/workspace/existing", "prompt"},
+			wantEvents:    []string{"read:" + testForkPath("existing"), "prompt"},
 		},
 		{
 			name:    "cancelled replacement succeeds without mutation",
 			input:   Input{Repository: "owner/project", Destination: "existing"},
 			entries: []fs.DirEntry{testDirectoryEntry{}}, cancelled: true,
 			wantCancelled: true,
-			wantEvents:    []string{"read:/workspace/existing", "prompt"},
+			wantEvents:    []string{"read:" + testForkPath("existing"), "prompt"},
 		},
 		{
 			name:       "directory read errors act like a missing destination",
 			input:      Input{Repository: "owner/project", Destination: "unreadable"},
 			readErr:    errors.New("permission denied"),
-			wantEvents: []string{"read:/workspace/unreadable", "branch", "archive:main", "extract:/workspace/unreadable"},
+			wantEvents: []string{"read:" + testForkPath("unreadable"), "branch", "archive:main", "extract:" + testForkPath("unreadable")},
 		},
 		{
 			name:  "empty repository name defaults to the working directory",
 			input: Input{Repository: "owner/"}, entries: []fs.DirEntry{testDirectoryEntry{}},
 			wantCancelled: true,
-			wantEvents:    []string{"read:/workspace", "prompt"},
+			wantEvents:    []string{"read:" + testForkPath(), "prompt"},
 		},
 	}
 	for _, test := range tests {
@@ -346,6 +347,10 @@ func recordTestEvent(events *[]string, event string) {
 	if events != nil {
 		*events = append(*events, event)
 	}
+}
+
+func testForkPath(parts ...string) string {
+	return filepath.Join(append([]string{"/workspace"}, parts...)...)
 }
 
 type testDirectoryEntry struct{}

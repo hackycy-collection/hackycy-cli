@@ -5,10 +5,17 @@ package filesession
 import (
 	"errors"
 	"syscall"
+	"time"
 	"unsafe"
+
+	"golang.org/x/sys/windows"
 )
 
-const moveFileReplaceExisting = 0x1
+const (
+	moveFileReplaceExisting = 0x1
+	replaceRetryCount       = 100
+	replaceRetryInterval    = 50 * time.Millisecond
+)
 
 var (
 	kernel32       = syscall.NewLazyDLL("kernel32.dll")
@@ -17,6 +24,26 @@ var (
 )
 
 func replaceSessionFile(candidate, target string) error {
+	return replaceSessionFileWithRetry(candidate, target, replaceRetryCount, replaceRetryInterval)
+}
+
+func replaceSessionFileWithRetry(candidate, target string, attempts int, interval time.Duration) error {
+	var last error
+	for attempt := 0; attempt < attempts; attempt++ {
+		err := moveSessionFile(candidate, target)
+		if err == nil {
+			return nil
+		}
+		last = err
+		if !retryableSessionReplace(err) || attempt == attempts-1 {
+			return err
+		}
+		time.Sleep(interval)
+	}
+	return last
+}
+
+func moveSessionFile(candidate, target string) error {
 	candidatePath, err := syscall.UTF16PtrFromString(candidate)
 	if err != nil {
 		return err
@@ -37,4 +64,8 @@ func replaceSessionFile(candidate, target string) error {
 		return callErr
 	}
 	return errMoveFileExW
+}
+
+func retryableSessionReplace(err error) bool {
+	return errors.Is(err, windows.ERROR_SHARING_VIOLATION) || errors.Is(err, windows.ERROR_ACCESS_DENIED)
 }

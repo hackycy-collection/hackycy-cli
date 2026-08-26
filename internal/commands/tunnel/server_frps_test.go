@@ -161,6 +161,11 @@ func TestManagedFRPSReadsCustom404Page(t *testing.T) {
 	if err != nil || content != "" {
 		t.Fatalf("ReadCustom404Page() for missing page = (%q, %v)", content, err)
 	}
+	missingParent := filepath.Join(t.TempDir(), "missing", "nested")
+	content, err = newManaged(t, filepath.Dir(missingParent)).ReadCustom404Page()
+	if err != nil || content != "" {
+		t.Fatalf("ReadCustom404Page() for missing parent = (%q, %v)", content, err)
+	}
 	if err := os.WriteFile(managed.Custom404PagePath(), []byte("<main>custom page</main>"), 0o600); err != nil {
 		t.Fatalf("write custom 404 fixture: %v", err)
 	}
@@ -206,10 +211,7 @@ func TestManagedFRPSWritesAndRemovesCustom404Page(t *testing.T) {
 	if err != nil || string(contents) != "<main>first version</main>" {
 		t.Fatalf("custom 404 file after first write = (%q, %v)", contents, err)
 	}
-	info, err := os.Stat(managed.Custom404PagePath())
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("custom 404 file mode = (%#o, %v)", info.Mode().Perm(), err)
-	}
+	assertTunnelPrivateFile(t, managed.Custom404PagePath(), 0o600)
 	if err := managed.WriteCustom404Page("<main>second version</main>"); err != nil {
 		t.Fatalf("WriteCustom404Page(second) error = %v", err)
 	}
@@ -293,10 +295,7 @@ func TestManagedFRPSPublishesConfiguration(t *testing.T) {
 	if document.BindAddr != "127.0.0.1" || document.BindPort != 7000 || document.VhostHTTPPort != 8080 || document.Custom404Page != managed.Custom404PagePath() || document.Auth.Token != "internal-frp-token" || len(document.AllowPorts) != 1 || document.AllowPorts[0] != (frpPortRangeTOML{Start: 20000, End: 20100}) {
 		t.Fatalf("published configuration = %#v", document)
 	}
-	info, err := os.Stat(managed.ConfigurationPath())
-	if err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("published configuration mode = (%#o, %v)", info.Mode().Perm(), err)
-	}
+	assertTunnelPrivateFile(t, managed.ConfigurationPath(), 0o600)
 	if candidates, err := filepath.Glob(managed.ConfigurationPath() + ".candidate-*"); err != nil || len(candidates) != 0 {
 		t.Fatalf("configuration candidates = %v, glob error = %v", candidates, err)
 	}

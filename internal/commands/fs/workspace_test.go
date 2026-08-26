@@ -268,7 +268,7 @@ func TestWorkspaceOpenedFileKeepsIdentityAndBytesAfterReplacement(t *testing.T) 
 	if err := os.WriteFile(candidate, []byte("replacement"), 0o600); err != nil {
 		t.Fatalf("write replacement candidate: %v", err)
 	}
-	if err := os.Rename(candidate, filePath); err != nil {
+	if err := workspace.root.Rename("candidate", "report.txt"); err != nil {
 		t.Fatalf("replace file: %v", err)
 	}
 	contents, err := io.ReadAll(opened)

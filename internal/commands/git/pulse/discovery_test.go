@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"sort"
+	"strconv"
 	"testing"
 )
 
@@ -106,7 +107,7 @@ func TestScanRepositoriesSkipsUnreadableDirectoriesAndContinues(t *testing.T) {
 func TestScanRepositoriesYieldsAfterEachFullScanBatch(t *testing.T) {
 	root := t.TempDir()
 	for index := range scanYieldEvery {
-		makePulseDirectory(t, filepath.Join(root, "directory-"+string(rune('a'+index))))
+		makePulseDirectory(t, filepath.Join(root, "directory-"+strconv.Itoa(index)))
 	}
 
 	yields := 0

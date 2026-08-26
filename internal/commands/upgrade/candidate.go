@@ -85,7 +85,7 @@ func DownloadCandidate(ctx context.Context, resolution ReleaseResolution, target
 	if strings.TrimSpace(transactionID) == "" {
 		return Candidate{}, errors.New("update transaction ID is empty")
 	}
-	stagedPath := filepath.Join(filepath.Dir(targetPath), filepath.Base(targetPath)+".new."+transactionID)
+	stagedPath := transactionBinaryPath(targetPath, ".new.", transactionID)
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, resolution.ArtifactURL, nil)
 	if err != nil {
 		return Candidate{}, fmt.Errorf("create artifact request: %w", err)
@@ -127,8 +127,8 @@ func DownloadCandidate(ctx context.Context, resolution ReleaseResolution, target
 	if !strings.EqualFold(actualHash, resolution.ExpectedHash) {
 		return Candidate{}, errors.New("checksum verification failed")
 	}
-	if err := options.Chmod(stagedPath, 0o755); err != nil && runtime.GOOS != "windows" {
-		return Candidate{}, fmt.Errorf("make staged candidate executable: %w", err)
+	if err := protectUpgradePath(stagedPath, 0o755, options.Chmod); err != nil {
+		return Candidate{}, fmt.Errorf("protect staged candidate: %w", err)
 	}
 	if err := options.ClearQuarantine(stagedPath); err != nil {
 		return Candidate{}, err

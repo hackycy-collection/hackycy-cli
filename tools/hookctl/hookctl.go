@@ -63,6 +63,7 @@ func (controller *Controller) Discover(context context.Context) (State, error) {
 	if err != nil {
 		return State{}, fmt.Errorf("resolve repository root: %w", err)
 	}
+	root = filepath.Clean(filepath.FromSlash(root))
 	commonDir, err := controller.git(context, "rev-parse", "--git-common-dir")
 	if err != nil {
 		return State{}, fmt.Errorf("resolve common Git directory: %w", err)
@@ -305,8 +306,9 @@ func activeToolchainClean(root string) error {
 }
 
 func resolveGitPath(root, value string) string {
+	value = filepath.FromSlash(value)
 	if filepath.IsAbs(value) {
-		return value
+		return filepath.Clean(value)
 	}
 	return filepath.Clean(filepath.Join(root, value))
 }

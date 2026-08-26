@@ -89,13 +89,28 @@ func (managed *ManagedFRPS) Custom404PagePath() string {
 
 func (managed *ManagedFRPS) ReadCustom404Page() (string, error) {
 	contents, err := os.ReadFile(managed.custom404Page)
-	if errors.Is(err, os.ErrNotExist) {
+	if errors.Is(err, os.ErrNotExist) && isMissingManagedFRPSPath(managed.custom404Page) {
 		return "", nil
 	}
 	if err != nil {
 		return "", serverDomainError("CONFIGURATION_FAILED", fmt.Sprintf("Could not read custom 404 page: %v", err))
 	}
 	return string(contents), nil
+}
+
+// isMissingManagedFRPSPath distinguishes an absent page from a Windows path
+// error that is also reported as os.ErrNotExist when a parent is not a folder.
+func isMissingManagedFRPSPath(path string) bool {
+	if _, err := os.Stat(path); err == nil {
+		return false
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	parentInfo, err := os.Stat(filepath.Dir(path))
+	if err == nil {
+		return parentInfo.IsDir()
+	}
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func (managed *ManagedFRPS) WriteCustom404Page(content string) error {
@@ -286,7 +301,7 @@ func writeManagedFRPSFile(target, contents string) error {
 	}
 	candidatePath := candidate.Name()
 	defer func() { _ = os.Remove(candidatePath) }()
-	if err := candidate.Chmod(0o600); err != nil {
+	if err := protectTunnelFile(candidatePath, 0o600); err != nil {
 		_ = candidate.Close()
 		return err
 	}

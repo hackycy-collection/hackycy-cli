@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -156,7 +157,11 @@ func testController(t *testing.T, root string) *Controller {
 			t.Fatalf("write %s: %v", path, err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(root, "tools", "lefthook", "bin", "lefthook"), []byte("placeholder\n"), 0o755); err != nil {
+	binaryName := "lefthook"
+	if runtime.GOOS == "windows" {
+		binaryName += ".exe"
+	}
+	if err := os.WriteFile(filepath.Join(root, "tools", "lefthook", "bin", binaryName), []byte("placeholder\n"), 0o755); err != nil {
 		t.Fatalf("write Lefthook placeholder: %v", err)
 	}
 	controller, err := New(root, &bytes.Buffer{})

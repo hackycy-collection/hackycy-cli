@@ -142,9 +142,7 @@ func TestClientAppliedStateRoundTripsAtomicallyAndIgnoresInvalidCache(t *testing
 	if !strings.HasSuffix(string(contents), "\n") || !strings.Contains(string(contents), "\n  \"revision\": 4\n") {
 		t.Fatalf("persisted state = %q, want pretty JSON plus newline", contents)
 	}
-	if info, err := os.Stat(clientAppliedStatePath(directory)); err != nil || info.Mode().Perm() != 0o600 {
-		t.Fatalf("applied-state mode = (%v, %v), want 0600", info, err)
-	}
+	assertTunnelPrivateFile(t, clientAppliedStatePath(directory), 0o600)
 	loaded, ok := ReadClientAppliedState(directory)
 	if !ok || loaded == nil || loaded.Revision != 4 || loaded.Snapshot.Revision != 4 || loaded.InternalFRPToken != "internal-token" {
 		t.Fatalf("ReadClientAppliedState() = (%#v, %t)", loaded, ok)

@@ -66,7 +66,7 @@ func NewUpdateTransaction(targetPath string, candidate Candidate, expectedVersio
 		ParentPID:       parentPID,
 		TargetPath:      targetPath,
 		StagedPath:      candidate.Path,
-		BackupPath:      filepath.Join(filepath.Dir(targetPath), filepath.Base(targetPath)+".backup."+candidate.TransactionID),
+		BackupPath:      transactionBinaryPath(targetPath, ".backup.", candidate.TransactionID),
 		ExpectedHash:    strings.ToLower(candidate.ExpectedHash),
 		ExpectedVersion: expectedVersion,
 		StatePath:       StatePath(targetPath),
@@ -107,8 +107,11 @@ func WriteState(state UpdateTransaction) error {
 	if err := file.Close(); err != nil {
 		return fmt.Errorf("close update state: %w", err)
 	}
-	if err := os.Rename(tempPath, state.StatePath); err != nil {
+	if err := replaceStateFile(tempPath, state.StatePath); err != nil {
 		return fmt.Errorf("publish update state: %w", err)
+	}
+	if err := protectUpgradePath(state.StatePath, 0o600, os.Chmod); err != nil {
+		return fmt.Errorf("protect update state: %w", err)
 	}
 	removeTemp = false
 	return nil
@@ -144,7 +147,7 @@ func ConsumeState(targetPath string) (*UpdateTransaction, error) {
 	if err != nil || state == nil || state.Status == StatusPending {
 		return state, err
 	}
-	if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := removeUpgradeFile(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return state, fmt.Errorf("consume update state: %w", err)
 	}
 	if state.UpdaterPath != "" {
@@ -334,7 +337,7 @@ func cleanupTemporaryFiles(targetPath string, pending *UpdateTransaction, alive 
 		if strings.HasPrefix(name, prefix) {
 			pid, parseErr := strconv.Atoi(strings.TrimPrefix(name, prefix))
 			if parseErr == nil && pid > 0 && !alive(pid) {
-				_ = os.Remove(fullPath)
+				_ = removeUpgradeFile(fullPath)
 			}
 			continue
 		}
@@ -347,7 +350,7 @@ func cleanupTemporaryFiles(targetPath string, pending *UpdateTransaction, alive 
 		}
 		info, statErr := entry.Info()
 		if statErr == nil && time.Since(info.ModTime()) >= stateTempMaxAge {
-			_ = os.Remove(fullPath)
+			_ = removeUpgradeFile(fullPath)
 		}
 	}
 }
@@ -369,7 +372,7 @@ func removeUpdaterCopy(path string) {
 	if err != nil || relative == "" || relative == "." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) || !strings.HasPrefix(filepath.Base(resolved), "ycy-updater-") {
 		return
 	}
-	_ = os.Remove(resolved)
+	_ = removeUpgradeFile(resolved)
 }
 
 // WaitForParent is kept in this slice as the hidden entry's bounded process gate.

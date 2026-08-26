@@ -13,18 +13,18 @@ import (
 func replacementState(t *testing.T, targetContents, stagedContents string) UpdateTransaction {
 	t.Helper()
 	directory := t.TempDir()
-	target := filepath.Join(directory, "ycy")
+	target := nativeTestExecutablePath(filepath.Join(directory, "ycy"))
 	transactionID := "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa"
 	state := UpdateTransaction{
 		TransactionID:   transactionID,
 		ParentPID:       2147483647,
 		TargetPath:      target,
-		StagedPath:      filepath.Join(directory, "ycy.new."+transactionID),
-		BackupPath:      filepath.Join(directory, "ycy.backup."+transactionID),
+		StagedPath:      expectedTransactionPath(target, ".new.", transactionID),
+		BackupPath:      expectedTransactionPath(target, ".backup.", transactionID),
 		ExpectedHash:    sha256Bytes([]byte(stagedContents)),
 		ExpectedVersion: "1.2.3",
 		StatePath:       StatePath(target),
-		UpdaterPath:     filepath.Join(directory, "ycy-updater-"+transactionID),
+		UpdaterPath:     expectedUpdaterPath(directory, transactionID),
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339Nano),
 		Status:          StatusPending,
 	}
@@ -63,6 +63,7 @@ func TestApplyTransactionReplacesAndRemovesBackup(t *testing.T) {
 	if fileExists(state.BackupPath) || fileExists(state.StagedPath) {
 		t.Fatal("backup or staged file remains")
 	}
+	assertPrivateUpgradePath(t, state.TargetPath, 0o755)
 }
 
 func TestApplyTransactionRollsBackOnHashOrVersionFailure(t *testing.T) {

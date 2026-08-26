@@ -25,9 +25,10 @@ func TestActiveArchitecture(t *testing.T) {
 		if err != nil {
 			return err
 		}
+		relative = filepath.ToSlash(relative)
 		if entry.IsDir() {
 			switch relative {
-			case ".git", "legacy", ".scratch", "mock", "web/node_modules", "web/dist", "tools":
+			case ".git", "legacy", ".scratch", "mock", "node_modules", "web/node_modules", "web/dist", "tools":
 				return filepath.SkipDir
 			}
 			return nil

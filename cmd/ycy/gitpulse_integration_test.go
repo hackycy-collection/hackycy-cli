@@ -106,7 +106,7 @@ func TestGitPulseStandaloneBinaryReportsUnavailableGitBeforeScanning(t *testing.
 
 func buildGitPulseStandalone(t *testing.T) string {
 	t.Helper()
-	binary := filepath.Join(t.TempDir(), "ycy")
+	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
 	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
 	build.Dir = repositoryRoot(t)
 	build.Env = environmentWith(map[string]string{
@@ -134,7 +134,7 @@ func initializeStandalonePulseRepository(t *testing.T, directory, name, email, m
 }
 
 func runGitPulseStandalone(binary, directory string, environment []string, input string, arguments ...string) ([]byte, error) {
-	command := exec.Command(binary, arguments...)
+	command := exec.Command(resolveStandaloneBinary(binary), arguments...)
 	command.Dir = directory
 	command.Env = environment
 	command.Stdin = strings.NewReader(input)

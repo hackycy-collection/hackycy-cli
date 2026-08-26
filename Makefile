@@ -5,7 +5,7 @@ VERSION ?= 0.0.0-dev
 RELEASE_VERSION ?= 0.1.0
 RELEASE_DIR := release/$(RELEASE_VERSION)
 
-GO_FILES := $(shell find cmd internal tools/hookctl tools/check-no-bun tools/release-artifacts tools/web-browser-harness web -type f -name '*.go' 2>/dev/null)
+GO_FIND = find cmd internal tools/hookctl tools/check-no-bun tools/release-artifacts tools/web-browser-harness web -path '*/node_modules' -prune -o -type f -name '*.go'
 
 .PHONY: help bootstrap hooks-install hooks-doctor hooks-uninstall fmt check check-web check-go check-locks check-no-bun build cross-build release-clean release-candidate release-untracked web-browser-harness ensure-web-deps ensure-web-dist prepare-7zip prepare-7zip-all
 
@@ -32,7 +32,7 @@ hooks-uninstall:
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) run ./tools/hookctl uninstall
 
 fmt:
-	@gofmt -w $(GO_FILES)
+	@$(GO_FIND) -exec gofmt -w {} +
 	@$(PNPM) --dir web exec eslint --fix .
 
 ensure-web-deps:
@@ -54,7 +54,7 @@ prepare-7zip-all: prepare-7zip
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) run ./tools/prepare-sevenzip --all
 
 check-go: check-web ensure-web-dist prepare-7zip
-	@unformatted="$$(gofmt -l $(GO_FILES))"; test -z "$$unformatted" || { printf '%s\n%s\n' 'Run make fmt; these Go files are not formatted:' "$$unformatted"; exit 1; }
+	@unformatted="$$($(GO_FIND) -exec gofmt -l {} +)"; test -z "$$unformatted" || { printf '%s\n%s\n' 'Run make fmt; these Go files are not formatted:' "$$unformatted"; exit 1; }
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 $(GO) vet ./...
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 $(GO) test ./...
 

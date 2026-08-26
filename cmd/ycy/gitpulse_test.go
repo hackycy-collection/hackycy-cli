@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -85,7 +86,8 @@ func TestTerminalPulsePresenterRendersSemanticProgressAndReport(t *testing.T) {
 	want := "HACKYCY CLI\n\nGit Commit Tree\nWorkspace: /workspace\n" +
 		"Scanning repositories...\nScanning repositories... [1] project\nFound 1 repository\n" +
 		"Fetching commits... [0/1]\nFetching commits... [1/1] project\n\n" +
-		"Found 1 commit in 1 repository\n\nproject (1 commit)\n   /workspace/\n   `- 2026-08-23 10:00:00 | Ada | message\n"
+		"Found 1 commit in 1 repository\n\nproject (1 commit)\n   " + filepath.Dir("/workspace/project") + string(filepath.Separator) + "\n" +
+		"   `- 2026-08-23 10:00:00 | Ada | message\n"
 	if got := output.String(); got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}

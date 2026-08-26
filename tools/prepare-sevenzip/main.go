@@ -98,7 +98,10 @@ func prepare(artifact sevenzipmanifest.Artifact) error {
 func validPayload(directory string, artifact sevenzipmanifest.Artifact) bool {
 	for _, file := range artifact.Files {
 		info, err := os.Lstat(filepath.Join(directory, file.Filename))
-		if err != nil || !info.Mode().IsRegular() || file.Executable && info.Mode().Perm()&0o111 == 0 {
+		if err != nil || !info.Mode().IsRegular() {
+			return false
+		}
+		if runtime.GOOS != "windows" && file.Executable && info.Mode().Perm()&0o111 == 0 {
 			return false
 		}
 		bytes, err := os.ReadFile(filepath.Join(directory, file.Filename))

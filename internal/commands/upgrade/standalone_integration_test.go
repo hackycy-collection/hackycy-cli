@@ -14,23 +14,18 @@ import (
 )
 
 func TestDetachedGoToGoStandaloneReplacementRollbackAndSelfCheck(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("native Windows detached replacement is reserved for the artifact gate")
-	}
 	repository := repositoryRootForUpgradeTest(t)
 	if _, err := os.Stat(filepath.Join(repository, "web", "dist")); errors.Is(err, os.ErrNotExist) {
 		t.Skip("production Web output is required; run make build first")
 	}
 	directory := t.TempDir()
-	first := filepath.Join(directory, "first")
-	second := filepath.Join(directory, "second")
-	buildStandaloneUpgradeArtifact(t, repository, first, "1.0.0")
-	buildStandaloneUpgradeArtifact(t, repository, second, "2.0.0")
+	first := buildStandaloneUpgradeArtifact(t, repository, filepath.Join(directory, "first"), "1.0.0")
+	second := buildStandaloneUpgradeArtifact(t, repository, filepath.Join(directory, "second"), "2.0.0")
 
-	target := filepath.Join(directory, "ycy")
-	staged := target + ".new.success"
-	backup := target + ".backup.success"
-	updater := filepath.Join(directory, "ycy-updater-success")
+	target := nativeTestExecutablePath(filepath.Join(directory, "ycy"))
+	staged := expectedTransactionPath(target, ".new.", "success")
+	backup := expectedTransactionPath(target, ".backup.", "success")
+	updater := expectedUpdaterPath(directory, "success")
 	copyUpgradeFile(t, first, target)
 	copyUpgradeFile(t, second, staged)
 	copyUpgradeFile(t, first, updater)
@@ -55,10 +50,10 @@ func TestDetachedGoToGoStandaloneReplacementRollbackAndSelfCheck(t *testing.T) {
 		t.Fatal("successful replacement left staged or backup files")
 	}
 
-	rollbackTarget := filepath.Join(directory, "ycy-rollback")
-	rollbackStaged := rollbackTarget + ".new.failure"
-	rollbackBackup := rollbackTarget + ".backup.failure"
-	rollbackUpdater := filepath.Join(directory, "ycy-updater-failure")
+	rollbackTarget := nativeTestExecutablePath(filepath.Join(directory, "ycy-rollback"))
+	rollbackStaged := expectedTransactionPath(rollbackTarget, ".new.", "failure")
+	rollbackBackup := expectedTransactionPath(rollbackTarget, ".backup.", "failure")
+	rollbackUpdater := expectedUpdaterPath(directory, "failure")
 	copyUpgradeFile(t, second, rollbackTarget)
 	copyUpgradeFile(t, first, rollbackStaged)
 	copyUpgradeFile(t, second, rollbackUpdater)
@@ -103,14 +98,16 @@ func TestDetachedGoToGoStandaloneReplacementRollbackAndSelfCheck(t *testing.T) {
 	}
 }
 
-func buildStandaloneUpgradeArtifact(t *testing.T, repository, output, version string) {
+func buildStandaloneUpgradeArtifact(t *testing.T, repository, output, version string) string {
 	t.Helper()
+	output = nativeTestExecutablePath(output)
 	command := exec.Command("go", "build", "-trimpath", "-ldflags", "-X main.version="+version, "-o", output, "./cmd/ycy")
 	command.Dir = repository
 	command.Env = append(os.Environ(), "GOTOOLCHAIN=go1.26.7", "GOWORK=off", "CGO_ENABLED=0")
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("build %s artifact: %v\n%s", version, err, output)
 	}
+	return output
 }
 
 func copyUpgradeFile(t *testing.T, source, destination string) {
@@ -131,14 +128,18 @@ func copyUpgradeFile(t *testing.T, source, destination string) {
 	if err := output.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Chmod(destination, 0o755); err != nil {
+	if err := protectUpgradePath(destination, 0o755, os.Chmod); err != nil {
 		t.Fatal(err)
 	}
 }
 
 func exitedUpgradeParent(t *testing.T) int {
 	t.Helper()
-	command := exec.Command("sh", "-c", "exit 0")
+	name, arguments := "sh", []string{"-c", "exit 0"}
+	if runtime.GOOS == "windows" {
+		name, arguments = "cmd", []string{"/c", "exit", "0"}
+	}
+	command := exec.Command(name, arguments...)
 	if err := command.Run(); err != nil {
 		t.Fatal(err)
 	}

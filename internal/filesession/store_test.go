@@ -34,13 +34,13 @@ func TestOpenCreatesOnlyGoOwnedStateBelowTheBaseDirectory(t *testing.T) {
 	if got, err := os.ReadFile(unrelated); err != nil || string(got) != string(contents) {
 		t.Fatalf("unrelated base entry = (%q, %v), want unchanged", got, err)
 	}
-	assertMode(t, manager.Directory(), 0o700)
-	assertMode(t, filepath.Join(manager.Directory(), sessionKeyFileName), 0o600)
+	assertPrivatePath(t, manager.Directory(), 0o700)
+	assertPrivatePath(t, filepath.Join(manager.Directory(), sessionKeyFileName), 0o600)
 	lockPath := filepath.Join(manager.Directory(), sessionLockFileName)
 	if _, err := os.Stat(lockPath); err != nil {
 		t.Fatalf("stat session lock: %v", err)
 	}
-	assertMode(t, lockPath, 0o600)
+	assertPrivatePath(t, lockPath, 0o600)
 }
 
 func TestManagerUsesOneLiveLockAndReleasesOnlyItsOwnLock(t *testing.T) {
@@ -181,7 +181,7 @@ func TestManagerIssuesRefreshesAndRevokesOpaqueSessions(t *testing.T) {
 	if record.Version != 1 || record.TokenHash != tokenHash(issued.Token) || record.Subject != "alice" || record.Revision != revision || record.CreatedAt != "2026-08-24T01:00:00.000Z" || record.LastAccessAt != record.CreatedAt || record.ExpiresAt != "2026-08-24T02:00:00.000Z" {
 		t.Fatalf("record = %#v", record)
 	}
-	assertMode(t, recordPath, 0o600)
+	assertPrivatePath(t, recordPath, 0o600)
 
 	now = now.Add(15 * time.Minute)
 	resumed, err := manager.Resume(issued.Token, func(subject string) string {
@@ -365,7 +365,7 @@ func TestOpenReprotectsValidGoRecords(t *testing.T) {
 		t.Fatalf("second Open() error = %v", err)
 	}
 	t.Cleanup(func() { _ = second.Close() })
-	assertMode(t, recordPath, 0o600)
+	assertPrivatePath(t, recordPath, 0o600)
 }
 
 func TestManagerEnforcesDefaultSessionLRULimits(t *testing.T) {
@@ -556,17 +556,6 @@ func TestManagerSerializesConcurrentResumes(t *testing.T) {
 		if strings.Contains(entry.Name(), ".tmp-") {
 			t.Fatalf("concurrent refresh left candidate %q", entry.Name())
 		}
-	}
-}
-
-func assertMode(t *testing.T, path string, want os.FileMode) {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatalf("stat %s: %v", path, err)
-	}
-	if got := info.Mode().Perm(); got != want {
-		t.Fatalf("mode for %s = %o, want %o", path, got, want)
 	}
 }
 

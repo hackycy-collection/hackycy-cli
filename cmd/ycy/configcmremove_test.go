@@ -50,7 +50,7 @@ func TestTerminalCMRemovePrompterRetriesInvalidInputAndTreatsEOFAsCancellation(t
 
 func TestConfigCMRemoveStandaloneBinary(t *testing.T) {
 	root := repositoryRoot(t)
-	binary := filepath.Join(t.TempDir(), "ycy")
+	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
 	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
 	build.Dir = root
 	build.Env = environmentWith(map[string]string{

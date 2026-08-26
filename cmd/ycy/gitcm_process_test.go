@@ -136,6 +136,7 @@ func runGitCM(t *testing.T, directory string, arguments ...string) {
 	t.Helper()
 	command := exec.Command("git", arguments...)
 	command.Dir = directory
+	command.Env = environmentWith(map[string]string{"GIT_CONFIG_NOSYSTEM": "1"})
 	if output, err := command.CombinedOutput(); err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(arguments, " "), err, output)
 	}

@@ -3,6 +3,7 @@ package fork
 import (
 	"context"
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
@@ -21,7 +22,7 @@ func TestCloneFallbackBuildsTheLegacyCloneArgumentsAndCleansMetadata(t *testing.
 	}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("clone arguments = %#v, want %#v", got, want)
 	}
-	if got, want := remover.paths, []string{"/tmp/disposable-destination/.git"}; !reflect.DeepEqual(got, want) {
+	if got, want := remover.paths, []string{filepath.Join("/tmp/disposable-destination", ".git")}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("metadata cleanup paths = %#v, want %#v", got, want)
 	}
 }

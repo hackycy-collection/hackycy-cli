@@ -75,6 +75,12 @@ func (runtime *clientRunRuntimeStub) Restart() error {
 	err := runtime.restartErr
 	runtime.restarted++
 	runtime.mu.Unlock()
+	if err == nil {
+		// Mirror the supervisor's observable stop/start transition so callers
+		// can distinguish this restart from the initial apply state report.
+		runtime.setState(FRPSupervisorState{State: FRPProcessStopped})
+		runtime.setState(FRPSupervisorState{State: FRPProcessRunning})
+	}
 	return err
 }
 
@@ -230,7 +236,7 @@ func TestRunClientDispatchesRestartFRPC(t *testing.T) {
 			t.Errorf("write restart: %v", err)
 			return
 		}
-		awaitClientProcessState(t, socket, FRPProcessRunning)
+		awaitClientRestartTransition(t, socket)
 		if err := socket.WriteJSON(Revoke{Type: "revoke", TunnelProtocolVersion: TunnelProtocolVersion, Reason: "deleted"}); err != nil {
 			t.Errorf("write revoke: %v", err)
 		}
@@ -568,6 +574,12 @@ func awaitClientProcessState(t *testing.T, socket *websocket.Conn, want FRPProce
 			return
 		}
 	}
+}
+
+func awaitClientRestartTransition(t *testing.T, socket *websocket.Conn) {
+	t.Helper()
+	awaitClientProcessState(t, socket, FRPProcessStopped)
+	awaitClientProcessState(t, socket, FRPProcessRunning)
 }
 
 func runClientAgainstTestServer(t *testing.T, ctx context.Context, server *httptest.Server, runtime *clientRunRuntimeStub, onAuthenticated func() error) error {

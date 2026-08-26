@@ -27,7 +27,7 @@ func TestRunUpgradeSchedulesOnlyVerifiedCandidate(t *testing.T) {
 	}))
 	defer server.Close()
 	directory := t.TempDir()
-	target := filepath.Join(directory, "ycy")
+	target := nativeTestExecutablePath(filepath.Join(directory, "ycy"))
 	if err := os.WriteFile(target, []byte("old executable"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -58,13 +58,16 @@ func TestRunUpgradeSchedulesOnlyVerifiedCandidate(t *testing.T) {
 	if err != nil || !result.Scheduled {
 		t.Fatalf("run = %#v, %v", result, err)
 	}
-	if spawnedPath != filepath.Join(directory, "ycy-updater-tx") || len(spawnedArgs) == 0 || FindInternalMarker(spawnedArgs) != 0 {
+	if spawnedPath != expectedUpdaterPath(directory, "tx") || len(spawnedArgs) == 0 || FindInternalMarker(spawnedArgs) != 0 {
 		t.Fatalf("spawn = %s %#v", spawnedPath, spawnedArgs)
 	}
 	state, err := ReadState(StatePath(target))
 	if err != nil || state == nil || state.Status != StatusPending {
 		t.Fatalf("pending state = %#v, %v", state, err)
 	}
+	assertPrivateUpgradePath(t, result.State.StagedPath, 0o755)
+	assertPrivateUpgradePath(t, spawnedPath, 0o755)
+	assertPrivateUpgradePath(t, state.StatePath, 0o600)
 	if !strings.Contains(output.String(), "scheduled") {
 		t.Fatalf("output = %q", output.String())
 	}
@@ -95,11 +98,11 @@ func TestRunUpgradeAlreadyCurrentAndFailureCleanup(t *testing.T) {
 	}))
 	defer failureServer.Close()
 	directory := t.TempDir()
-	target := filepath.Join(directory, "ycy")
+	target := nativeTestExecutablePath(filepath.Join(directory, "ycy"))
 	if err := os.WriteFile(target, []byte("old"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	updater := filepath.Join(directory, "updater")
+	updater := expectedUpdaterPath(directory, "fail")
 	_, err = RunUpgrade(context.Background(), UpgradeOptions{
 		Resolver: ReleaseResolverOptions{LatestURL: failureServer.URL + "/latest", DownloadBaseURL: failureServer.URL, CurrentVersion: "1.0.0", GOOS: "linux", GOARCH: "amd64"},
 		Candidate: CandidateOptions{TransactionID: func() (string, error) { return "fail", nil }, Executor: func(context.Context, string, []string, []string) (ProcessResult, error) {
@@ -116,7 +119,7 @@ func TestRunUpgradeAlreadyCurrentAndFailureCleanup(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "spawn refused") {
 		t.Fatalf("spawn failure = %v", err)
 	}
-	if fileExists(StatePath(target)) || fileExists(filepath.Join(directory, "ycy.new.fail")) || fileExists(updater) {
+	if fileExists(StatePath(target)) || fileExists(expectedTransactionPath(target, ".new.", "fail")) || fileExists(updater) {
 		t.Fatal("failed scheduling left transaction files")
 	}
 }

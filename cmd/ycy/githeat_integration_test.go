@@ -4,13 +4,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
 
 func TestGitHeatStandaloneBinaryUsesAContainedGitRepository(t *testing.T) {
 	repository := repositoryRoot(t)
-	binary := filepath.Join(t.TempDir(), "ycy")
+	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
 	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
 	build.Dir = repository
 	build.Env = environmentWith(map[string]string{
@@ -31,7 +32,11 @@ func TestGitHeatStandaloneBinaryUsesAContainedGitRepository(t *testing.T) {
 	runStandaloneHeatGit(t, gitRepository, "add", ".")
 	runStandaloneHeatGit(t, gitRepository, "commit", "-qm", "initial")
 	writeStandaloneHeatFile(t, gitRepository, "src/main.go", "package main\n// changed\n")
-	writeStandaloneHeatFile(t, gitRepository, "src/tab\tname.txt", "special\n")
+	specialPath := "src/tab\tname.txt"
+	if runtime.GOOS == "windows" {
+		specialPath = "src/tab-name.txt"
+	}
+	writeStandaloneHeatFile(t, gitRepository, specialPath, "special\n")
 	runStandaloneHeatGit(t, gitRepository, "add", ".")
 	runStandaloneHeatGit(t, gitRepository, "commit", "-qm", "second")
 
@@ -49,7 +54,7 @@ func TestGitHeatStandaloneBinaryUsesAContainedGitRepository(t *testing.T) {
 		t.Fatalf("git heat = (%v, %q)", err, output)
 	}
 	text := string(output)
-	for _, expected := range []string{"HACKYCY CLI", "last 2 commits", "README.md", "src/main.go", "src/tab\tname.txt", "File"} {
+	for _, expected := range []string{"HACKYCY CLI", "last 2 commits", "README.md", "src/main.go", specialPath, "File"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("git heat output does not contain %q:\n%s", expected, text)
 		}
@@ -76,7 +81,7 @@ func TestGitHeatStandaloneBinaryUsesAContainedGitRepository(t *testing.T) {
 
 func TestGitHeatStandaloneBinaryReportsRepositoryFailures(t *testing.T) {
 	repository := repositoryRoot(t)
-	binary := filepath.Join(t.TempDir(), "ycy")
+	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
 	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
 	build.Dir = repository
 	build.Env = environmentWith(map[string]string{
@@ -94,7 +99,7 @@ func TestGitHeatStandaloneBinaryReportsRepositoryFailures(t *testing.T) {
 }
 
 func runGitHeatStandalone(binary, directory string, environment []string, arguments ...string) ([]byte, error) {
-	command := exec.Command(binary, arguments...)
+	command := exec.Command(resolveStandaloneBinary(binary), arguments...)
 	command.Dir = directory
 	command.Env = environment
 	return command.CombinedOutput()

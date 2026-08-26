@@ -2,6 +2,8 @@ package cm
 
 import (
 	"context"
+	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -95,11 +97,12 @@ func TestStageSelectedChangesRestoresUnselectedTrackedPaths(t *testing.T) {
 func TestStageSelectedChangesSplitsExistingAndMissingPathsWithoutChangingPathspecs(t *testing.T) {
 	root := t.TempDir()
 	magicPath := ":(glob)*.go"
-	writeStageFile(t, root, magicPath)
+	writeStageFile(t, root, "magic.go")
 	runner := newStageRunner(root, "?? "+magicPath+"\x00 D deleted.go\x00")
 	prompter := stagePrompter{selected: []string{magicPath, "deleted.go"}}
 
-	_, err := StageSelectedChanges(context.Background(), runner, diskSnapshotFileSystem{}, &prompter)
+	files := stageAliasFileSystem{aliases: map[string]string{filepath.Join(root, magicPath): filepath.Join(root, "magic.go")}}
+	_, err := StageSelectedChanges(context.Background(), runner, files, &prompter)
 	if err != nil {
 		t.Fatalf("StageSelectedChanges() error = %v", err)
 	}
@@ -110,6 +113,25 @@ func TestStageSelectedChangesSplitsExistingAndMissingPathsWithoutChangingPathspe
 		[]string{"-C", root, "add", "-A", "--", magicPath},
 		[]string{"-C", root, "update-index", "--remove", "--", "deleted.go"},
 	)
+}
+
+type stageAliasFileSystem struct {
+	aliases map[string]string
+}
+
+func (files stageAliasFileSystem) Lstat(path string) (fs.FileInfo, error) {
+	if alias, ok := files.aliases[path]; ok {
+		path = alias
+	}
+	return os.Lstat(path)
+}
+
+func (files stageAliasFileSystem) Open(path string) (io.ReadCloser, error) {
+	return os.Open(path)
+}
+
+func (files stageAliasFileSystem) ReadFile(path string) ([]byte, error) {
+	return os.ReadFile(path)
 }
 
 func TestStageSelectedChangesReportsNoChangesWithoutPromptOrMutation(t *testing.T) {

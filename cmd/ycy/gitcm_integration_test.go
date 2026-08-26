@@ -16,7 +16,7 @@ import (
 )
 
 func TestGitCMStandaloneBinaryExposesThePublicLeaf(t *testing.T) {
-	binary := filepath.Join(t.TempDir(), "ycy")
+	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
 	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
 	build.Dir = repositoryRoot(t)
 	build.Env = environmentWith(map[string]string{
@@ -27,7 +27,7 @@ func TestGitCMStandaloneBinaryExposesThePublicLeaf(t *testing.T) {
 	if output, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build standalone binary: %v\n%s", err, output)
 	}
-	command := exec.Command(binary, "git", "cm", "--help")
+	command := exec.Command(resolveStandaloneBinary(binary), "git", "cm", "--help")
 	command.Dir = t.TempDir()
 	command.Env = environmentWith(map[string]string{"HOME": t.TempDir(), "USERPROFILE": ""})
 	output, err := command.CombinedOutput()
@@ -600,7 +600,7 @@ func TestGitCMStandaloneBinaryStagePushSelectsCommitsAndPushesToTheDefaultLocalR
 
 func buildGitCMStandaloneBinary(t *testing.T) string {
 	t.Helper()
-	binary := filepath.Join(t.TempDir(), "ycy")
+	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
 	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
 	build.Dir = repositoryRoot(t)
 	build.Env = environmentWith(map[string]string{
@@ -617,22 +617,24 @@ func buildGitCMStandaloneBinary(t *testing.T) string {
 func gitCMProviderEnvironment(t *testing.T, baseURL string) []string {
 	t.Helper()
 	return environmentWith(map[string]string{
-		"HOME":            t.TempDir(),
-		"USERPROFILE":     "",
-		"YCY_CM_BASE_URL": baseURL,
-		"YCY_CM_MODEL":    "fixture-model",
-		"YCY_CM_API_KEY":  "fixture-api-key",
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"HOME":                t.TempDir(),
+		"USERPROFILE":         "",
+		"YCY_CM_BASE_URL":     baseURL,
+		"YCY_CM_MODEL":        "fixture-model",
+		"YCY_CM_API_KEY":      "fixture-api-key",
 	})
 }
 
 func gitCMNoProviderEnvironment(t *testing.T) []string {
 	t.Helper()
 	return environmentWith(map[string]string{
-		"HOME":            t.TempDir(),
-		"USERPROFILE":     "",
-		"YCY_CM_BASE_URL": "",
-		"YCY_CM_MODEL":    "",
-		"YCY_CM_API_KEY":  "",
+		"GIT_CONFIG_NOSYSTEM": "1",
+		"HOME":                t.TempDir(),
+		"USERPROFILE":         "",
+		"YCY_CM_BASE_URL":     "",
+		"YCY_CM_MODEL":        "",
+		"YCY_CM_API_KEY":      "",
 	})
 }
 
@@ -665,7 +667,7 @@ func newGitCMMessageProvider(t *testing.T, message string) (*httptest.Server, *g
 }
 
 func runGitCMStandalone(binary, directory string, environment []string, input string, arguments ...string) ([]byte, error) {
-	command := exec.Command(binary, arguments...)
+	command := exec.Command(resolveStandaloneBinary(binary), arguments...)
 	command.Dir = directory
 	command.Env = environment
 	command.Stdin = strings.NewReader(input)
@@ -681,6 +683,7 @@ func gitCMCommand(t *testing.T, directory string, arguments ...string) string {
 	t.Helper()
 	command := exec.Command("git", arguments...)
 	command.Dir = directory
+	command.Env = environmentWith(map[string]string{"GIT_CONFIG_NOSYSTEM": "1"})
 	output, err := command.CombinedOutput()
 	if err != nil {
 		t.Fatalf("git %s: %v\n%s", strings.Join(arguments, " "), err, output)
@@ -702,6 +705,7 @@ func mutateGitCMStagedFile(repository, name, contents string) error {
 	}
 	command := exec.Command("git", "add", name)
 	command.Dir = repository
+	command.Env = environmentWith(map[string]string{"GIT_CONFIG_NOSYSTEM": "1"})
 	if output, err := command.CombinedOutput(); err != nil {
 		return fmt.Errorf("git add %s: %w: %s", name, err, output)
 	}

@@ -39,7 +39,7 @@ func runGitProcessInput(ctx context.Context, executable string, arguments []stri
 	child.Stderr = &stderr
 	configureGitChild(child)
 	if err := child.Start(); err != nil {
-		return gitProcessOutput{}, err
+		return gitProcessOutput{}, normalizeProcessStartError(err)
 	}
 
 	exited := make(chan error, 1)

@@ -38,7 +38,7 @@ func TestDownloadCandidateVerifiesBeforeSelfCheck(t *testing.T) {
 	if executed {
 		t.Fatal("candidate executed before complete body verification")
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(target), "ycy.new.tx")); !errors.Is(err, os.ErrNotExist) {
+	if _, err := os.Stat(expectedTransactionPath(target, ".new.", "tx")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("staged candidate remains after failure: %v", err)
 	}
 }
@@ -57,7 +57,7 @@ func TestDownloadCandidateHashesAndSelfChecksPlainVersion(t *testing.T) {
 	}, target, CandidateOptions{
 		TransactionID: func() (string, error) { return "tx", nil },
 		Executor: func(_ context.Context, path string, args, environment []string) (ProcessResult, error) {
-			if path != filepath.Join(filepath.Dir(target), "ycy.new.tx") || len(args) != 1 || args[0] != "--version" || len(environment) != 0 {
+			if path != expectedTransactionPath(target, ".new.", "tx") || len(args) != 1 || args[0] != "--version" || len(environment) != 0 {
 				t.Fatalf("self-check invocation = %s, %#v, %#v", path, args, environment)
 			}
 			return ProcessResult{Stdout: []byte("1.2.3\n")}, nil
@@ -73,9 +73,7 @@ func TestDownloadCandidateHashesAndSelfChecksPlainVersion(t *testing.T) {
 	if err != nil || string(bytes) != string(content) {
 		t.Fatalf("candidate bytes = %q, %v", bytes, err)
 	}
-	if mode := mustFileMode(t, got.Path); mode&0o111 == 0 {
-		t.Fatalf("candidate mode = %o, want executable", mode)
-	}
+	assertPrivateUpgradePath(t, got.Path, 0o755)
 }
 
 func TestVerifyBinaryRejectsWrongOutputAndExit(t *testing.T) {
@@ -114,13 +112,4 @@ func TestDownloadCandidateRejectsDigestMismatch(t *testing.T) {
 	if called {
 		t.Fatal("self-check ran after digest mismatch")
 	}
-}
-
-func mustFileMode(t *testing.T, path string) os.FileMode {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return info.Mode()
 }

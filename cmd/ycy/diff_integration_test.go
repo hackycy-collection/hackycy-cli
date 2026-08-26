@@ -118,7 +118,7 @@ func TestDiffStandaloneBinaryPreservesCLIValidationAndLifecycle(t *testing.T) {
 
 func buildDiffStandaloneBinary(t *testing.T) string {
 	t.Helper()
-	binary := filepath.Join(t.TempDir(), "ycy")
+	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
 	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
 	build.Dir = repositoryRoot(t)
 	build.Env = environmentWith(map[string]string{
@@ -133,7 +133,7 @@ func buildDiffStandaloneBinary(t *testing.T) string {
 }
 
 func runDiffStandalone(binary, directory string, environment []string, arguments ...string) ([]byte, error) {
-	command := exec.Command(binary, arguments...)
+	command := exec.Command(resolveStandaloneBinary(binary), arguments...)
 	command.Dir = directory
 	command.Env = environment
 	return command.CombinedOutput()
@@ -147,7 +147,7 @@ type runningDiffStandalone struct {
 
 func startDiffStandalone(t *testing.T, binary, directory string, environment []string, arguments ...string) runningDiffStandalone {
 	t.Helper()
-	command := exec.Command(binary, arguments...)
+	command := exec.Command(resolveStandaloneBinary(binary), arguments...)
 	command.Dir = directory
 	command.Env = environment
 	stdout, err := command.StdoutPipe()

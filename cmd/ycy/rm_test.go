@@ -70,7 +70,7 @@ func TestTerminalRMPresenterWritesMappedMessages(t *testing.T) {
 
 func TestRMStandaloneBinary(t *testing.T) {
 	repository := repositoryRoot(t)
-	binary := filepath.Join(t.TempDir(), "ycy")
+	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
 	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
 	build.Dir = repository
 	build.Env = environmentWith(map[string]string{
@@ -179,7 +179,7 @@ func TestRMStandaloneBinary(t *testing.T) {
 }
 
 func runRMStandalone(binary, directory string, environment []string, input string, arguments ...string) ([]byte, error) {
-	command := exec.Command(binary, arguments...)
+	command := exec.Command(resolveStandaloneBinary(binary), arguments...)
 	command.Dir = directory
 	command.Env = environment
 	command.Stdin = strings.NewReader(input)

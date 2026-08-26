@@ -3,7 +3,7 @@
 First Go release: `v0.1.0`
 Migration build identity: `0.0.0-dev`
 Roadmap: [Approve the command-by-command migration roadmap](issues/16-approve-command-migration-roadmap.md)
-Status: Foundation Gate, export env, appconfig foundation, and `upgrade` integrated; Final Artifact Gate and release evidence remain pending
+Status: Foundation Gate, export env, appconfig foundation, and `upgrade` integrated; G27 Windows x64 candidate evidence is release-accepted, while the WD-26-selected macOS arm64 evidence remains pending
 
 ## Recording rules
 
@@ -14,6 +14,7 @@ Status: Foundation Gate, export env, appconfig foundation, and `upgrade` integra
 - Record concise commands/results, date, host OS/architecture, candidate artifact SHA-256, outstanding native work, and any Wayfinder compatibility-decision link. Link durable logs when useful; do not paste large raw logs.
 - Never record credentials, tokens, cookies, user data, private endpoints, external Bun executables, or other secrets. The active suite never executes `legacy/bun/`.
 - A failed in-scope parity probe stops the serial integration lane at that Unit until a linked Wayfinder decision is complete. Do not mark a skipped or waived test as passed.
+- WD-26 primary-host-set acceptance applies native Exit 3/4 evidence only to the selected `{windows/amd64, darwin/arm64}` targets; other target rows remain `pending` and are explicitly deferred rather than accepted.
 
 ## Sources
 
@@ -76,10 +77,18 @@ Status: Foundation Gate, export env, appconfig foundation, and `upgrade` integra
 | macOS arm64 | `ycy-macos-arm64` | pending | - | - | - | All selected gates |
 | Linux x64 | `ycy-linux-x64` | pending | - | - | - | All selected gates |
 | Linux arm64 | `ycy-linux-arm64` | pending | - | - | - | All selected gates |
-| Windows x64 | `ycy-windows-x64.exe` | pending | - | - | - | All selected gates |
+| Windows x64 | `ycy-windows-x64.exe` | release-accepted | native Windows amd64, 2026-08-26 | `16ed4d4f594e9e597e7832c380af61bf031523f063b446ceca6a95a7b8025979` | Clean candidate assembly/static verifier; no-Bun/Node/pnpm/Go CLI smoke; native CTRL_BREAK FS lifecycle; real embedded Diff, FS, and authenticated Tunnel browser flows; manifest-matching 7-Zip materialization, functional extraction, corrupt-runtime regeneration, and WebP thumbnail/304 cache; pinned FRP 0.70.1 acquisition plus real HTTP/TCP/UDP candidate forwarding; local-fixture `install.ps1` fresh/fallback/rollback; Go-to-Go replacement, rollback, state consumption, ACL, sharing-violation retry, parent-timeout failure state, and native MOTW removal with unchanged version/hash. | G27 remains active pending WD-26-selected macOS arm64 candidate-native suite; the four unselected target rows remain pending. The resolved Go-to-Go contract defers a new crash-recovery/concurrent-locking redesign; no candidate evidence for those post-parity hardening vectors is claimed. |
 | Windows arm64 | `ycy-windows-arm64.exe` | pending | - | - | - | All selected gates |
 
 ## Final Artifact Gate
+
+### WD-26 primary-host-set acceptance variant
+
+- Selected native targets for this Goal: `windows/amd64` and `darwin/arm64`.
+- The selected target may satisfy the native execution portion of the Gate only
+  after its current candidate evidence is recorded below.
+- The other four target rows remain `pending`; this variant does not claim a
+  complete six-target release or authorize publication.
 
 - [ ] Every Migration Unit is `integrated` and every applicable milestone-native result is recorded.
 - [ ] The candidate starts from a clean checkout without `web/dist`, dependencies, caches, downloaded payloads, binaries, or prior artifact output.

@@ -237,9 +237,9 @@ func writeClientFileAtomically(path string, contents []byte) (result error) {
 			_ = os.Remove(temporaryPath)
 		}
 	}()
-	if err := temporary.Chmod(0o600); err != nil {
+	if err := protectTunnelFile(temporaryPath, 0o600); err != nil {
 		_ = temporary.Close()
-		return fmt.Errorf("set Tunnel client file mode: %w", err)
+		return fmt.Errorf("protect Tunnel client file: %w", err)
 	}
 	written, writeErr := temporary.Write(contents)
 	if writeErr == nil && written != len(contents) {

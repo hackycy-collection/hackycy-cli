@@ -53,10 +53,14 @@ Produce an execution-ready, parity-first route that turns ycy from a Bun-hosted 
 - [Approve the command-by-command migration roadmap](issues/16-approve-command-migration-roadmap.md): one serial, always-buildable lane integrates every leaf through explicit local/native gates, narrows transition compatibility to `config.json` and Go-only operation, and finishes with six `v0.1.0` artifacts before manual release automation.
 - [Choose the first-release parity and compatibility-exception policy](issues/17-choose-corrected-core-command-contracts.md): the first Go release reproduces Bun behavior by default; only evidence-backed implementation mismatches may open narrow compatibility decisions, while hardening is deferred.
 - [Research a CGO-free FS thumbnail compatibility path](issues/21-research-cgo-free-fs-thumbnails.md): pinned pure-Go AVIF/WebP plus standard image codecs reproduce the Bun thumbnail capability in one binary across all six builds, with self-exec workers preserving hard timeout replacement and no compatibility exception.
+- [Decide Windows native acceptance contracts](issues/24-choose-windows-native-acceptance-contract.md): G27 may make the narrowly evidenced Windows executable, path, SQLite URI, DACL, sharing-retry, and Hookctl fixture adaptations required for native acceptance without changing public behavior.
+- [Choose the remaining Windows Tunnel/FRP native acceptance contract](issues/25-choose-windows-tunnel-frp-acceptance-contract.md): G27 may make only the approved Tunnel-owned file DACL, path-error, and test-synchronization adaptations, without changing public protocol behavior.
+- [Choose the current-host G27 acceptance contract](issues/26-choose-g27-current-host-acceptance-contract.md): the user-approved primary-host-set variant applies native Exit 3/4 evidence only to `windows/amd64` and `darwin/arm64`, keeps the other target rows pending, and does not claim full six-target release readiness.
 
 ## Not yet specified
 
-None. Any future command-specific incompatibility begins only when an implementation test or focused probe demonstrates it; the map's compatibility-exception policy governs that new evidence rather than leaving a speculative planning decision open.
+- None. Any future command-specific incompatibility begins only when an implementation test or focused probe demonstrates it; the map's compatibility-exception policy governs that new evidence rather than leaving a speculative planning decision open.
+
 
 ## Out of scope
 

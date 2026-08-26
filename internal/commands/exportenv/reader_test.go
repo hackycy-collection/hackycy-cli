@@ -2,14 +2,15 @@ package exportenv
 
 import (
 	"errors"
+	"path/filepath"
 	"reflect"
 	"testing"
 )
 
 func TestReadReadsSelectedFilesInOrder(t *testing.T) {
 	reader := &recordingReader{contents: map[string][]byte{
-		"/project/.env":            []byte("BASE=base\n"),
-		"/project/.env.production": []byte("PROD=production\n"),
+		filepath.Join("/project", ".env"):            []byte("BASE=base\n"),
+		filepath.Join("/project", ".env.production"): []byte("PROD=production\n"),
 	}}
 
 	got, err := Read(
@@ -24,7 +25,7 @@ func TestReadReadsSelectedFilesInOrder(t *testing.T) {
 	if want := []string{"BASE=base\n", "PROD=production\n"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("Read() = %#v, want %#v", got, want)
 	}
-	if want := []string{"/project/.env", "/project/.env.production"}; !reflect.DeepEqual(reader.paths, want) {
+	if want := []string{filepath.Join("/project", ".env"), filepath.Join("/project", ".env.production")}; !reflect.DeepEqual(reader.paths, want) {
 		t.Fatalf("reader paths = %#v, want %#v", reader.paths, want)
 	}
 }

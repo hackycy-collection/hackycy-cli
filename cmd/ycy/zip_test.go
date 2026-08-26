@@ -161,7 +161,7 @@ func TestHostZipRevealerUsesPlatformCommands(t *testing.T) {
 
 func TestZIPStandaloneBinaryCreatesAStructuralArchive(t *testing.T) {
 	repository := repositoryRoot(t)
-	binary := filepath.Join(t.TempDir(), "ycy")
+	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
 	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
 	build.Dir = repository
 	build.Env = environmentWith(map[string]string{
@@ -179,7 +179,7 @@ func TestZIPStandaloneBinaryCreatesAStructuralArchive(t *testing.T) {
 	writeStandaloneZIPFile(t, project, "dist/assets/app.js", "console.log('app')")
 	writeStandaloneZIPFile(t, project, "dist/.secret", "not archived")
 	environment := environmentWith(map[string]string{"HOME": t.TempDir(), "USERPROFILE": ""})
-	command := exec.Command(binary, "zip", ".", "--without-open", "--with-dir", "bundle")
+	command := exec.Command(resolveStandaloneBinary(binary), "zip", ".", "--without-open", "--with-dir", "bundle")
 	command.Dir = project
 	command.Env = environment
 	command.Stdin = strings.NewReader("\n\n\n")
@@ -192,7 +192,6 @@ func TestZIPStandaloneBinaryCreatesAStructuralArchive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open archive: %v", err)
 	}
-	defer archive.Close()
 	contents := make(map[string]string)
 	for _, file := range archive.File {
 		reader, err := file.Open()
@@ -210,11 +209,14 @@ func TestZIPStandaloneBinaryCreatesAStructuralArchive(t *testing.T) {
 	if !reflect.DeepEqual(contents, want) {
 		t.Fatalf("archive contents = %#v, want %#v", contents, want)
 	}
+	if err := archive.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
 
 	if err := os.Remove(archivePath); err != nil {
 		t.Fatalf("remove archive before cancellation: %v", err)
 	}
-	command = exec.Command(binary, "zip", ".", "--without-open")
+	command = exec.Command(resolveStandaloneBinary(binary), "zip", ".", "--without-open")
 	command.Dir = project
 	command.Env = environment
 	command.Stdin = strings.NewReader("cancel\n")
@@ -226,7 +228,7 @@ func TestZIPStandaloneBinaryCreatesAStructuralArchive(t *testing.T) {
 		t.Fatalf("cancellation archive = %v, want missing", err)
 	}
 
-	command = exec.Command(binary, "zip", "--help")
+	command = exec.Command(resolveStandaloneBinary(binary), "zip", "--help")
 	command.Dir = project
 	command.Env = environment
 	output, err = command.CombinedOutput()

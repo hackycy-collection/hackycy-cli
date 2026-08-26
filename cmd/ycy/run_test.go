@@ -60,7 +60,7 @@ func TestRunStandaloneBinaryPreservesProjectExecutionAndParserBehavior(t *testin
 		t.Skip("host shell fixture is Unix-specific")
 	}
 	repository := repositoryRoot(t)
-	binary := filepath.Join(t.TempDir(), "ycy")
+	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
 	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
 	build.Dir = repository
 	build.Env = environmentWith(map[string]string{
@@ -155,7 +155,7 @@ func TestRunStandaloneBinaryPreservesProjectExecutionAndParserBehavior(t *testin
 }
 
 func runRunStandalone(binary, directory string, environment []string, input string, arguments ...string) ([]byte, error) {
-	command := exec.Command(binary, arguments...)
+	command := exec.Command(resolveStandaloneBinary(binary), arguments...)
 	command.Dir = directory
 	command.Env = environment
 	command.Stdin = strings.NewReader(input)

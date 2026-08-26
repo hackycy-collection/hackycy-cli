@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"net/url"
 	"path/filepath"
 )
 
@@ -91,7 +90,7 @@ func openDatabase(path string) (*sql.DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("resolve Tunnel database path: %w", err)
 	}
-	databaseURL := (&url.URL{Scheme: "file", Path: absPath}).String()
+	databaseURL := databaseFileURI(absPath)
 	database, err := sql.Open("sqlite3", databaseURL)
 	if err != nil {
 		return nil, fmt.Errorf("open Tunnel database: %w", err)

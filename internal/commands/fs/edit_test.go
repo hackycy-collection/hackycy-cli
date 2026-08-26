@@ -32,8 +32,15 @@ func TestWorkspaceSaveTextPreservesEncodingLineEndingModeAndRevision(t *testing.
 		t.Fatalf("saved bytes = %q, %v", contents, err)
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o640 {
+	if err != nil {
 		t.Fatalf("saved mode = %v, %v", info.Mode(), err)
+	}
+	if runtime.GOOS == "windows" {
+		if info.Mode().Perm()&0o200 == 0 {
+			t.Fatalf("saved Windows file is read-only: %v", info.Mode())
+		}
+	} else if info.Mode().Perm() != 0o640 {
+		t.Fatalf("saved mode = %v, want 0640", info.Mode())
 	}
 	if _, err := workspace.SaveText(mustWorkspacePath(t, "notes.txt"), "stale", preview.Revision); !serviceErrorIs(err, "REVISION_MISMATCH") {
 		t.Fatalf("stale SaveText() error = %v", err)

@@ -71,6 +71,9 @@ func ApplyTransaction(ctx context.Context, state UpdateTransaction, options Repl
 		if rollbackErr == nil {
 			rollbackErr = retryOperation(options, func() error { return options.Rename(state.BackupPath, state.TargetPath) })
 		}
+		if rollbackErr == nil {
+			rollbackErr = protectUpgradePath(state.TargetPath, 0o755, options.Chmod)
+		}
 		if rollbackErr != nil {
 			return fmt.Errorf("%w; rollback failed: %v", cause, rollbackErr)
 		}
@@ -82,16 +85,17 @@ func ApplyTransaction(ctx context.Context, state UpdateTransaction, options Repl
 			return "", fmt.Errorf("move current binary to backup: %w", err)
 		}
 		originalMoved = true
+		if err := protectUpgradePath(state.BackupPath, 0o755, options.Chmod); err != nil {
+			return "", rollback(fmt.Errorf("protect previous binary: %w", err))
+		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return "", fmt.Errorf("inspect current binary: %w", err)
 	}
 	if err := retryOperation(options, func() error { return options.Rename(state.StagedPath, state.TargetPath) }); err != nil {
 		return "", rollback(fmt.Errorf("publish staged candidate: %w", err))
 	}
-	if runtime.GOOS != "windows" {
-		if err := options.Chmod(state.TargetPath, 0o755); err != nil {
-			return "", rollback(fmt.Errorf("make installed binary executable: %w", err))
-		}
+	if err := protectUpgradePath(state.TargetPath, 0o755, options.Chmod); err != nil {
+		return "", rollback(fmt.Errorf("protect installed binary: %w", err))
 	}
 	if err := options.ClearQuarantine(state.TargetPath); err != nil {
 		return "", rollback(err)
@@ -143,7 +147,7 @@ func RunInternalUpdater(ctx context.Context, arguments []string, options Replace
 	}
 	warning, err := ApplyTransaction(ctx, state, options)
 	if err != nil {
-		_ = os.Remove(state.StagedPath)
+		_ = retryOperation(options, func() error { return options.Remove(state.StagedPath) })
 		writeFailedState(state, err)
 		return err
 	}
@@ -201,17 +205,21 @@ func normalizeReplacementOptions(options ReplacementOptions) ReplacementOptions 
 }
 
 func retryOperation(options ReplacementOptions, operation func() error) error {
+	return retryFileOperation(options.RetryCount, options.Sleep, operation)
+}
+
+func retryFileOperation(retryCount int, sleep func(time.Duration) error, operation func() error) error {
 	var last error
-	for attempt := 0; attempt < options.RetryCount; attempt++ {
+	for attempt := 0; attempt < retryCount; attempt++ {
 		if err := operation(); err == nil {
 			return nil
 		} else {
 			last = err
-			if !retryableFileError(err) || attempt == options.RetryCount-1 {
+			if !retryableFileError(err) || attempt == retryCount-1 {
 				return err
 			}
 		}
-		if err := options.Sleep(fileRetryInterval); err != nil {
+		if err := sleep(fileRetryInterval); err != nil {
 			return err
 		}
 	}
@@ -223,7 +231,16 @@ func retryableFileError(err error) bool {
 	if errors.As(err, &pathError) {
 		err = pathError.Err
 	}
-	return errors.Is(err, os.ErrPermission) || strings.Contains(strings.ToLower(err.Error()), "busy") || strings.Contains(strings.ToLower(err.Error()), "sharing")
+	return isRetryableFileError(err)
+}
+
+func defaultFileSleep(duration time.Duration) error {
+	time.Sleep(duration)
+	return nil
+}
+
+func removeUpgradeFile(path string) error {
+	return retryFileOperation(fileRetryCount, defaultFileSleep, func() error { return os.Remove(path) })
 }
 
 func hashFile(path string) (string, error) {

@@ -9,6 +9,8 @@
 - Architecture and cutover: [data-compatibility scope](issues/12-choose-data-compatibility-mechanisms.md), [Go module seams](issues/13-choose-go-module-seams.md), [hook policy](issues/14-choose-mixed-project-hook-policy.md), and [archive/cutover choreography](issues/15-define-archive-cutover.md).
 - First-release policy and explicit deferrals: [parity and exception policy](issues/17-choose-corrected-core-command-contracts.md), [Git hardening disposition](issues/18-choose-safe-git-command-contracts.md), [Diff hardening disposition](issues/19-choose-safe-diff-service-contracts.md), [FS hardening disposition](issues/20-choose-safe-fs-service-contracts.md), [Tunnel hardening disposition](issues/22-choose-safe-rolling-tunnel-contracts.md), and [Upgrade hardening disposition](issues/23-choose-safe-self-update-contract.md).
 - FS thumbnail decision and evidence: [resolved research issue](issues/21-research-cgo-free-fs-thumbnails.md) and [full compatibility report](research/21-cgo-free-fs-thumbnails.md).
+- Native Windows acceptance decision: [Windows native acceptance contract](issues/24-choose-windows-native-acceptance-contract.md) governs the evidenced target-specific adapters required by G27.
+- Windows Tunnel/FRP acceptance decision: [WD-25](issues/25-choose-windows-tunnel-frp-acceptance-contract.md) authorizes only the bounded native file, path-error, and test-synchronization adaptations required by G27.
 - Repository execution context: [CLAUDE.md](../../CLAUDE.md).
 
 ## Outcome
@@ -1807,6 +1809,9 @@ Aggregate every Unit and native milestone into one clean-checkout, six-target lo
 
 - [Final Artifact Gate roadmap](issues/16-approve-command-migration-roadmap.md#final-artifact-gate-and-release) and [Acceptance checklist](acceptance.md#final-artifact-gate).
 - [Artifact Set tests](inventories/upgrade-artifact-contracts.md#required-artifact-set-tests), [native artifact tests](inventories/upgrade-artifact-contracts.md#required-native-artifact-tests), and all prior Unit evidence in [acceptance.md](acceptance.md).
+- [Windows native acceptance contract](issues/24-choose-windows-native-acceptance-contract.md) for the evidenced Windows-only compatibility adaptations.
+- [WD-25](issues/25-choose-windows-tunnel-frp-acceptance-contract.md) for the remaining Windows Tunnel/FRP failures and its bounded implementation contract.
+- [WD-26](issues/26-choose-g27-current-host-acceptance-contract.md) for the explicitly selected current-host-only G27 acceptance variant.
 
 ### Objective
 
@@ -1864,6 +1869,18 @@ Discard only the failed local release-candidate staging/output and revert the sm
 3. Every required matching native CLI/browser/FS/7-Zip/thumbnail/Go-only-Tunnel/FRP/installer/Go-to-Go-Upgrade suite succeeds for its target artifact.
 4. Every applicable Unit and native target is `release-accepted`, with candidate SHA-256 and durable evidence recorded in the Acceptance Ledger.
 5. Generated/acquired outputs remain untracked, and no workflow, tag, release, Docker, or deployment change was introduced by this effort.
+
+### WD-26 current-host acceptance amendment
+
+For the user-approved primary-host-set acceptance variant, the native
+execution portion of Exit condition 3 and the native-target portion of Exit
+condition 4 apply only to the selected native `{windows/amd64, darwin/arm64}`
+target set. The other four target rows remain `pending` and are explicitly
+deferred; they are not represented as passed or `release-accepted`. Exit
+conditions 1, 2, and 5, including current-host repository/artifact evidence,
+checksum and payload inspection, and generated-output hygiene, remain
+applicable. This amendment changes only the acceptance boundary and does not
+change product or release behavior.
 
 ## Definition Of Done
 

@@ -119,7 +119,7 @@ func Open(options Options) (*Manager, error) {
 	if err := os.MkdirAll(directory, 0o700); err != nil {
 		return nil, fmt.Errorf("%w: create session directory: %v", ErrStorageUnavailable, err)
 	}
-	if err := os.Chmod(directory, 0o700); err != nil {
+	if err := protectSessionPath(directory, 0o700); err != nil {
 		return nil, fmt.Errorf("%w: protect session directory: %v", ErrStorageUnavailable, err)
 	}
 
@@ -624,7 +624,7 @@ func readOrCreateKey(directory string) ([]byte, error) {
 		if len(key) != sha256.Size {
 			return nil, fmt.Errorf("%w: %s", ErrInvalidKey, keyPath)
 		}
-		if err := os.Chmod(keyPath, 0o600); err != nil {
+		if err := protectSessionPath(keyPath, 0o600); err != nil {
 			return nil, fmt.Errorf("%w: protect key: %v", ErrStorageUnavailable, err)
 		}
 		return key, nil
@@ -646,6 +646,10 @@ func readOrCreateKey(directory string) ([]byte, error) {
 		}
 		if closeErr := file.Close(); closeErr != nil {
 			return nil, fmt.Errorf("%w: close key: %v", ErrStorageUnavailable, closeErr)
+		}
+		if err := protectSessionPath(keyPath, 0o600); err != nil {
+			_ = os.Remove(keyPath)
+			return nil, fmt.Errorf("%w: protect key: %v", ErrStorageUnavailable, err)
 		}
 		return key, nil
 	}
@@ -677,7 +681,14 @@ func writeLockOwner(lockPath string, owner lockOwner) error {
 		_ = os.Remove(lockPath)
 		return writeErr
 	}
-	return file.Close()
+	if err := file.Close(); err != nil {
+		return err
+	}
+	if err := protectSessionPath(lockPath, 0o600); err != nil {
+		_ = os.Remove(lockPath)
+		return err
+	}
+	return nil
 }
 
 func readLockOwner(lockPath string) (lockOwner, bool) {
@@ -733,11 +744,11 @@ func writeRecord(record sessionRecord) (err error) {
 	if closeErr := file.Close(); closeErr != nil {
 		return fmt.Errorf("%w: close record candidate: %v", ErrStorageUnavailable, closeErr)
 	}
+	if err := protectSessionPath(candidate, 0o600); err != nil {
+		return fmt.Errorf("%w: protect record candidate: %v", ErrStorageUnavailable, err)
+	}
 	if err := replaceSessionFile(candidate, record.path); err != nil {
 		return fmt.Errorf("%w: replace record: %v", ErrStorageUnavailable, err)
-	}
-	if err := os.Chmod(record.path, 0o600); err != nil {
-		return fmt.Errorf("%w: protect record: %v", ErrStorageUnavailable, err)
 	}
 	return nil
 }

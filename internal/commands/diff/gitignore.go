@@ -74,9 +74,24 @@ func parseIgnorePatterns(source string) []gitignore.Pattern {
 		if strings.HasPrefix(line, "#") || strings.TrimSpace(line) == "" {
 			continue
 		}
-		patterns = append(patterns, gitignore.ParsePattern(line, nil))
+		patterns = append(patterns, gitignore.ParsePattern(normalizeIgnorePattern(line), nil))
 	}
 	return patterns
+}
+
+// normalizeIgnorePattern keeps Gitignore escapes portable across filepath.Match
+// implementations, where Windows treats backslash as a path separator.
+func normalizeIgnorePattern(pattern string) string {
+	if strings.HasPrefix(pattern, `\!`) {
+		pattern = `[!]` + pattern[2:]
+	}
+	if strings.HasPrefix(pattern, `\#`) {
+		pattern = `[#]` + pattern[2:]
+	}
+	if strings.HasSuffix(pattern, `\ `) {
+		pattern = strings.TrimSuffix(pattern, `\ `) + `[ ]`
+	}
+	return pattern
 }
 
 func matchIgnorePatterns(patterns []gitignore.Pattern, path []string, directory bool) gitignore.MatchResult {

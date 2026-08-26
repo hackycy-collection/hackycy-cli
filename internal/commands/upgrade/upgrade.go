@@ -92,28 +92,22 @@ func RunUpgrade(ctx context.Context, options UpgradeOptions) (UpgradeResult, err
 	if err != nil {
 		return UpgradeResult{}, classifyUpgradeError(options.Output, options.ErrorOutput, err)
 	}
-	updaterPath := filepath.Join(options.TempDirectory(), "ycy-updater-"+candidate.TransactionID+filepath.Ext(targetPath))
+	updaterPath := updaterBinaryPath(options.TempDirectory(), candidate.TransactionID)
 	if err := options.Copy(targetPath, updaterPath); err != nil {
-		_ = options.Remove(candidate.Path)
+		cleanupUpgradePaths(options.Remove, candidate.Path)
 		return UpgradeResult{}, fmt.Errorf("copy updater: %w", err)
 	}
-	if runtime.GOOS != "windows" {
-		if err := os.Chmod(updaterPath, 0o755); err != nil {
-			_ = options.Remove(candidate.Path)
-			_ = options.Remove(updaterPath)
-			return UpgradeResult{}, fmt.Errorf("make updater executable: %w", err)
-		}
+	if err := protectUpgradePath(updaterPath, 0o755, os.Chmod); err != nil {
+		cleanupUpgradePaths(options.Remove, candidate.Path, updaterPath)
+		return UpgradeResult{}, fmt.Errorf("protect updater: %w", err)
 	}
 	state := NewUpdateTransaction(targetPath, candidate, resolution.Version, options.PID(), updaterPath, options.Now())
 	if err := WriteState(state); err != nil {
-		_ = options.Remove(candidate.Path)
-		_ = options.Remove(updaterPath)
+		cleanupUpgradePaths(options.Remove, candidate.Path, updaterPath)
 		return UpgradeResult{}, fmt.Errorf("publish pending update state: %w", err)
 	}
 	if err := options.Spawn(ctx, updaterPath, InternalUpdateArgs(state)); err != nil {
-		_ = options.Remove(candidate.Path)
-		_ = options.Remove(updaterPath)
-		_ = options.Remove(state.StatePath)
+		cleanupUpgradePaths(options.Remove, candidate.Path, updaterPath, state.StatePath)
 		return UpgradeResult{}, fmt.Errorf("schedule updater: %w", err)
 	}
 	writeUpgradeResult(options.Output, fmt.Sprintf("Update to v%s has been scheduled and will finish after ycy exits.", resolution.Version))
@@ -187,6 +181,14 @@ func writeUpgradeResult(output io.Writer, message string) {
 		return
 	}
 	_, _ = fmt.Fprintln(output, message)
+}
+
+func cleanupUpgradePaths(remove func(string) error, paths ...string) {
+	for _, path := range paths {
+		_ = retryFileOperation(fileRetryCount, defaultFileSleep, func() error {
+			return remove(path)
+		})
+	}
 }
 
 func copyFile(source, destination string) error {

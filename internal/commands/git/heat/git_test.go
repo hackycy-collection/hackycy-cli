@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"testing"
 )
 
@@ -128,14 +129,15 @@ func TestReadLogParsesNativeGitNULRecordsFromNestedDirectory(t *testing.T) {
 	runHeatGit(t, repository, "config", "user.name", "Heat Test")
 	runHeatGit(t, repository, "config", "user.email", "heat@example.test")
 
-	firstPath := filepath.Join(repository, "first\tname.txt")
+	firstName, addedName, quotedName, pathspecName := heatNativeFixtureNames()
+	firstPath := filepath.Join(repository, firstName)
 	if err := os.WriteFile(firstPath, []byte("one\n"), 0o600); err != nil {
 		t.Fatalf("write first file: %v", err)
 	}
 	if err := os.WriteFile(filepath.Join(repository, "unicode-中.txt"), []byte("two\n"), 0o600); err != nil {
 		t.Fatalf("write unicode file: %v", err)
 	}
-	for _, name := range []string{"quote\"name\\path.txt", "-leading-[*]:.txt"} {
+	for _, name := range []string{quotedName, pathspecName} {
 		if err := os.WriteFile(filepath.Join(repository, name), []byte("special\n"), 0o600); err != nil {
 			t.Fatalf("write special file %q: %v", name, err)
 		}
@@ -146,7 +148,7 @@ func TestReadLogParsesNativeGitNULRecordsFromNestedDirectory(t *testing.T) {
 	if err := os.WriteFile(firstPath, []byte("changed\n"), 0o600); err != nil {
 		t.Fatalf("rewrite first file: %v", err)
 	}
-	if err := os.WriteFile(filepath.Join(repository, "line\nname.txt"), []byte("three\n"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(repository, addedName), []byte("three\n"), 0o600); err != nil {
 		t.Fatalf("write newline file: %v", err)
 	}
 	runHeatGit(t, repository, "add", ".")
@@ -165,7 +167,7 @@ func TestReadLogParsesNativeGitNULRecordsFromNestedDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("resolve temporary repository: %v", err)
 	}
-	if root != resolvedRepository {
+	if normalizedGitPath(root) != normalizedGitPath(resolvedRepository) {
 		t.Fatalf("root = %q, want %q", root, resolvedRepository)
 	}
 	log, err := ReadLog(context.Background(), runner, root, Range{Limit: 2})
@@ -175,19 +177,19 @@ func TestReadLogParsesNativeGitNULRecordsFromNestedDirectory(t *testing.T) {
 	if log.CommitCount != 2 {
 		t.Fatalf("commit count = %d, want 2", log.CommitCount)
 	}
-	if !hasHeatChange(log.Changes, ChangeModified, "first\tname.txt") {
+	if !hasHeatChange(log.Changes, ChangeModified, firstName) {
 		t.Fatalf("changes do not include modified tab path: %#v", log.Changes)
 	}
-	if !hasHeatChange(log.Changes, ChangeAdded, "line\nname.txt") {
+	if !hasHeatChange(log.Changes, ChangeAdded, addedName) {
 		t.Fatalf("changes do not include added newline path: %#v", log.Changes)
 	}
 	if !hasHeatChange(log.Changes, ChangeAdded, "unicode-中.txt") {
 		t.Fatalf("changes do not include unicode path: %#v", log.Changes)
 	}
-	if !hasHeatChange(log.Changes, ChangeAdded, "quote\"name\\path.txt") {
+	if !hasHeatChange(log.Changes, ChangeAdded, quotedName) {
 		t.Fatalf("changes do not include quote/backslash path: %#v", log.Changes)
 	}
-	if !hasHeatChange(log.Changes, ChangeAdded, "-leading-[*]:.txt") {
+	if !hasHeatChange(log.Changes, ChangeAdded, pathspecName) {
 		t.Fatalf("changes do not include pathspec-like path: %#v", log.Changes)
 	}
 }
@@ -268,7 +270,7 @@ func TestNativeGitRepositoryKinds(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolve worktree: %v", err)
 		}
-		if root != resolvedWorktree {
+		if normalizedGitPath(root) != normalizedGitPath(resolvedWorktree) {
 			t.Fatalf("root = %q, want %q", root, resolvedWorktree)
 		}
 		log, err := ReadLog(context.Background(), runner, root, Range{Limit: 1})
@@ -346,6 +348,17 @@ func writeHeatFile(t *testing.T, directory, name, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write %q: %v", name, err)
 	}
+}
+
+func heatNativeFixtureNames() (first, added, quoted, pathspec string) {
+	if runtime.GOOS == "windows" {
+		return "first name.txt", "line-name.txt", "quote-name.txt", "leading-pathspec.txt"
+	}
+	return "first\tname.txt", "line\nname.txt", "quote\"name\\path.txt", "-leading-[*]:.txt"
+}
+
+func normalizedGitPath(value string) string {
+	return filepath.Clean(filepath.FromSlash(value))
 }
 
 func hasHeatChange(changes []Change, kind ChangeKind, path string) bool {

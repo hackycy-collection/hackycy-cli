@@ -34,7 +34,7 @@ func (runner *osRunChildRunner) Run(ctx context.Context, request runcommand.Chil
 	child.Stderr = runner.errors
 	configureRunChild(child)
 	if err := child.Start(); err != nil {
-		return runcommand.Result{}, err
+		return runcommand.Result{}, normalizeProcessStartError(err)
 	}
 	exited := make(chan error, 1)
 	go func() {

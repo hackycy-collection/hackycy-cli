@@ -13,17 +13,17 @@ import (
 func testState(t *testing.T, status UpdateStatus) UpdateTransaction {
 	t.Helper()
 	directory := t.TempDir()
-	target := filepath.Join(directory, "ycy")
+	target := nativeTestExecutablePath(filepath.Join(directory, "ycy"))
 	return UpdateTransaction{
 		TransactionID:   "11111111-1111-4111-8111-111111111111",
 		ParentPID:       2147483647,
 		TargetPath:      target,
-		StagedPath:      target + ".new.11111111-1111-4111-8111-111111111111",
-		BackupPath:      target + ".backup.11111111-1111-4111-8111-111111111111",
+		StagedPath:      expectedTransactionPath(target, ".new.", "11111111-1111-4111-8111-111111111111"),
+		BackupPath:      expectedTransactionPath(target, ".backup.", "11111111-1111-4111-8111-111111111111"),
 		ExpectedHash:    strings.Repeat("a", 64),
 		ExpectedVersion: "1.2.3",
 		StatePath:       StatePath(target),
-		UpdaterPath:     filepath.Join(directory, "ycy-updater-11111111"),
+		UpdaterPath:     expectedUpdaterPath(directory, "11111111"),
 		CreatedAt:       time.Now().UTC().Format(time.RFC3339Nano),
 		Status:          status,
 	}
@@ -34,6 +34,7 @@ func TestStatePublishesAtomicallyAndConsumesCompletedOnce(t *testing.T) {
 	if err := WriteState(state); err != nil {
 		t.Fatal(err)
 	}
+	assertPrivateUpgradePath(t, state.StatePath, 0o600)
 	read, err := ReadState(state.StatePath)
 	if err != nil || read == nil || read.Status != StatusSucceeded {
 		t.Fatalf("read state = %#v, %v", read, err)

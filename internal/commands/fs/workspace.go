@@ -60,6 +60,25 @@ type OpenedFile struct {
 	identity FileIdentity
 }
 
+type workspaceRoot interface {
+	Close() error
+	Open(string) (*os.File, error)
+	OpenFile(string, int, os.FileMode) (*os.File, error)
+	Lstat(string) (os.FileInfo, error)
+	Stat(string) (os.FileInfo, error)
+	Mkdir(string, os.FileMode) error
+	Remove(string) error
+	RemoveAll(string) error
+	Rename(string, string) error
+	Link(string, string) error
+	Symlink(string, string) error
+	Readlink(string) (string, error)
+}
+
+type workspaceOpenedFileRoot interface {
+	OpenWorkspaceFile(string) (*os.File, error)
+}
+
 func (file *OpenedFile) Read(data []byte) (int, error) {
 	return file.file.Read(data)
 }
@@ -79,7 +98,7 @@ func (file *OpenedFile) Identity() FileIdentity {
 // Workspace owns a Browse Root handle. All child access uses WorkspacePath,
 // so operating-system paths cannot cross this boundary after construction.
 type Workspace struct {
-	root          *os.Root
+	root          workspaceRoot
 	rootDirectory string
 	rootName      string
 	writes        sync.Mutex
@@ -107,7 +126,7 @@ func OpenWorkspace(directory string) (*Workspace, error) {
 	if !info.IsDir() {
 		return nil, fmt.Errorf("%w: %s", ErrWorkspaceNotDirectory, resolved)
 	}
-	root, err := os.OpenRoot(resolved)
+	root, err := openWorkspaceRoot(resolved)
 	if err != nil {
 		return nil, fmt.Errorf("%w: open workspace root: %v", ErrWorkspaceUnavailable, err)
 	}
@@ -159,7 +178,7 @@ func (workspace *Workspace) List(path WorkspacePath) ([]Entry, error) {
 }
 
 func (workspace *Workspace) OpenFile(path WorkspacePath) (*OpenedFile, error) {
-	file, err := workspace.open(path)
+	file, err := workspace.openFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -189,6 +208,17 @@ func (workspace *Workspace) open(path WorkspacePath) (*os.File, error) {
 		return nil, fmt.Errorf("%w: open %s: %v", ErrWorkspaceUnavailable, path.String(), err)
 	}
 	return file, nil
+}
+
+func (workspace *Workspace) openFile(path WorkspacePath) (*os.File, error) {
+	if root, ok := workspace.root.(workspaceOpenedFileRoot); ok {
+		file, err := root.OpenWorkspaceFile(path.rootName())
+		if err != nil {
+			return nil, fmt.Errorf("%w: open %s: %v", ErrWorkspaceUnavailable, path.String(), err)
+		}
+		return file, nil
+	}
+	return workspace.open(path)
 }
 
 func (workspace *Workspace) listEntry(path WorkspacePath) Entry {

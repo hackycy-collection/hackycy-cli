@@ -250,7 +250,7 @@ func TestGitForkStandaloneBinaryDownloadsALocalProviderArchive(t *testing.T) {
 
 	home := t.TempDir()
 	configureGitForkFixture(t, home, server.URL)
-	binary := filepath.Join(t.TempDir(), "ycy")
+	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
 	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
 	build.Dir = repositoryRoot(t)
 	build.Env = environmentWith(map[string]string{"CGO_ENABLED": "0", "GOTOOLCHAIN": "go1.26.7", "GOWORK": "off"})
@@ -258,7 +258,7 @@ func TestGitForkStandaloneBinaryDownloadsALocalProviderArchive(t *testing.T) {
 		t.Fatalf("build standalone binary: %v\n%s", err, output)
 	}
 	destination := filepath.Join(t.TempDir(), "destination")
-	command := exec.Command(binary, "git", "fork", "fixture:group/project", destination)
+	command := exec.Command(resolveStandaloneBinary(binary), "git", "fork", "fixture:group/project", destination)
 	command.Dir = t.TempDir()
 	command.Env = environmentWith(map[string]string{"HOME": home, "USERPROFILE": ""})
 	output, err := command.CombinedOutput()
