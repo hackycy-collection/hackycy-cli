@@ -1870,17 +1870,17 @@ Discard only the failed local release-candidate staging/output and revert the sm
 4. Every applicable Unit and native target is `release-accepted`, with candidate SHA-256 and durable evidence recorded in the Acceptance Ledger.
 5. Generated/acquired outputs remain untracked, and no workflow, tag, release, Docker, or deployment change was introduced by this effort.
 
-### WD-26 current-host acceptance amendment
+### WD-26 Windows amd64-only local acceptance amendment
 
-For the user-approved primary-host-set acceptance variant, the native
+For the user-approved Windows amd64-only local acceptance variant, the native
 execution portion of Exit condition 3 and the native-target portion of Exit
-condition 4 apply only to the selected native `{windows/amd64, darwin/arm64}`
-target set. The other four target rows remain `pending` and are explicitly
-deferred; they are not represented as passed or `release-accepted`. Exit
-conditions 1, 2, and 5, including current-host repository/artifact evidence,
-checksum and payload inspection, and generated-output hygiene, remain
-applicable. This amendment changes only the acceptance boundary and does not
-change product or release behavior.
+condition 4 apply only to the selected native `{windows/amd64}` target. The
+other five target rows remain `pending` and are explicitly deferred; they are
+not represented as passed or `release-accepted`. Exit conditions 1, 2, and 5,
+including clean Windows repository/artifact evidence, checksum and payload
+inspection, and generated-output hygiene, remain applicable. This amendment
+changes only the acceptance boundary and does not change product or release
+behavior.
 
 ## Definition Of Done
 

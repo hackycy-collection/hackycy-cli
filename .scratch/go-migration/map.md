@@ -55,7 +55,7 @@ Produce an execution-ready, parity-first route that turns ycy from a Bun-hosted 
 - [Research a CGO-free FS thumbnail compatibility path](issues/21-research-cgo-free-fs-thumbnails.md): pinned pure-Go AVIF/WebP plus standard image codecs reproduce the Bun thumbnail capability in one binary across all six builds, with self-exec workers preserving hard timeout replacement and no compatibility exception.
 - [Decide Windows native acceptance contracts](issues/24-choose-windows-native-acceptance-contract.md): G27 may make the narrowly evidenced Windows executable, path, SQLite URI, DACL, sharing-retry, and Hookctl fixture adaptations required for native acceptance without changing public behavior.
 - [Choose the remaining Windows Tunnel/FRP native acceptance contract](issues/25-choose-windows-tunnel-frp-acceptance-contract.md): G27 may make only the approved Tunnel-owned file DACL, path-error, and test-synchronization adaptations, without changing public protocol behavior.
-- [Choose the current-host G27 acceptance contract](issues/26-choose-g27-current-host-acceptance-contract.md): the user-approved primary-host-set variant applies native Exit 3/4 evidence only to `windows/amd64` and `darwin/arm64`, keeps the other target rows pending, and does not claim full six-target release readiness.
+- [Choose the current-host G27 acceptance contract](issues/26-choose-g27-current-host-acceptance-contract.md): the user-approved Windows amd64-only local variant applies native Exit 3/4 evidence only to `windows/amd64`, keeps the other five target rows pending, and does not claim full six-target release readiness.
 
 ## Not yet specified
 

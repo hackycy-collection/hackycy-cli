@@ -3,7 +3,7 @@
 First Go release: `v0.1.0`
 Migration build identity: `0.0.0-dev`
 Roadmap: [Approve the command-by-command migration roadmap](issues/16-approve-command-migration-roadmap.md)
-Status: Foundation Gate, export env, appconfig foundation, and `upgrade` integrated; G27 Windows x64 candidate evidence is release-accepted, while the WD-26-selected macOS arm64 evidence remains pending
+Status: every Migration Unit is integrated; G27 Windows x64 candidate evidence is release-accepted under WD-26 Windows amd64-only local acceptance, while the other five native targets remain explicitly deferred
 
 ## Recording rules
 
@@ -14,7 +14,7 @@ Status: Foundation Gate, export env, appconfig foundation, and `upgrade` integra
 - Record concise commands/results, date, host OS/architecture, candidate artifact SHA-256, outstanding native work, and any Wayfinder compatibility-decision link. Link durable logs when useful; do not paste large raw logs.
 - Never record credentials, tokens, cookies, user data, private endpoints, external Bun executables, or other secrets. The active suite never executes `legacy/bun/`.
 - A failed in-scope parity probe stops the serial integration lane at that Unit until a linked Wayfinder decision is complete. Do not mark a skipped or waived test as passed.
-- WD-26 primary-host-set acceptance applies native Exit 3/4 evidence only to the selected `{windows/amd64, darwin/arm64}` targets; other target rows remain `pending` and are explicitly deferred rather than accepted.
+- WD-26 Windows amd64-only local acceptance applies native Exit 3/4 evidence only to the selected `{windows/amd64}` target; the other five target rows remain `pending` and are explicitly deferred rather than accepted.
 
 ## Sources
 
@@ -61,7 +61,7 @@ Status: Foundation Gate, export env, appconfig foundation, and `upgrade` integra
 | `tunnel server` | integrated | Tunnel inventory | Integration worktree: final uncached `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -race -count=1 ./internal/commands/tunnel ./internal/cliapp ./cmd/ycy` passed. Focused Go-created SQLite/WAL restart, domain/account/ownership/revision, raw HTTP/session/SSE, retained production React/routes, managed frps, v3 scripted-agent, public CLI, and standalone-native control-plane tests passed without Bun state or peers. | macOS arm64 host (Darwin 25.5.0); Go 1.26.7 with `CGO_ENABLED=0`; `make check`, `make build`, and `make cross-build` passed. `build/ycy` SHA-256 `5aa120cf3e9869738821bd0ef9cddc8afd85d5751cced0972382055f9cb72126`; a disposable native run downloaded and verified FRP 0.70.1, served health/login/state and `/server`, then released listener ports and the state lock on SIGINT. Six nonempty CGO-free Mach-O/ELF/PE artifacts had matching target metadata. | Release-accepted Artifact Gate and native Linux/Windows Tunnel/FRP/browser/process execution evidence; Windows process supervision is compiled but not natively exercised here. | [roadmap](issues/16-approve-command-migration-roadmap.md), [Tunnel scope](issues/22-choose-safe-rolling-tunnel-contracts.md) |
 | `tunnel connect` | integrated | Tunnel inventory | Integration worktree: 2026-08-25 final uncached `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -race -count=1 ./internal/commands/tunnel ./internal/cliapp ./cmd/ycy -timeout 600s` passed (Tunnel 293.509s, cliapp 2.349s, cmd/ycy 65.954s). Focused config/selection/TTY, Go-owned instance/cache, v3 welcome/pinned-artifact, reconciliation/rollback, reconnection/supervision, public binder, standalone help/error, and real Go-to-Go HTTP/TCP/UDP forwarding/release tests passed without Bun peers or state. | macOS arm64 host; Go 1.26.7 with `CGO_ENABLED=0`; `make check`, `make build`, and `make cross-build` passed. `build/ycy` SHA-256 `f16e6da6d6f1ffa93ddb1fc411efb818d12988e2de9f5b2b67833a8c971f24e2`; public `tunnel connect --help` and explicit-empty `--server` error passed; six nonempty CGO-free Mach-O/ELF/PE artifacts matched their target metadata. | Release-accepted Artifact Gate and native Linux/Windows Tunnel/FRP/process execution evidence; Windows supervision is compiled but not natively exercised here. | [roadmap](issues/16-approve-command-migration-roadmap.md), [Tunnel scope](issues/22-choose-safe-rolling-tunnel-contracts.md) |
 | `upgrade` | integrated | Upgrade inventory | Integration worktree: 2026-08-25 focused `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -race -count=1 ./internal/commands/upgrade -timeout 240s`, public `cliapp`/`cmd/ycy` upgrade tests, detached standalone replacement/rollback/self-check integration, and local installer fixture tests passed. Evidence covers exact `upgrade`/`-V`/`--version` parsing and result mapping, six-way artifact/checksum resolution, staged digest/version verification, Go-owned state and hidden apply routing, and no adjacent Bun state access. | macOS arm64 host (Darwin 25.5.0); Go 1.26.7 with `CGO_ENABLED=0`; current `build/ycy` version/help and detached Go-to-Go replacement/rollback smoke passed; host SHA-256 `8b995b063bae4511d8dccd78df6a95aaed2a3eea979536dfe7604bc6bd943929`; `make check`, `make build`, and `make cross-build` passed, producing six nonempty Mach-O x64/arm64, static ELF x64/arm64, and PE x64/arm64 artifacts with matching target metadata. | Release-accepted Final Artifact Gate; native Linux x64/arm64 and Windows x64/arm64 detached replacement/installer/Upgrade execution (including PowerShell/MOTW/locked-file behavior), plus per-target artifact/browser/FS/Tunnel evidence, remain outstanding. Current macOS arm64 detached Go-to-Go evidence does not substitute for those target-native gates. | [safe self-update contract](issues/23-choose-safe-self-update-contract.md), [roadmap](issues/16-approve-command-migration-roadmap.md) |
-| Final Artifact Gate | pending | Upgrade/artifact inventory and roadmap | - | - | Complete six-target matrix | - |
+| Final Artifact Gate | release-accepted | Upgrade/artifact inventory and roadmap | 2026-08-26 clean native Windows checkout passed `make bootstrap`, `make check`, `make build`, and `make release-candidate`; the independent verifier passed. | Windows amd64 candidate `16ed4d4f594e9e597e7832c380af61bf031523f063b446ceca6a95a7b8025979` has the complete native CLI/browser/FS/7-Zip/thumbnail/Tunnel/FRP/installer/Upgrade evidence recorded below. | Five nonselected targets are deferred by WD-26; no full six-target release or publication claim. | [WD-26](issues/26-choose-g27-current-host-acceptance-contract.md) |
 
 ## Research prerequisite
 
@@ -73,35 +73,35 @@ Status: Foundation Gate, export env, appconfig foundation, and `upgrade` integra
 
 | Target | Required artifact | State | Host/date | Candidate SHA-256 | Evidence | Outstanding gates |
 | --- | --- | --- | --- | --- | --- | --- |
-| macOS x64 | `ycy-macos-x64` | pending | - | - | - | All selected gates |
-| macOS arm64 | `ycy-macos-arm64` | pending | - | - | - | All selected gates |
-| Linux x64 | `ycy-linux-x64` | pending | - | - | - | All selected gates |
-| Linux arm64 | `ycy-linux-arm64` | pending | - | - | - | All selected gates |
-| Windows x64 | `ycy-windows-x64.exe` | release-accepted | native Windows amd64, 2026-08-26 | `16ed4d4f594e9e597e7832c380af61bf031523f063b446ceca6a95a7b8025979` | Clean candidate assembly/static verifier; no-Bun/Node/pnpm/Go CLI smoke; native CTRL_BREAK FS lifecycle; real embedded Diff, FS, and authenticated Tunnel browser flows; manifest-matching 7-Zip materialization, functional extraction, corrupt-runtime regeneration, and WebP thumbnail/304 cache; pinned FRP 0.70.1 acquisition plus real HTTP/TCP/UDP candidate forwarding; local-fixture `install.ps1` fresh/fallback/rollback; Go-to-Go replacement, rollback, state consumption, ACL, sharing-violation retry, parent-timeout failure state, and native MOTW removal with unchanged version/hash. | G27 remains active pending WD-26-selected macOS arm64 candidate-native suite; the four unselected target rows remain pending. The resolved Go-to-Go contract defers a new crash-recovery/concurrent-locking redesign; no candidate evidence for those post-parity hardening vectors is claimed. |
-| Windows arm64 | `ycy-windows-arm64.exe` | pending | - | - | - | All selected gates |
+| macOS x64 | `ycy-macos-x64` | pending | - | - | - | Deferred by WD-26 Windows amd64-only local acceptance. |
+| macOS arm64 | `ycy-macos-arm64` | pending | - | - | - | Deferred by WD-26 Windows amd64-only local acceptance. |
+| Linux x64 | `ycy-linux-x64` | pending | - | - | - | Deferred by WD-26 Windows amd64-only local acceptance. |
+| Linux arm64 | `ycy-linux-arm64` | pending | - | - | - | Deferred by WD-26 Windows amd64-only local acceptance. |
+| Windows x64 | `ycy-windows-x64.exe` | release-accepted | native Windows amd64, 2026-08-26 | `16ed4d4f594e9e597e7832c380af61bf031523f063b446ceca6a95a7b8025979` | Clean candidate assembly/static verifier; no-Bun/Node/pnpm/Go CLI smoke; native CTRL_BREAK FS lifecycle; real embedded Diff, FS, and authenticated Tunnel browser flows; manifest-matching 7-Zip materialization, functional extraction, corrupt-runtime regeneration, and WebP thumbnail/304 cache; pinned FRP 0.70.1 acquisition plus real HTTP/TCP/UDP candidate forwarding; local-fixture `install.ps1` fresh/fallback/rollback; Go-to-Go replacement, rollback, state consumption, ACL, sharing-violation retry, parent-timeout failure state, and native MOTW removal with unchanged version/hash. | All applicable Windows amd64 G27 gates accepted. The resolved Go-to-Go contract defers a new crash-recovery/concurrent-locking redesign; no candidate evidence for those post-parity hardening vectors is claimed. |
+| Windows arm64 | `ycy-windows-arm64.exe` | pending | - | - | - | Deferred by WD-26 Windows amd64-only local acceptance. |
 
 ## Final Artifact Gate
 
-### WD-26 primary-host-set acceptance variant
+### WD-26 Windows amd64-only local acceptance variant
 
-- Selected native targets for this Goal: `windows/amd64` and `darwin/arm64`.
+- Selected native target for this Goal: `windows/amd64`.
 - The selected target may satisfy the native execution portion of the Gate only
   after its current candidate evidence is recorded below.
-- The other four target rows remain `pending`; this variant does not claim a
+- The other five target rows remain `pending`; this variant does not claim a
   complete six-target release or authorize publication.
 
-- [ ] Every Migration Unit is `integrated` and every applicable milestone-native result is recorded.
-- [ ] The candidate starts from a clean checkout without `web/dist`, dependencies, caches, downloaded payloads, binaries, or prior artifact output.
-- [ ] Bootstrap succeeds; one Vite production graph is built and structurally verified; the offline Complete Gate passes.
-- [ ] Exactly six `CGO_ENABLED=0` artifacts are emitted with the fixed public basenames and plain Release Identity `0.1.0`.
-- [ ] Mach-O/ELF/PE formats, CPUs, Go build metadata, nonzero sizes, and lack of Bun/Node runtime dependencies are verified.
-- [ ] Every artifact contains all three Web shells and reachable assets, only its target 7-Zip 26.02 runtime/license, and the FRP manifest without FRP executable bytes.
-- [ ] The selected thumbnail modules and sums are exact, no codec helper/system lookup is present, and release third-party documentation reproduces their required notices and patent grants.
-- [ ] `SHA256SUMS` contains exactly one verified entry for every artifact and is accepted by installer and Upgrade parsers.
-- [ ] Native standalone CLI, production-browser, FS/7-Zip/thumbnail, Go-only Tunnel/FRP, installer, and Go-to-Go Upgrade gates pass on all applicable targets.
-- [ ] Every applicable Unit and target is `release-accepted`.
-- [ ] Generated Web output, dependencies, source maps, caches, downloads, binaries, checksums, and release staging are untracked.
-- [ ] The later Go release workflow is manual-dispatch only and invokes this same gate before the first `v0.1.0` release.
+- [x] Every Migration Unit is `integrated` and every applicable milestone-native result is recorded.
+- [x] The candidate starts from a clean checkout without `web/dist`, dependencies, caches, downloaded payloads, binaries, or prior artifact output.
+- [x] Bootstrap succeeds; one Vite production graph is built and structurally verified; the offline Complete Gate passes.
+- [x] Exactly six `CGO_ENABLED=0` artifacts are emitted with the fixed public basenames and plain Release Identity `0.1.0`.
+- [x] Mach-O/ELF/PE formats, CPUs, Go build metadata, nonzero sizes, and lack of Bun/Node runtime dependencies are verified.
+- [x] Every artifact contains all three Web shells and reachable assets, only its target 7-Zip 26.02 runtime/license, and the FRP manifest without FRP executable bytes.
+- [x] The selected thumbnail modules and sums are exact, no codec helper/system lookup is present, and release third-party documentation reproduces their required notices and patent grants.
+- [x] `SHA256SUMS` contains exactly one verified entry for every artifact and is accepted by installer and Upgrade parsers.
+- [x] Native standalone CLI, production-browser, FS/7-Zip/thumbnail, Go-only Tunnel/FRP, installer, and Go-to-Go Upgrade gates pass on the selected Windows amd64 target.
+- [x] Every applicable Unit and selected target is `release-accepted`.
+- [x] Generated Web output, dependencies, source maps, caches, downloads, binaries, checksums, and release staging are untracked.
+- [x] No workflow was introduced; any future release workflow remains `workflow_dispatch` only and must invoke this Gate before a first `v0.1.0` release.
 
 ## Evidence entry template
 
