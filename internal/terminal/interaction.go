@@ -192,17 +192,28 @@ func (handler *InteractionHandler) askPlain(ctx context.Context, request Interac
 }
 
 func (handler *InteractionHandler) readPlainAnswer(ctx context.Context, request InteractionRequest) (InteractionAnswer, error) {
+	if request.Kind == InteractionSecret {
+		return handler.readPlainSecret(ctx, request)
+	}
 	for {
 		handler.writePlainPrompt(request)
-		if request.Kind == InteractionSecret {
-			return handler.readPlainSecret(ctx)
-		}
 		line, err := handler.readPlainLine(ctx)
 		if err != nil {
 			return InteractionAnswer{}, err
 		}
+		if isCancelValue(line, request.CancelValues) {
+			return InteractionAnswer{}, ErrInteractionCancelled
+		}
 		if line == "" && request.HasDefault {
 			return request.Default, nil
+		}
+		if request.ParsePlain != nil {
+			answer, err := request.ParsePlain(line)
+			if err == nil {
+				return answer, nil
+			}
+			_, _ = fmt.Fprintln(handler.diagnostics, err)
+			continue
 		}
 
 		switch request.Kind {
@@ -232,9 +243,22 @@ func (handler *InteractionHandler) readPlainAnswer(ctx context.Context, request 
 	}
 }
 
+func isCancelValue(value string, cancelValues []string) bool {
+	value = strings.TrimSpace(value)
+	for _, cancelValue := range cancelValues {
+		if strings.EqualFold(value, strings.TrimSpace(cancelValue)) {
+			return true
+		}
+	}
+	return false
+}
+
 func (handler *InteractionHandler) writePlainPrompt(request InteractionRequest) {
 	if request.Description != "" {
 		_, _ = fmt.Fprintln(handler.diagnostics, request.Description)
+	}
+	if request.PlainLead != "" {
+		_, _ = fmt.Fprintln(handler.diagnostics, request.PlainLead)
 	}
 	if request.Kind == InteractionSelect || request.Kind == InteractionMultiSelect {
 		for index, option := range request.Options {
@@ -252,14 +276,19 @@ func (handler *InteractionHandler) writePlainPrompt(request InteractionRequest) 
 	if request.Placeholder != "" && request.Kind == InteractionText {
 		prompt += " (" + request.Placeholder + ")"
 	}
+	if request.PlainPrompt != "" {
+		_, _ = fmt.Fprint(handler.diagnostics, request.PlainPrompt)
+		return
+	}
 	_, _ = fmt.Fprint(handler.diagnostics, prompt+": ")
 }
 
-func (handler *InteractionHandler) readPlainSecret(ctx context.Context) (InteractionAnswer, error) {
+func (handler *InteractionHandler) readPlainSecret(ctx context.Context, request InteractionRequest) (InteractionAnswer, error) {
 	file, ok := handler.input.(*os.File)
 	if !ok || !term.IsTerminal(int(file.Fd())) {
 		return InteractionAnswer{}, ErrAutomationInteraction
 	}
+	handler.writePlainPrompt(request)
 	value, err := term.ReadPassword(int(file.Fd()))
 	_, _ = fmt.Fprintln(handler.diagnostics)
 	if err != nil {

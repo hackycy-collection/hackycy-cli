@@ -89,10 +89,11 @@ func (reader removeReader) ListForkInstances() ([]appconfig.ForkInstance, error)
 type scriptedRemovePrompter struct {
 	value     string
 	cancelled bool
+	err       error
 	questions []SelectPrompt
 }
 
-func (prompter *scriptedRemovePrompter) Select(question SelectPrompt) (string, bool) {
+func (prompter *scriptedRemovePrompter) Select(question SelectPrompt) (string, bool, error) {
 	prompter.questions = append(prompter.questions, question)
-	return prompter.value, prompter.cancelled
+	return prompter.value, prompter.cancelled, prompter.err
 }

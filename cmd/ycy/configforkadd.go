@@ -1,124 +1,95 @@
 package main
 
 import (
-	"bufio"
-	"fmt"
-	"io"
-	"os"
-	"strconv"
-	"strings"
+	"context"
+	"errors"
 
 	configfork "github.com/hackycy/hackycy-cli/internal/commands/config/fork"
-	"golang.org/x/term"
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 )
 
-type terminalForkAddPrompter struct {
-	input     *bufio.Reader
-	inputFile *os.File
-	output    io.Writer
+var errConfigForkAddRequiresInteractive = errors.New("config fork add requires an interactive terminal")
+
+type terminalForkAddAdapter struct {
+	run     terminalexperience.ExperienceRun
+	session terminalexperience.Session
 }
 
-func newTerminalForkAddPrompter(input io.Reader, output io.Writer) *terminalForkAddPrompter {
-	prompter := &terminalForkAddPrompter{input: bufio.NewReader(input), output: output}
-	if file, ok := input.(*os.File); ok {
-		prompter.inputFile = file
+func newTerminalForkAddAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalForkAddAdapter {
+	return &terminalForkAddAdapter{run: run, session: session}
+}
+
+func (adapter *terminalForkAddAdapter) Text(question configfork.TextPrompt) (string, bool, error) {
+	return adapter.ask(terminalexperience.InteractionRequest{
+		Kind:        terminalexperience.InteractionText,
+		Message:     question.Message,
+		Placeholder: question.Placeholder,
+		Validate: func(answer terminalexperience.InteractionAnswer) error {
+			return question.Validate(answer.Value)
+		},
+	})
+}
+
+func (adapter *terminalForkAddAdapter) Select(question configfork.SelectPrompt) (string, bool, error) {
+	request := terminalexperience.InteractionRequest{
+		Kind:    terminalexperience.InteractionSelect,
+		Message: question.Message,
+		Options: interactionOptions(question.Choices),
 	}
-	return prompter
+	if len(question.Choices) > 0 {
+		request.HasDefault = true
+		request.Default = terminalexperience.InteractionAnswer{Value: question.Choices[0].Value}
+	}
+	return adapter.ask(request)
 }
 
-func (prompter *terminalForkAddPrompter) Text(question configfork.TextPrompt) (string, bool) {
-	for {
-		prompter.writeTextPrompt(question)
-		value, cancelled := prompter.readLine()
+func (adapter *terminalForkAddAdapter) Password(question configfork.TextPrompt) (string, bool, error) {
+	return adapter.ask(terminalexperience.InteractionRequest{
+		Kind:    terminalexperience.InteractionSecret,
+		Message: question.Message,
+		Validate: func(answer terminalexperience.InteractionAnswer) error {
+			return question.Validate(answer.Value)
+		},
+	})
+}
+
+func (adapter *terminalForkAddAdapter) Cancel(message string) {
+	_ = adapter.run.Present(terminalForkAddDocument(adapter.session, message, true))
+}
+
+func (adapter *terminalForkAddAdapter) Success(message string) {
+	_ = adapter.run.Present(terminalForkAddDocument(adapter.session, message, false))
+}
+
+func (adapter *terminalForkAddAdapter) ask(request terminalexperience.InteractionRequest) (string, bool, error) {
+	answer, err := adapter.run.Ask(request)
+	if errors.Is(err, terminalexperience.ErrInteractionCancelled) || errors.Is(err, context.Canceled) {
+		return "", true, nil
+	}
+	if errors.Is(err, terminalexperience.ErrAutomationInteraction) {
+		return "", false, errConfigForkAddRequiresInteractive
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return answer.Value, false, nil
+}
+
+func interactionOptions(choices []configfork.Choice) []terminalexperience.InteractionOption {
+	options := make([]terminalexperience.InteractionOption, 0, len(choices))
+	for _, choice := range choices {
+		options = append(options, terminalexperience.InteractionOption{Label: choice.Label, Value: choice.Value})
+	}
+	return options
+}
+
+func terminalForkAddDocument(session terminalexperience.Session, message string, cancelled bool) terminalexperience.PresentationDocument {
+	role := terminalexperience.VisualRolePlain
+	if session.Kind == terminalexperience.RichInteractive {
+		role = terminalexperience.VisualRoleSuccess
 		if cancelled {
-			return "", true
-		}
-		if err := question.Validate(value); err != nil {
-			_, _ = fmt.Fprintln(prompter.output, err)
-			continue
-		}
-		return value, false
-	}
-}
-
-func (prompter *terminalForkAddPrompter) Select(question configfork.SelectPrompt) (string, bool) {
-	_, _ = fmt.Fprintln(prompter.output, question.Message)
-	for index, choice := range question.Choices {
-		_, _ = fmt.Fprintf(prompter.output, "%d) %s\n", index+1, choice.Label)
-	}
-	for {
-		_, _ = fmt.Fprint(prompter.output, "> ")
-		line, err := prompter.input.ReadString('\n')
-		value := strings.TrimSpace(line)
-		if err != nil && value == "" {
-			return "", true
-		}
-		if value == "" && len(question.Choices) > 0 {
-			return question.Choices[0].Value, false
-		}
-		index, parseErr := strconv.Atoi(value)
-		if parseErr == nil && index >= 1 && index <= len(question.Choices) {
-			return question.Choices[index-1].Value, false
-		}
-		_, _ = fmt.Fprintln(prompter.output, "Invalid selection")
-		if err != nil {
-			return "", true
+			role = terminalexperience.VisualRoleWarning
 		}
 	}
-}
-
-func (prompter *terminalForkAddPrompter) Password(question configfork.TextPrompt) (string, bool) {
-	for {
-		prompter.writeTextPrompt(question)
-		value, cancelled := prompter.readPassword()
-		if cancelled {
-			return "", true
-		}
-		if err := question.Validate(value); err != nil {
-			_, _ = fmt.Fprintln(prompter.output, err)
-			continue
-		}
-		return value, false
-	}
-}
-
-func (prompter *terminalForkAddPrompter) writeTextPrompt(question configfork.TextPrompt) {
-	_, _ = fmt.Fprint(prompter.output, question.Message)
-	if question.Placeholder != "" {
-		_, _ = fmt.Fprintf(prompter.output, " (%s)", question.Placeholder)
-	}
-	_, _ = fmt.Fprint(prompter.output, ": ")
-}
-
-func (prompter *terminalForkAddPrompter) readLine() (string, bool) {
-	line, err := prompter.input.ReadString('\n')
-	value := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-	if err != nil && value == "" {
-		return "", true
-	}
-	return value, false
-}
-
-func (prompter *terminalForkAddPrompter) readPassword() (string, bool) {
-	if prompter.inputFile != nil && term.IsTerminal(int(prompter.inputFile.Fd())) {
-		value, err := term.ReadPassword(int(prompter.inputFile.Fd()))
-		_, _ = fmt.Fprintln(prompter.output)
-		if err != nil {
-			return "", true
-		}
-		return string(value), false
-	}
-	return prompter.readLine()
-}
-
-type terminalForkAddPresenter struct {
-	output io.Writer
-}
-
-func (presenter terminalForkAddPresenter) Cancel(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
-}
-
-func (presenter terminalForkAddPresenter) Success(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: message}}}
 }

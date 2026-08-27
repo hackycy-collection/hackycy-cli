@@ -1,85 +1,74 @@
 package main
 
 import (
-	"bufio"
-	"fmt"
-	"io"
-	"os"
-	"strings"
+	"context"
+	"errors"
 
 	configcm "github.com/hackycy/hackycy-cli/internal/commands/config/cm"
-	"golang.org/x/term"
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 )
 
-type terminalCMAddPrompter struct {
-	input     *bufio.Reader
-	inputFile *os.File
-	output    io.Writer
+var errConfigCMAddRequiresInteractive = errors.New("config cm add requires an interactive terminal")
+
+type terminalCMAddAdapter struct {
+	run     terminalexperience.ExperienceRun
+	session terminalexperience.Session
 }
 
-func newTerminalCMAddPrompter(input io.Reader, output io.Writer) *terminalCMAddPrompter {
-	prompter := &terminalCMAddPrompter{input: bufio.NewReader(input), output: output}
-	if file, ok := input.(*os.File); ok {
-		prompter.inputFile = file
+func newTerminalCMAddAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalCMAddAdapter {
+	return &terminalCMAddAdapter{run: run, session: session}
+}
+
+func (adapter *terminalCMAddAdapter) Text(question configcm.AddTextPrompt) (string, bool, error) {
+	return adapter.ask(terminalexperience.InteractionRequest{
+		Kind:        terminalexperience.InteractionText,
+		Message:     question.Message,
+		Placeholder: question.Placeholder,
+		Validate: func(answer terminalexperience.InteractionAnswer) error {
+			return question.Validate(answer.Value)
+		},
+	})
+}
+
+func (adapter *terminalCMAddAdapter) Password(question configcm.AddTextPrompt) (string, bool, error) {
+	return adapter.ask(terminalexperience.InteractionRequest{
+		Kind:    terminalexperience.InteractionSecret,
+		Message: question.Message,
+		Validate: func(answer terminalexperience.InteractionAnswer) error {
+			return question.Validate(answer.Value)
+		},
+	})
+}
+
+func (adapter *terminalCMAddAdapter) Cancel(message string) {
+	_ = adapter.run.Present(terminalCMAddDocument(adapter.session, message, true))
+}
+
+func (adapter *terminalCMAddAdapter) Success(message string) {
+	_ = adapter.run.Present(terminalCMAddDocument(adapter.session, message, false))
+}
+
+func (adapter *terminalCMAddAdapter) ask(request terminalexperience.InteractionRequest) (string, bool, error) {
+	answer, err := adapter.run.Ask(request)
+	if errors.Is(err, terminalexperience.ErrInteractionCancelled) || errors.Is(err, context.Canceled) {
+		return "", true, nil
 	}
-	return prompter
+	if errors.Is(err, terminalexperience.ErrAutomationInteraction) {
+		return "", false, errConfigCMAddRequiresInteractive
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return answer.Value, false, nil
 }
 
-func (prompter *terminalCMAddPrompter) Text(question configcm.AddTextPrompt) (string, bool) {
-	for {
-		prompter.writeTextPrompt(question)
-		value, cancelled := prompter.readLine()
+func terminalCMAddDocument(session terminalexperience.Session, message string, cancelled bool) terminalexperience.PresentationDocument {
+	role := terminalexperience.VisualRolePlain
+	if session.Kind == terminalexperience.RichInteractive {
+		role = terminalexperience.VisualRoleSuccess
 		if cancelled {
-			return "", true
+			role = terminalexperience.VisualRoleWarning
 		}
-		if err := question.Validate(value); err != nil {
-			_, _ = fmt.Fprintln(prompter.output, err)
-			continue
-		}
-		return value, false
 	}
-}
-
-func (prompter *terminalCMAddPrompter) Password(question configcm.AddTextPrompt) (string, bool) {
-	for {
-		prompter.writeTextPrompt(question)
-		value, cancelled := prompter.readPassword()
-		if cancelled {
-			return "", true
-		}
-		if err := question.Validate(value); err != nil {
-			_, _ = fmt.Fprintln(prompter.output, err)
-			continue
-		}
-		return value, false
-	}
-}
-
-func (prompter *terminalCMAddPrompter) writeTextPrompt(question configcm.AddTextPrompt) {
-	_, _ = fmt.Fprint(prompter.output, question.Message)
-	if question.Placeholder != "" {
-		_, _ = fmt.Fprintf(prompter.output, " (%s)", question.Placeholder)
-	}
-	_, _ = fmt.Fprint(prompter.output, ": ")
-}
-
-func (prompter *terminalCMAddPrompter) readLine() (string, bool) {
-	line, err := prompter.input.ReadString('\n')
-	value := strings.TrimSuffix(strings.TrimSuffix(line, "\n"), "\r")
-	if err != nil && value == "" {
-		return "", true
-	}
-	return value, false
-}
-
-func (prompter *terminalCMAddPrompter) readPassword() (string, bool) {
-	if prompter.inputFile != nil && term.IsTerminal(int(prompter.inputFile.Fd())) {
-		value, err := term.ReadPassword(int(prompter.inputFile.Fd()))
-		_, _ = fmt.Fprintln(prompter.output)
-		if err != nil {
-			return "", true
-		}
-		return string(value), false
-	}
-	return prompter.readLine()
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: message}}}
 }

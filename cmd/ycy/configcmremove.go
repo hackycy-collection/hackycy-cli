@@ -1,39 +1,58 @@
 package main
 
 import (
-	"fmt"
-	"io"
-	"strings"
+	"context"
+	"errors"
 
 	configcm "github.com/hackycy/hackycy-cli/internal/commands/config/cm"
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 )
 
-type terminalCMRemovePrompter struct {
-	*terminalCMAddPrompter
+var errConfigCMRemoveRequiresInteractive = errors.New("config cm remove requires an interactive terminal")
+
+type terminalCMRemoveAdapter struct {
+	run     terminalexperience.ExperienceRun
+	session terminalexperience.Session
 }
 
-func newTerminalCMRemovePrompter(input io.Reader, output io.Writer) *terminalCMRemovePrompter {
-	return &terminalCMRemovePrompter{terminalCMAddPrompter: newTerminalCMAddPrompter(input, output)}
+func newTerminalCMRemoveAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalCMRemoveAdapter {
+	return &terminalCMRemoveAdapter{run: run, session: session}
 }
 
-func (prompter *terminalCMRemovePrompter) Confirm(question configcm.RemoveConfirmPrompt) (bool, bool) {
-	for {
-		_, _ = fmt.Fprintf(prompter.output, "%s [y/N]: ", question.Message)
-		line, err := prompter.input.ReadString('\n')
-		value := strings.TrimSpace(line)
-		if err != nil && value == "" {
-			return false, true
-		}
-		switch strings.ToLower(value) {
-		case "y", "yes":
-			return true, false
-		case "", "n", "no":
-			return false, false
-		default:
-			_, _ = fmt.Fprintln(prompter.output, "Invalid confirmation")
-			if err != nil {
-				return false, true
-			}
+func (adapter *terminalCMRemoveAdapter) Confirm(question configcm.RemoveConfirmPrompt) (bool, bool, error) {
+	answer, err := adapter.run.Ask(terminalexperience.InteractionRequest{
+		Kind:       terminalexperience.InteractionConfirm,
+		Message:    question.Message,
+		HasDefault: true,
+		Default:    terminalexperience.InteractionAnswer{Confirmed: false},
+	})
+	if errors.Is(err, terminalexperience.ErrInteractionCancelled) || errors.Is(err, context.Canceled) {
+		return false, true, nil
+	}
+	if errors.Is(err, terminalexperience.ErrAutomationInteraction) {
+		return false, false, errConfigCMRemoveRequiresInteractive
+	}
+	if err != nil {
+		return false, false, err
+	}
+	return answer.Confirmed, false, nil
+}
+
+func (adapter *terminalCMRemoveAdapter) Cancel(message string) {
+	_ = adapter.run.Present(terminalCMRemoveDocument(adapter.session, message, true))
+}
+
+func (adapter *terminalCMRemoveAdapter) Success(message string) {
+	_ = adapter.run.Present(terminalCMRemoveDocument(adapter.session, message, false))
+}
+
+func terminalCMRemoveDocument(session terminalexperience.Session, message string, cancelled bool) terminalexperience.PresentationDocument {
+	role := terminalexperience.VisualRolePlain
+	if session.Kind == terminalexperience.RichInteractive {
+		role = terminalexperience.VisualRoleSuccess
+		if cancelled {
+			role = terminalexperience.VisualRoleWarning
 		}
 	}
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: message}}}
 }

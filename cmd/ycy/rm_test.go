@@ -7,97 +7,206 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	rmcommand "github.com/hackycy/hackycy-cli/internal/commands/rm"
+	"github.com/hackycy/hackycy-cli/internal/logging"
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
-func TestTerminalRMPrompterUsesLegacyDefaultsAndSelections(t *testing.T) {
-	confirmationOutput := &bytes.Buffer{}
-	confirmation := newTerminalRMPrompter(strings.NewReader("\n"), confirmationOutput)
-	confirmed, cancelled := confirmation.ConfirmExplicit(rmcommand.ExplicitConfirmationPrompt{Message: "Delete 1 item?"})
-	if confirmed || cancelled || !strings.Contains(confirmationOutput.String(), "Delete 1 item? [y/N]:") {
-		t.Fatalf("default confirmation = (%t, %t, %q)", confirmed, cancelled, confirmationOutput.String())
-	}
+func TestTerminalRMAdapterTranslatesPromptClusterAndPresentation(t *testing.T) {
+	experience := terminaltest.NewRecordingExperience(
+		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Confirmed: true}},
+		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Value: "node-dist"}},
+		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Values: []string{"/project/dist"}}},
+	)
+	run := experience.Open(context.Background())
+	adapter := newTerminalRMAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true})
 
-	eofConfirmation := newTerminalRMPrompter(strings.NewReader(""), &bytes.Buffer{})
-	confirmed, cancelled = eofConfirmation.ConfirmExplicit(rmcommand.ExplicitConfirmationPrompt{Message: "Delete 1 item?"})
-	if confirmed || !cancelled {
-		t.Fatalf("EOF confirmation = (%t, %t)", confirmed, cancelled)
+	confirmed, cancelled, err := adapter.ConfirmExplicit(rmcommand.ExplicitConfirmationPrompt{Message: "Delete 1 item?"})
+	if err != nil || cancelled || !confirmed {
+		t.Fatalf("ConfirmExplicit() = (%t, %t, %v)", confirmed, cancelled, err)
 	}
-
-	actions := []rmcommand.SmartAction{{ID: "one", Label: "One"}, {ID: "two", Label: "Two"}}
-	actionPrompter := newTerminalRMPrompter(strings.NewReader("2\n"), &bytes.Buffer{})
-	action, cancelled := actionPrompter.SelectSmartAction(rmcommand.SmartActionPrompt{Message: "Select a clean action", Options: actions})
-	if cancelled || action != actions[1] {
-		t.Fatalf("smart action = (%#v, %t), want (%#v, false)", action, cancelled, actions[1])
+	action, cancelled, err := adapter.SelectSmartAction(rmcommand.SmartActionPrompt{Message: "Select a clean action", Options: []rmcommand.SmartAction{{ID: "node-dist", Label: "Node project - delete ./dist"}}})
+	if err != nil || cancelled || action.ID != "node-dist" {
+		t.Fatalf("SelectSmartAction() = (%#v, %t, %v)", action, cancelled, err)
 	}
-
-	targets := []string{"/tmp/one", "/tmp/two"}
-	targetPrompter := newTerminalRMPrompter(strings.NewReader("\n"), &bytes.Buffer{})
-	selected, cancelled := targetPrompter.SelectSmartTargets(rmcommand.SmartTargetPrompt{
+	targets, cancelled, err := adapter.SelectSmartTargets(rmcommand.SmartTargetPrompt{
 		Message:       "Select items to delete",
-		Options:       []rmcommand.SmartTargetChoice{{Value: targets[0], Label: "one"}, {Value: targets[1], Label: "two"}},
-		InitialValues: targets,
+		Options:       []rmcommand.SmartTargetChoice{{Value: "/project/dist", Label: "dist"}},
+		InitialValues: []string{"/project/dist"},
 	})
-	if cancelled || strings.Join(selected, ",") != strings.Join(targets, ",") {
-		t.Fatalf("default smart targets = (%#v, %t)", selected, cancelled)
+	if err != nil || cancelled || !reflect.DeepEqual(targets, []string{"/project/dist"}) {
+		t.Fatalf("SelectSmartTargets() = (%#v, %t, %v)", targets, cancelled, err)
+	}
+	adapter.Intro("Remove")
+	adapter.Paths([]string{"/project/dist"})
+	adapter.Notice("  not found, skipping: /project/missing")
+	adapter.ProgressStart("Scanning...")
+	adapter.ProgressStop("Found 1 target")
+	adapter.Cancel("Cancelled.")
+	adapter.Outro("Done!")
+	if err := run.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 
-	nonePrompter := newTerminalRMPrompter(strings.NewReader("none\n"), &bytes.Buffer{})
-	selected, cancelled = nonePrompter.SelectSmartTargets(rmcommand.SmartTargetPrompt{Options: []rmcommand.SmartTargetChoice{{Value: targets[0], Label: "one"}}})
-	if cancelled || len(selected) != 0 {
-		t.Fatalf("empty smart targets = (%#v, %t)", selected, cancelled)
+	operations := experience.Run.Operations()
+	if len(operations) != 11 || operations[0].Kind != terminaltest.AskOperation || operations[3].Kind != terminaltest.PresentOperation || operations[10].Kind != terminaltest.CloseOperation {
+		t.Fatalf("operations = %#v", operations)
+	}
+	confirm := operations[0].Value.(terminalexperience.InteractionRequest)
+	if confirm.Kind != terminalexperience.InteractionConfirm || confirm.Message != "Delete 1 item?" || !confirm.HasDefault || confirm.Default.Confirmed {
+		t.Fatalf("confirmation request = %#v", confirm)
+	}
+	actionRequest := operations[1].Value.(terminalexperience.InteractionRequest)
+	if actionRequest.Kind != terminalexperience.InteractionSelect || actionRequest.Message != "Select a clean action" || !actionRequest.HasDefault || actionRequest.Default.Value != "node-dist" || !reflect.DeepEqual(actionRequest.CancelValues, []string{"q", "quit", "cancel"}) {
+		t.Fatalf("action request = %#v", actionRequest)
+	}
+	targetRequest := operations[2].Value.(terminalexperience.InteractionRequest)
+	if targetRequest.Kind != terminalexperience.InteractionMultiSelect || targetRequest.Message != "Select items to delete" || !targetRequest.HasDefault || !reflect.DeepEqual(targetRequest.Default.Values, []string{"/project/dist"}) {
+		t.Fatalf("target request = %#v", targetRequest)
+	}
+	intro := operations[3].Value.(terminalexperience.PresentationDocument)
+	if !reflect.DeepEqual(intro.Blocks, []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleTitle, Text: "HACKYCY CLI"}, {Role: terminalexperience.VisualRoleActive, Text: "Remove"}}) {
+		t.Fatalf("intro document = %#v", intro)
+	}
+	if got := operations[9].Value.(terminalexperience.PresentationDocument).Blocks[0].Role; got != terminalexperience.VisualRoleSuccess {
+		t.Fatalf("success role = %v", got)
 	}
 }
 
-func TestTerminalRMPresenterWritesMappedMessages(t *testing.T) {
-	output := &bytes.Buffer{}
-	presenter := terminalRMPresenter{output: output}
-	presenter.Intro("Remove")
-	presenter.Paths([]string{"/tmp/one", "/tmp/two"})
-	presenter.Notice("  not found, skipping: /tmp/missing")
-	presenter.ProgressStart("Scanning...")
-	presenter.ProgressStop("Found 1 target")
-	presenter.Cancel("Cancelled.")
-	presenter.Outro("Done!")
+func TestTerminalRMAdapterPlainPreservesLegacyInputGrammarAndMutationBoundaries(t *testing.T) {
+	root := t.TempDir()
+	confirmed := writeStandaloneRMFile(t, root, "confirmed.txt")
+	cancelledTarget := writeStandaloneRMFile(t, root, "cancelled.txt")
 
-	want := "HACKYCY CLI\n\nRemove\n\n  /tmp/one\n  /tmp/two\n\n  not found, skipping: /tmp/missing\nScanning...\nFound 1 target\nCancelled.\nDone!\n"
-	if output.String() != want {
-		t.Fatalf("terminal rm output = %q, want %q", output.String(), want)
+	for _, testCase := range []struct {
+		name       string
+		input      string
+		target     string
+		shouldGone bool
+		contains   []string
+	}{
+		{name: "confirmed", input: "maybe\nyes\n", target: confirmed, shouldGone: true, contains: []string{"Invalid confirmation", "Delete 1 item? [y/N]:", "Deleted 1 item", "Done!"}},
+		{name: "declined", input: "\n", target: cancelledTarget, contains: []string{"Delete 1 item? [y/N]:", "Cancelled."}},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
+			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+				Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
+				Input:       strings.NewReader(testCase.input),
+				Output:      stdout,
+				Diagnostics: diagnostics,
+			})
+			withRMWorkingDirectory(t, root)
+
+			result, err := newRMHandler(experience)(context.Background(), rmcommand.Input{Paths: []string{filepath.Base(testCase.target)}})
+			if err != nil || result != (rmcommand.Result{}) {
+				t.Fatalf("Run() = (%#v, %v)", result, err)
+			}
+			allOutput := append(append([]byte{}, stdout.Bytes()...), diagnostics.Bytes()...)
+			if terminaltest.ContainsTerminalControl(allOutput) {
+				t.Fatalf("Plain streams contain terminal control: (%q, %q)", stdout.String(), diagnostics.String())
+			}
+			for _, want := range testCase.contains {
+				if !strings.Contains(stdout.String()+diagnostics.String(), want) {
+					t.Fatalf("streams = (%q, %q), missing %q", stdout.String(), diagnostics.String(), want)
+				}
+			}
+			_, statErr := os.Stat(testCase.target)
+			if testCase.shouldGone && !errors.Is(statErr, os.ErrNotExist) {
+				t.Fatalf("confirmed target = %v, want missing", statErr)
+			}
+			if !testCase.shouldGone && statErr != nil {
+				t.Fatalf("declined target = %v, want retained", statErr)
+			}
+		})
 	}
 }
 
-func TestRMRedirectedCancellationPreventsDeletionAndTerminalControl(t *testing.T) {
+func TestRMAutomationPreservesForceAndNoTargetPathsAndFailsPromptPathsBeforeEffects(t *testing.T) {
+	root := t.TempDir()
+	forcedTarget := writeStandaloneRMFile(t, root, "forced.txt")
+	promptTarget := writeStandaloneRMFile(t, root, "prompt.txt")
+	withRMWorkingDirectory(t, root)
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+
+	for _, testCase := range []struct {
+		name      string
+		input     rmcommand.Input
+		wantOut   string
+		wantError error
+	}{
+		{name: "force explicit", input: rmcommand.Input{Paths: []string{"forced.txt"}, Force: true}, wantOut: "HACKYCY CLI\n\nRemove\nDeleting 1 item...\nDeleted 1 item\nDone!\n"},
+		{name: "missing explicit", input: rmcommand.Input{Paths: []string{"missing.txt"}}, wantOut: "HACKYCY CLI\n\nRemove\n  not found, skipping: " + filepath.Join(workingDirectory, "missing.txt") + "\nNo valid paths to delete.\n"},
+		{name: "explicit confirmation", input: rmcommand.Input{Paths: []string{"prompt.txt"}}, wantError: errRMRequiresInteractive},
+		{name: "smart selection", input: rmcommand.Input{}, wantError: errRMRequiresInteractive},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
+			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+				Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
+				Input:       panicRMReader{},
+				Output:      stdout,
+				Diagnostics: diagnostics,
+			})
+			result, err := newRMHandler(experience)(context.Background(), testCase.input)
+			if testCase.wantError == nil {
+				if err != nil || result != (rmcommand.Result{}) || stdout.String() != testCase.wantOut || diagnostics.Len() != 0 {
+					t.Fatalf("Automation result = (%#v, %v), streams = (%q, %q)", result, err, stdout.String(), diagnostics.String())
+				}
+				return
+			}
+			if !errors.Is(err, testCase.wantError) || result != (rmcommand.Result{}) || stdout.Len() != 0 || diagnostics.Len() != 0 {
+				t.Fatalf("Automation failure = (%#v, %v), streams = (%q, %q)", result, err, stdout.String(), diagnostics.String())
+			}
+		})
+	}
+	if _, err := os.Stat(promptTarget); err != nil {
+		t.Fatalf("Automation prompt failure changed target: %v", err)
+	}
+	if _, err := os.Stat(forcedTarget); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("forced target = %v, want missing", err)
+	}
+}
+
+func TestRMAutomationErrorUsesStderrWithoutPartialCommandResult(t *testing.T) {
 	root := t.TempDir()
 	target := writeStandaloneRMFile(t, root, "target.txt")
-	streams := terminaltest.NewRedirectedStreams("")
-	module, err := rmcommand.New(rmcommand.Dependencies{
-		WorkingDirectory: func() (string, error) { return root, nil },
-		Prompter:         newTerminalRMPrompter(streams.Stdin, streams.Stdout),
-		Remover:          osRMRemover{},
-		Presenter:        terminalRMPresenter{output: streams.Stdout},
+	withRMWorkingDirectory(t, root)
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
+		Input:       panicRMReader{},
+		Output:      stdout,
+		Diagnostics: stderr,
+	})
+	app, err := cliapp.New(cliapp.BuildInfo{Version: "0.0.0-dev"}, cliapp.Dependencies{
+		Out:     stdout,
+		Err:     stderr,
+		Logging: logging.NewRuntime(logging.Options{Writer: stderr}),
+		RM:      newRMHandler(experience),
 	})
 	if err != nil {
-		t.Fatalf("new rm module: %v", err)
+		t.Fatalf("New() error = %v", err)
 	}
 
-	if _, err := module.Run(context.Background(), rmcommand.Input{Paths: []string{"target.txt"}}); err != nil {
-		t.Fatalf("redirected cancellation: %v", err)
+	outcome := app.Execute(context.Background(), []string{"rm", filepath.Base(target)})
+	if outcome.Code != 1 || !errors.Is(outcome.Err, errRMRequiresInteractive) || stdout.Len() != 0 || stderr.String() != "error: rm requires an interactive terminal\n" {
+		t.Fatalf("Automation outcome = %#v, streams = (%q, %q)", outcome, stdout.String(), stderr.String())
+	}
+	if terminaltest.ContainsTerminalControl(append(stdout.Bytes(), stderr.Bytes()...)) {
+		t.Fatalf("Automation streams contain terminal control: (%q, %q)", stdout.String(), stderr.String())
 	}
 	if _, err := os.Stat(target); err != nil {
-		t.Fatalf("redirected cancellation changed target: %v", err)
-	}
-	if !strings.Contains(streams.Stdout.String(), "Delete 1 item? [y/N]:") || !strings.Contains(streams.Stdout.String(), "Cancelled.") {
-		t.Fatalf("stdout = %q", streams.Stdout.String())
-	}
-	if streams.Stderr.Len() != 0 {
-		t.Fatalf("stderr = %q, want empty", streams.Stderr.String())
-	}
-	if terminaltest.ContainsTerminalControl(streams.Stdout.Bytes()) || terminaltest.ContainsTerminalControl(streams.Stderr.Bytes()) {
-		t.Fatalf("redirected streams contain terminal control: stdout = %q stderr = %q", streams.Stdout.String(), streams.Stderr.String())
+		t.Fatalf("Automation failure changed target: %v", err)
 	}
 }
 
@@ -128,8 +237,8 @@ func TestRMStandaloneBinary(t *testing.T) {
 		t.Fatalf("create explicit directory: %v", err)
 	}
 	writeStandaloneRMFile(t, explicitDirectory, "nested/file.txt")
-	output, err := runRMStandalone(binary, workingDirectory, environment, "yes\n", "rm", "file.txt", "directory", "missing")
-	if err != nil || !strings.Contains(string(output), "not found, skipping:") || !strings.Contains(string(output), "Delete 2 items?") || !strings.Contains(string(output), "Deleted 2 items") || !strings.Contains(string(output), "Done!") {
+	output, err := runRMStandalone(binary, workingDirectory, environment, "", "rm", "--force", "file.txt", "directory", "missing")
+	if err != nil || !strings.Contains(string(output), "not found, skipping:") || strings.Contains(string(output), "Delete 2 items?") || !strings.Contains(string(output), "Deleted 2 items") || !strings.Contains(string(output), "Done!") {
 		t.Fatalf("explicit rm = (%v, %q)", err, output)
 	}
 	for _, target := range []string{explicitFile, explicitDirectory} {
@@ -140,8 +249,8 @@ func TestRMStandaloneBinary(t *testing.T) {
 
 	cancelledTarget := writeStandaloneRMFile(t, workingDirectory, "cancelled.txt")
 	output, err = runRMStandalone(binary, workingDirectory, environment, "\n", "rm", "cancelled.txt")
-	if err != nil || !strings.Contains(string(output), "Cancelled.") {
-		t.Fatalf("cancelled rm = (%v, %q)", err, output)
+	if err == nil || string(output) != "error: rm requires an interactive terminal\n" {
+		t.Fatalf("redirected confirmation rm = (%v, %q)", err, output)
 	}
 	if _, statErr := os.Stat(cancelledTarget); statErr != nil {
 		t.Fatalf("cancelled rm changed target: %v", statErr)
@@ -158,51 +267,19 @@ func TestRMStandaloneBinary(t *testing.T) {
 
 	output, err = runRMStandalone(binary, workingDirectory, environment, "", "rm", "still-missing")
 	if err != nil || !strings.Contains(string(output), "No valid paths to delete.") {
-		t.Fatalf("all missing rm = (%v, %q)", err, output)
+		t.Fatalf("redirected no-target rm = (%v, %q)", err, output)
 	}
 
 	smartDist := filepath.Join(workingDirectory, "dist")
 	if err := os.MkdirAll(smartDist, 0o700); err != nil {
 		t.Fatalf("create smart dist: %v", err)
 	}
-	writeStandaloneRMFile(t, smartDist, "artifact.txt")
-	output, err = runRMStandalone(binary, workingDirectory, environment, "1\n\n", "rm")
-	if err != nil || !strings.Contains(string(output), "Scanning...") || !strings.Contains(string(output), "Found 1 target") || !strings.Contains(string(output), "Done!") {
-		t.Fatalf("smart rm = (%v, %q)", err, output)
+	output, err = runRMStandalone(binary, workingDirectory, environment, "1\n", "rm")
+	if err == nil || string(output) != "error: rm requires an interactive terminal\n" {
+		t.Fatalf("redirected smart rm = (%v, %q)", err, output)
 	}
-	if _, statErr := os.Stat(smartDist); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("smart dist = %v, want missing", statErr)
-	}
-
-	nodeModules := filepath.Join(workingDirectory, "node_modules")
-	if err := os.MkdirAll(nodeModules, 0o700); err != nil {
-		t.Fatalf("create node_modules: %v", err)
-	}
-	output, err = runRMStandalone(binary, workingDirectory, environment, "2\n", "rm", "--force")
-	if err != nil || !strings.Contains(string(output), "Done!") {
-		t.Fatalf("forced smart rm = (%v, %q)", err, output)
-	}
-	if _, statErr := os.Stat(nodeModules); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("forced smart node_modules = %v, want missing", statErr)
-	}
-
-	directDist := filepath.Join(workingDirectory, "dist")
-	nestedDist := filepath.Join(workingDirectory, "packages", "app", "dist")
-	if err := os.MkdirAll(directDist, 0o700); err != nil {
-		t.Fatalf("create direct dist: %v", err)
-	}
-	if err := os.MkdirAll(nestedDist, 0o700); err != nil {
-		t.Fatalf("create nested dist: %v", err)
-	}
-	output, err = runRMStandalone(binary, workingDirectory, environment, "3\n\n", "rm", "--depth", "0")
-	if err != nil || !strings.Contains(string(output), "Found 1 target") {
-		t.Fatalf("depth-zero smart rm = (%v, %q)", err, output)
-	}
-	if _, statErr := os.Stat(directDist); !errors.Is(statErr, os.ErrNotExist) {
-		t.Fatalf("direct depth-zero dist = %v, want missing", statErr)
-	}
-	if _, statErr := os.Stat(nestedDist); statErr != nil {
-		t.Fatalf("nested dist unexpectedly changed: %v", statErr)
+	if _, statErr := os.Stat(smartDist); statErr != nil {
+		t.Fatalf("redirected smart rm changed dist: %v", statErr)
 	}
 
 	helpOutput, err := runRMStandalone(binary, workingDirectory, environment, "", "--help")
@@ -217,6 +294,22 @@ func runRMStandalone(binary, directory string, environment []string, input strin
 	command.Env = environment
 	command.Stdin = strings.NewReader(input)
 	return command.CombinedOutput()
+}
+
+func withRMWorkingDirectory(t *testing.T, directory string) {
+	t.Helper()
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	if err := os.Chdir(directory); err != nil {
+		t.Fatalf("change working directory: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
 }
 
 func writeStandaloneRMFile(t *testing.T, directory, name string) string {
@@ -257,4 +350,10 @@ func standaloneRMPathsOverlap(first, second string) bool {
 func standaloneRMPathContains(root, path string) bool {
 	relative, err := filepath.Rel(root, path)
 	return err == nil && relative != ".." && !strings.HasPrefix(relative, ".."+string(os.PathSeparator)) && !filepath.IsAbs(relative)
+}
+
+type panicRMReader struct{}
+
+func (panicRMReader) Read([]byte) (int, error) {
+	panic("rm attempted to read Automation input")
 }

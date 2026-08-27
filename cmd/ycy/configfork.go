@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 	"strings"
 	"text/tabwriter"
 
@@ -97,16 +96,22 @@ func terminalForkListCount(count int) string {
 	return fmt.Sprintf("%d %s configured", count, label)
 }
 
-func newConfigForkAddHandler(input io.Reader, output io.Writer) cliapp.ConfigForkAddHandler {
+func newConfigForkAddHandler(experience *terminalexperience.Runtime) cliapp.ConfigForkAddHandler {
 	return func(context context.Context, request configfork.AddRequest) (configfork.AddResult, error) {
+		if experience.Session().Kind == terminalexperience.Automation {
+			return configfork.AddResult{}, errConfigForkAddRequiresInteractive
+		}
 		store, err := appconfig.New(appconfig.Dependencies{})
 		if err != nil {
 			return configfork.AddResult{}, err
 		}
+		run := experience.Open(context)
+		defer run.Close()
+		adapter := newTerminalForkAddAdapter(run, experience.Session())
 		module, err := configfork.NewAdd(configfork.AddDependencies{
-			Prompter:  newTerminalForkAddPrompter(input, output),
+			Prompter:  adapter,
 			Writer:    store,
-			Presenter: terminalForkAddPresenter{output: output},
+			Presenter: adapter,
 		})
 		if err != nil {
 			return configfork.AddResult{}, err
@@ -115,17 +120,29 @@ func newConfigForkAddHandler(input io.Reader, output io.Writer) cliapp.ConfigFor
 	}
 }
 
-func newConfigForkRemoveHandler(input io.Reader, output io.Writer) cliapp.ConfigForkRemoveHandler {
+func newConfigForkRemoveHandler(experience *terminalexperience.Runtime) cliapp.ConfigForkRemoveHandler {
 	return func(context context.Context, request configfork.RemoveRequest) (configfork.RemoveResult, error) {
 		store, err := appconfig.New(appconfig.Dependencies{})
 		if err != nil {
 			return configfork.RemoveResult{}, err
 		}
+		if experience.Session().Kind == terminalexperience.Automation {
+			instances, err := store.ListForkInstances()
+			if err != nil {
+				return configfork.RemoveResult{}, err
+			}
+			if len(instances) > 0 {
+				return configfork.RemoveResult{}, errConfigForkRemoveRequiresInteractive
+			}
+		}
+		run := experience.Open(context)
+		defer run.Close()
+		adapter := newTerminalForkRemoveAdapter(run, experience.Session())
 		module, err := configfork.NewRemove(configfork.RemoveDependencies{
 			Reader:    store,
-			Prompter:  newTerminalForkRemovePrompter(input, output),
+			Prompter:  adapter,
 			Writer:    store,
-			Presenter: terminalForkRemovePresenter{output: output},
+			Presenter: adapter,
 		})
 		if err != nil {
 			return configfork.RemoveResult{}, err

@@ -16,7 +16,7 @@ type EnvironmentChoice struct {
 
 // EnvironmentSelector presents environment-file choices to a user.
 type EnvironmentSelector interface {
-	SelectEnvironment(message string, choices []EnvironmentChoice) (value string, cancelled bool)
+	SelectEnvironment(message string, choices []EnvironmentChoice) (value string, cancelled bool, err error)
 }
 
 // Selection is the ordered set of files to parse or a user cancellation.
@@ -46,7 +46,10 @@ func Select(discovery Discovery, options SelectionOptions, selector EnvironmentS
 	for _, file := range selectable {
 		choices = append(choices, EnvironmentChoice{Value: file, Label: environmentLabel(file)})
 	}
-	selected, cancelled := selector.SelectEnvironment("Select environment", choices)
+	selected, cancelled, err := selector.SelectEnvironment("Select environment", choices)
+	if err != nil {
+		return Selection{}, err
+	}
 	if cancelled {
 		return Selection{Files: []string{}, Cancelled: true}, nil
 	}

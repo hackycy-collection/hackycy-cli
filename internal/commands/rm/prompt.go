@@ -32,26 +32,29 @@ type SmartTargetPrompt struct {
 
 // Prompter owns the terminal interactions required by rm.
 type Prompter interface {
-	ConfirmExplicit(ExplicitConfirmationPrompt) (confirmed bool, cancelled bool)
-	SelectSmartAction(SmartActionPrompt) (SmartAction, bool)
-	SelectSmartTargets(SmartTargetPrompt) ([]string, bool)
+	ConfirmExplicit(ExplicitConfirmationPrompt) (confirmed bool, cancelled bool, err error)
+	SelectSmartAction(SmartActionPrompt) (SmartAction, bool, error)
+	SelectSmartTargets(SmartTargetPrompt) ([]string, bool, error)
 }
 
-func selectExplicitTargets(targets []string, force bool, prompter Prompter) ([]string, bool) {
+func selectExplicitTargets(targets []string, force bool, prompter Prompter) ([]string, bool, error) {
 	if force {
-		return targets, false
+		return targets, false, nil
 	}
-	confirmed, cancelled := prompter.ConfirmExplicit(ExplicitConfirmationPrompt{
+	confirmed, cancelled, err := prompter.ConfirmExplicit(ExplicitConfirmationPrompt{
 		Message: fmt.Sprintf("Delete %d item%s?", len(targets), pluralSuffix(len(targets))),
 		Initial: false,
 	})
-	if cancelled || !confirmed {
-		return []string{}, true
+	if err != nil {
+		return nil, false, err
 	}
-	return targets, false
+	if cancelled || !confirmed {
+		return []string{}, true, nil
+	}
+	return targets, false, nil
 }
 
-func selectSmartAction(prompter Prompter) (SmartAction, bool) {
+func selectSmartAction(prompter Prompter) (SmartAction, bool, error) {
 	options := append([]SmartAction(nil), smartActions...)
 	return prompter.SelectSmartAction(SmartActionPrompt{
 		Message: "Select a clean action",
@@ -71,11 +74,14 @@ func selectSmartTargets(workingDirectory string, targets []string, force bool, p
 		}
 		options = append(options, SmartTargetChoice{Value: target, Label: label})
 	}
-	selected, cancelled := prompter.SelectSmartTargets(SmartTargetPrompt{
+	selected, cancelled, err := prompter.SelectSmartTargets(SmartTargetPrompt{
 		Message:       "Select items to delete",
 		Options:       options,
 		InitialValues: targets,
 	})
+	if err != nil {
+		return nil, false, err
+	}
 	if cancelled {
 		return []string{}, true, nil
 	}

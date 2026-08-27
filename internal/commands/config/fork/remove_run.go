@@ -74,7 +74,11 @@ func (module *RemoveModule) Run(_ context.Context, _ RemoveRequest) (RemoveResul
 		return RemoveResult{Cancelled: true}, nil
 	}
 
-	switch ConfirmRemove(selection.Name, module.prompter) {
+	confirmation, err := ConfirmRemove(selection.Name, module.prompter)
+	if err != nil {
+		return RemoveResult{}, err
+	}
+	switch confirmation {
 	case RemoveConfirmationCancelled:
 		PresentRemoveCancellation(module.presenter)
 		return RemoveResult{Cancelled: true}, nil

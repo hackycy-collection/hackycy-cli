@@ -46,6 +46,38 @@ func TestModuleMapsPromptCancellationToNormalResult(t *testing.T) {
 	}
 }
 
+func TestModuleStopsBeforeArchiveWorkWhenPrompterFails(t *testing.T) {
+	root := t.TempDir()
+	writeZipFile(t, filepath.Join(root, "package.json"), `{"name":"project"}`)
+	writeZipFile(t, filepath.Join(root, "index.html"), "<main />")
+	promptFailure := errors.New("interaction unavailable")
+	revealCalls := 0
+	module := newZipModule(t, Dependencies{
+		Prompter: failingZipPrompter{err: promptFailure},
+		Collector: archiveCollectorFunc(func(string, []string) ([]ArchiveEntry, error) {
+			t.Fatal("collector called after prompt failure")
+			return nil, nil
+		}),
+		Builder: archiveBuilderFunc(func([]ArchiveEntry, string, string) ([]byte, int, error) {
+			t.Fatal("builder called after prompt failure")
+			return nil, 0, nil
+		}),
+		Writer: archiveWriterFunc(func(string, []byte) error {
+			t.Fatal("writer called after prompt failure")
+			return nil
+		}),
+		Revealer: revealFunc(func(string) error {
+			revealCalls++
+			return nil
+		}),
+	})
+
+	result, err := module.Run(Input{Directory: root, Open: true})
+	if !errors.Is(err, promptFailure) || result != (Result{}) || revealCalls != 0 {
+		t.Fatalf("Run() = (%#v, %v), reveal calls = %d", result, err, revealCalls)
+	}
+}
+
 func TestModuleValidatesTheSelectedSourceAfterPlanning(t *testing.T) {
 	root := filepath.Join(t.TempDir(), "missing")
 	module := newZipModule(t, Dependencies{Prompter: selectFirstZipPrompter{output: "archive"}})
@@ -237,20 +269,20 @@ type selectFirstZipPrompter struct {
 	output string
 }
 
-func (prompter selectFirstZipPrompter) SelectPackage(step SelectPackageStep) (string, bool) {
-	return step.Options[0].Value, false
+func (prompter selectFirstZipPrompter) SelectPackage(step SelectPackageStep) (string, bool, error) {
+	return step.Options[0].Value, false, nil
 }
 
-func (prompter selectFirstZipPrompter) SelectSource(step SelectSourceStep) (string, bool) {
-	return step.Options[0].Value, false
+func (prompter selectFirstZipPrompter) SelectSource(step SelectSourceStep) (string, bool, error) {
+	return step.Options[0].Value, false, nil
 }
 
-func (prompter selectFirstZipPrompter) SelectGlob(SelectGlobStep) ([]string, bool) {
-	return []string{defaultGlobPattern}, false
+func (prompter selectFirstZipPrompter) SelectGlob(SelectGlobStep) ([]string, bool, error) {
+	return []string{defaultGlobPattern}, false, nil
 }
 
-func (prompter selectFirstZipPrompter) EditOutputFile(EditOutputFileStep) (string, bool) {
-	return prompter.output, false
+func (prompter selectFirstZipPrompter) EditOutputFile(EditOutputFileStep) (string, bool, error) {
+	return prompter.output, false, nil
 }
 
 type selectSourceZipPrompter struct {
@@ -258,58 +290,78 @@ type selectSourceZipPrompter struct {
 	output string
 }
 
-func (prompter selectSourceZipPrompter) SelectPackage(step SelectPackageStep) (string, bool) {
-	return step.Options[0].Value, false
+func (prompter selectSourceZipPrompter) SelectPackage(step SelectPackageStep) (string, bool, error) {
+	return step.Options[0].Value, false, nil
 }
 
-func (prompter selectSourceZipPrompter) SelectSource(SelectSourceStep) (string, bool) {
-	return prompter.source, false
+func (prompter selectSourceZipPrompter) SelectSource(SelectSourceStep) (string, bool, error) {
+	return prompter.source, false, nil
 }
 
-func (prompter selectSourceZipPrompter) SelectGlob(SelectGlobStep) ([]string, bool) {
-	return []string{defaultGlobPattern}, false
+func (prompter selectSourceZipPrompter) SelectGlob(SelectGlobStep) ([]string, bool, error) {
+	return []string{defaultGlobPattern}, false, nil
 }
 
-func (prompter selectSourceZipPrompter) EditOutputFile(EditOutputFileStep) (string, bool) {
-	return prompter.output, false
+func (prompter selectSourceZipPrompter) EditOutputFile(EditOutputFileStep) (string, bool, error) {
+	return prompter.output, false, nil
 }
 
 type cancelledZipPrompter struct{}
 
-func (cancelledZipPrompter) SelectPackage(SelectPackageStep) (string, bool) {
-	return "", true
+func (cancelledZipPrompter) SelectPackage(SelectPackageStep) (string, bool, error) {
+	return "", true, nil
 }
 
-func (cancelledZipPrompter) SelectSource(SelectSourceStep) (string, bool) {
-	return "", true
+func (cancelledZipPrompter) SelectSource(SelectSourceStep) (string, bool, error) {
+	return "", true, nil
 }
 
-func (cancelledZipPrompter) SelectGlob(SelectGlobStep) ([]string, bool) {
-	return nil, true
+func (cancelledZipPrompter) SelectGlob(SelectGlobStep) ([]string, bool, error) {
+	return nil, true, nil
 }
 
-func (cancelledZipPrompter) EditOutputFile(EditOutputFileStep) (string, bool) {
-	return "", true
+func (cancelledZipPrompter) EditOutputFile(EditOutputFileStep) (string, bool, error) {
+	return "", true, nil
+}
+
+type failingZipPrompter struct {
+	err error
+}
+
+func (prompter failingZipPrompter) SelectPackage(SelectPackageStep) (string, bool, error) {
+	return "", false, prompter.err
+}
+
+func (prompter failingZipPrompter) SelectSource(SelectSourceStep) (string, bool, error) {
+	return "", false, prompter.err
+}
+
+func (prompter failingZipPrompter) SelectGlob(SelectGlobStep) ([]string, bool, error) {
+	return nil, false, prompter.err
+}
+
+func (prompter failingZipPrompter) EditOutputFile(EditOutputFileStep) (string, bool, error) {
+	return "", false, prompter.err
 }
 
 type cancelAtZipPrompter struct {
 	stage string
 }
 
-func (prompter cancelAtZipPrompter) SelectPackage(step SelectPackageStep) (string, bool) {
-	return step.Options[0].Value, prompter.stage == "package"
+func (prompter cancelAtZipPrompter) SelectPackage(step SelectPackageStep) (string, bool, error) {
+	return step.Options[0].Value, prompter.stage == "package", nil
 }
 
-func (prompter cancelAtZipPrompter) SelectSource(step SelectSourceStep) (string, bool) {
-	return step.Options[0].Value, prompter.stage == "source"
+func (prompter cancelAtZipPrompter) SelectSource(step SelectSourceStep) (string, bool, error) {
+	return step.Options[0].Value, prompter.stage == "source", nil
 }
 
-func (prompter cancelAtZipPrompter) SelectGlob(SelectGlobStep) ([]string, bool) {
-	return []string{defaultGlobPattern}, prompter.stage == "glob"
+func (prompter cancelAtZipPrompter) SelectGlob(SelectGlobStep) ([]string, bool, error) {
+	return []string{defaultGlobPattern}, prompter.stage == "glob", nil
 }
 
-func (prompter cancelAtZipPrompter) EditOutputFile(EditOutputFileStep) (string, bool) {
-	return "archive", prompter.stage == "output"
+func (prompter cancelAtZipPrompter) EditOutputFile(EditOutputFileStep) (string, bool, error) {
+	return "archive", prompter.stage == "output", nil
 }
 
 type revealFunc func(string) error

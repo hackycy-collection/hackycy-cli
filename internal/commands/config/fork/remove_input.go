@@ -9,7 +9,7 @@ type RemoveReader interface {
 
 // RemovePrompter selects one configured Fork instance for removal.
 type RemovePrompter interface {
-	Select(SelectPrompt) (value string, cancelled bool)
+	Select(SelectPrompt) (value string, cancelled bool, err error)
 }
 
 // RemoveSelection records the read-only outcome before confirmation or mutation.
@@ -36,10 +36,13 @@ func SelectRemove(reader RemoveReader, prompter RemovePrompter) (RemoveSelection
 			Label: instance.Name + " (" + instance.Host + ")",
 		}
 	}
-	name, cancelled := prompter.Select(SelectPrompt{
+	name, cancelled, err := prompter.Select(SelectPrompt{
 		Message: "Select instance to remove",
 		Choices: choices,
 	})
+	if err != nil {
+		return RemoveSelection{}, err
+	}
 	if cancelled {
 		return RemoveSelection{Cancelled: true}, nil
 	}

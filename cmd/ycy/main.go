@@ -7,7 +7,6 @@ import (
 
 	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	fscommand "github.com/hackycy/hackycy-cli/internal/commands/fs"
-	zipcommand "github.com/hackycy/hackycy-cli/internal/commands/zip"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/web"
@@ -52,30 +51,6 @@ func main() {
 	if terminalRoot.experience.Session().Kind == terminalexperience.RichInteractive {
 		discovery = newTerminalDiscoveryPresenter(terminalRoot.experience)
 	}
-	exportEnv, err := newExportEnvModule(terminalRoot.input, terminalRoot.output)
-	if err != nil {
-		_, _ = fmt.Fprintln(terminalRoot.output)
-		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
-		os.Exit(1)
-	}
-	rmModule, err := newRMModule(terminalRoot.input, terminalRoot.output)
-	if err != nil {
-		_, _ = fmt.Fprintln(terminalRoot.output)
-		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
-		os.Exit(1)
-	}
-	zipModule, err := newZipModule(terminalRoot.input, terminalRoot.output)
-	if err != nil {
-		_, _ = fmt.Fprintln(terminalRoot.output)
-		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
-		os.Exit(1)
-	}
-	runModule, err := newRunModule(terminalRoot.input, terminalRoot.output, terminalRoot.diagnostics)
-	if err != nil {
-		_, _ = fmt.Fprintln(terminalRoot.output)
-		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
-		os.Exit(1)
-	}
 	diffHandler, err := newDiffHandler(terminalRoot.experience)
 	if err != nil {
 		_, _ = fmt.Fprintln(terminalRoot.output)
@@ -105,30 +80,28 @@ func main() {
 		Err:              normalDiagnostics,
 		Logging:          runtime,
 		Discovery:        discovery,
-		ExportEnv:        exportEnv.Run,
+		ExportEnv:        newExportEnvHandler(terminalRoot.experience),
 		ConfigForkList:   newConfigForkListHandler(terminalRoot.experience),
-		ConfigForkAdd:    newConfigForkAddHandler(terminalRoot.input, terminalRoot.output),
-		ConfigForkRemove: newConfigForkRemoveHandler(terminalRoot.input, terminalRoot.output),
+		ConfigForkAdd:    newConfigForkAddHandler(terminalRoot.experience),
+		ConfigForkRemove: newConfigForkRemoveHandler(terminalRoot.experience),
 		ConfigCMList:     newConfigCMListHandler(terminalRoot.experience),
-		ConfigCMAdd:      newConfigCMAddHandler(terminalRoot.input, terminalRoot.output),
+		ConfigCMAdd:      newConfigCMAddHandler(terminalRoot.experience),
 		ConfigCMUse:      newConfigCMUseHandler(terminalRoot.experience),
 		ConfigCMSet:      newConfigCMSetHandler(terminalRoot.experience),
-		ConfigCMRemove:   newConfigCMRemoveHandler(terminalRoot.input, terminalRoot.output),
+		ConfigCMRemove:   newConfigCMRemoveHandler(terminalRoot.experience),
 		ConfigCMTest:     newConfigCMTestHandler(terminalRoot.experience),
-		RM:               rmModule.Run,
-		ZIP: func(_ context.Context, input zipcommand.Input) (zipcommand.Result, error) {
-			return zipModule.Run(input)
-		},
-		Run:           runModule.Run,
-		Diff:          diffHandler,
-		FS:            fsHandler,
-		TunnelServer:  newTunnelServerHandler(runtime.Logger("tunnel.server")),
-		TunnelConnect: newTunnelConnectHandler(terminalRoot.input, terminalRoot.output, runtime.Logger("tunnel.client"), version),
-		Upgrade:       newUpgradeHandler(terminalRoot.experience, version),
-		GitHeat:       gitHeat,
-		GitPulse:      gitPulseModule.Run,
-		GitFork:       newGitForkHandler(terminalRoot.input, terminalRoot.output),
-		GitCM:         newGitCMHandler(terminalRoot.input, terminalRoot.output),
+		RM:               newRMHandler(terminalRoot.experience),
+		ZIP:              newZipHandler(terminalRoot.experience),
+		Run:              newRunHandler(terminalRoot.experience, terminalRoot.input, terminalRoot.output, terminalRoot.diagnostics),
+		Diff:             diffHandler,
+		FS:               fsHandler,
+		TunnelServer:     newTunnelServerHandler(runtime.Logger("tunnel.server")),
+		TunnelConnect:    newTunnelConnectHandler(terminalRoot.experience, runtime.Logger("tunnel.client"), version),
+		Upgrade:          newUpgradeHandler(terminalRoot.experience, version),
+		GitHeat:          gitHeat,
+		GitPulse:         gitPulseModule.Run,
+		GitFork:          newGitForkHandler(terminalRoot.input, terminalRoot.output),
+		GitCM:            newGitCMHandler(terminalRoot.input, terminalRoot.output),
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(terminalRoot.output)

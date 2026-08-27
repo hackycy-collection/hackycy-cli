@@ -30,6 +30,19 @@ func TestAutomationAskFailsBeforeReadingOrWriting(t *testing.T) {
 	}
 }
 
+func TestPlainSecretRejectsNonTerminalInputWithoutReadingOrWriting(t *testing.T) {
+	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
+		Session:     terminal.Session{Kind: terminal.PlainInteractive},
+		Input:       panicReader{},
+		Diagnostics: panicWriter{},
+	})
+
+	_, err := handler.Ask(context.Background(), terminal.InteractionRequest{Kind: terminal.InteractionSecret, Message: "Access token"})
+	if !errors.Is(err, terminal.ErrAutomationInteraction) {
+		t.Fatalf("Ask() error = %v, want ErrAutomationInteraction", err)
+	}
+}
+
 func TestPlainAskUsesDiagnosticStreamAndRetriesValidation(t *testing.T) {
 	var diagnostics bytes.Buffer
 	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
@@ -82,6 +95,83 @@ func TestPlainAskSelectsExistingOptionsWithoutImplicitDefault(t *testing.T) {
 	}
 	if !strings.Contains(diagnostics.String(), "invalid selection") {
 		t.Fatalf("diagnostics = %q, want invalid-selection feedback", diagnostics.String())
+	}
+}
+
+func TestPlainAskHonorsCommandOwnedCancelValues(t *testing.T) {
+	var diagnostics bytes.Buffer
+	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
+		Session:     terminal.Session{Kind: terminal.PlainInteractive},
+		Input:       strings.NewReader("quit\n"),
+		Diagnostics: &diagnostics,
+	})
+
+	_, err := handler.Ask(context.Background(), terminal.InteractionRequest{
+		Kind:         terminal.InteractionSelect,
+		Message:      "Select environment",
+		Options:      []terminal.InteractionOption{{Label: "production", Value: ".env.production"}},
+		CancelValues: []string{"", "q", "quit", "cancel"},
+	})
+
+	if !errors.Is(err, terminal.ErrInteractionCancelled) {
+		t.Fatalf("Ask() error = %v, want ErrInteractionCancelled", err)
+	}
+	if strings.Contains(diagnostics.String(), "invalid selection") {
+		t.Fatalf("diagnostics = %q, want direct cancellation", diagnostics.String())
+	}
+}
+
+func TestPlainAskUsesCommandOwnedParserWithoutChangingDefaultOrCancellation(t *testing.T) {
+	var diagnostics bytes.Buffer
+	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
+		Session:     terminal.Session{Kind: terminal.PlainInteractive},
+		Input:       strings.NewReader("bad\nlegacy\n"),
+		Diagnostics: &diagnostics,
+	})
+
+	answer, err := handler.Ask(context.Background(), terminal.InteractionRequest{
+		Kind:    terminal.InteractionSelect,
+		Message: "Choose",
+		ParsePlain: func(value string) (terminal.InteractionAnswer, error) {
+			if value != "legacy" {
+				return terminal.InteractionAnswer{}, errors.New("invalid legacy choice")
+			}
+			return terminal.InteractionAnswer{Value: "selected"}, nil
+		},
+	})
+
+	if err != nil || answer.Value != "selected" {
+		t.Fatalf("Ask() = (%#v, %v)", answer, err)
+	}
+	if !strings.Contains(diagnostics.String(), "invalid legacy choice") {
+		t.Fatalf("diagnostics = %q", diagnostics.String())
+	}
+}
+
+func TestPlainAskUsesCommandOwnedPromptLayout(t *testing.T) {
+	var diagnostics bytes.Buffer
+	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
+		Session:     terminal.Session{Kind: terminal.PlainInteractive},
+		Input:       strings.NewReader("2\n"),
+		Diagnostics: &diagnostics,
+	})
+
+	answer, err := handler.Ask(context.Background(), terminal.InteractionRequest{
+		Kind:        terminal.InteractionSelect,
+		Message:     "ignored by Plain prompt",
+		PlainLead:   "Select a clean action",
+		PlainPrompt: "> ",
+		Options: []terminal.InteractionOption{
+			{Label: "One", Value: "one"},
+			{Label: "Two", Value: "two"},
+		},
+	})
+
+	if err != nil || answer.Value != "two" {
+		t.Fatalf("Ask() = (%#v, %v)", answer, err)
+	}
+	if got, want := diagnostics.String(), "Select a clean action\n1) One\n2) Two\n> "; got != want {
+		t.Fatalf("diagnostics = %q, want %q", got, want)
 	}
 }
 

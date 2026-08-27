@@ -1,6 +1,7 @@
 package exportenv
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -113,6 +114,21 @@ func TestSelectHidesBaseWhenMergingAndReturnsCancellation(t *testing.T) {
 	}
 }
 
+func TestSelectReturnsSelectorFailureBeforeChoosingFiles(t *testing.T) {
+	failure := errors.New("interactive terminal unavailable")
+	discovery := Discovery{
+		Directory:        "/project",
+		BaseFile:         ".env",
+		EnvironmentFiles: []string{".env.production"},
+	}
+
+	selection, err := Select(discovery, SelectionOptions{}, &recordingSelector{err: failure})
+
+	if !reflect.DeepEqual(selection, Selection{}) || !errors.Is(err, failure) {
+		t.Fatalf("Select() = (%#v, %v), want selector failure", selection, err)
+	}
+}
+
 func TestSelectRejectsMissingExplicitEnvironment(t *testing.T) {
 	discovery := Discovery{Directory: "/project", EnvironmentFiles: []string{".env.local"}}
 
@@ -131,10 +147,11 @@ type recordingSelector struct {
 	choices []EnvironmentChoice
 	value   string
 	cancel  bool
+	err     error
 }
 
-func (selector *recordingSelector) SelectEnvironment(message string, choices []EnvironmentChoice) (string, bool) {
+func (selector *recordingSelector) SelectEnvironment(message string, choices []EnvironmentChoice) (string, bool, error) {
 	selector.message = message
 	selector.choices = choices
-	return selector.value, selector.cancel
+	return selector.value, selector.cancel, selector.err
 }

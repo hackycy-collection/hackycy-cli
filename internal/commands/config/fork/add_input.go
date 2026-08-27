@@ -45,9 +45,9 @@ type SelectPrompt struct {
 
 // AddPrompter presents the add interaction without coupling the command to a terminal library.
 type AddPrompter interface {
-	Text(TextPrompt) (value string, cancelled bool)
-	Select(SelectPrompt) (value string, cancelled bool)
-	Password(TextPrompt) (value string, cancelled bool)
+	Text(TextPrompt) (value string, cancelled bool, err error)
+	Select(SelectPrompt) (value string, cancelled bool, err error)
+	Password(TextPrompt) (value string, cancelled bool, err error)
 }
 
 var providerChoices = []Choice{
@@ -62,11 +62,14 @@ var protocolChoices = []Choice{
 
 // PromptAdd collects the legacy add questions in their observable order.
 func PromptAdd(prompter AddPrompter) (AddInput, bool, error) {
-	alias, cancelled := prompter.Text(TextPrompt{
+	alias, cancelled, err := prompter.Text(TextPrompt{
 		Message:     "Instance name (alias)",
 		Placeholder: "e.g. work, github, company-gl",
 		Validate:    validateAddAlias,
 	})
+	if err != nil {
+		return AddInput{}, false, err
+	}
 	if cancelled {
 		return AddInput{}, true, nil
 	}
@@ -74,11 +77,14 @@ func PromptAdd(prompter AddPrompter) (AddInput, bool, error) {
 		return AddInput{}, false, err
 	}
 
-	host, cancelled := prompter.Text(TextPrompt{
+	host, cancelled, err := prompter.Text(TextPrompt{
 		Message:     "Host",
 		Placeholder: "e.g. gitlab.company.com, github.com",
 		Validate:    validateAddHost,
 	})
+	if err != nil {
+		return AddInput{}, false, err
+	}
 	if cancelled {
 		return AddInput{}, true, nil
 	}
@@ -86,7 +92,10 @@ func PromptAdd(prompter AddPrompter) (AddInput, bool, error) {
 		return AddInput{}, false, err
 	}
 
-	provider, cancelled := prompter.Select(SelectPrompt{Message: "Provider type", Choices: providerChoices})
+	provider, cancelled, err := prompter.Select(SelectPrompt{Message: "Provider type", Choices: providerChoices})
+	if err != nil {
+		return AddInput{}, false, err
+	}
 	if cancelled {
 		return AddInput{}, true, nil
 	}
@@ -94,7 +103,10 @@ func PromptAdd(prompter AddPrompter) (AddInput, bool, error) {
 		return AddInput{}, false, errAddInvalidProvider
 	}
 
-	protocol, cancelled := prompter.Select(SelectPrompt{Message: "Protocol", Choices: protocolChoices})
+	protocol, cancelled, err := prompter.Select(SelectPrompt{Message: "Protocol", Choices: protocolChoices})
+	if err != nil {
+		return AddInput{}, false, err
+	}
 	if cancelled {
 		return AddInput{}, true, nil
 	}
@@ -102,7 +114,10 @@ func PromptAdd(prompter AddPrompter) (AddInput, bool, error) {
 		return AddInput{}, false, errAddInvalidProtocol
 	}
 
-	token, cancelled := prompter.Password(TextPrompt{Message: "Access token", Validate: validateAddToken})
+	token, cancelled, err := prompter.Password(TextPrompt{Message: "Access token", Validate: validateAddToken})
+	if err != nil {
+		return AddInput{}, false, err
+	}
 	if cancelled {
 		return AddInput{}, true, nil
 	}

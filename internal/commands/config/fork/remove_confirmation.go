@@ -9,7 +9,7 @@ type ConfirmPrompt struct {
 
 // RemoveConfirmationPrompter confirms the selected Fork removal.
 type RemoveConfirmationPrompter interface {
-	Confirm(ConfirmPrompt) (confirmed bool, cancelled bool)
+	Confirm(ConfirmPrompt) (confirmed bool, cancelled bool, err error)
 }
 
 // RemoveConfirmation is the read-only decision that precedes a Fork deletion.
@@ -22,13 +22,16 @@ const (
 )
 
 // ConfirmRemove asks for the legacy removal confirmation without mutating configuration.
-func ConfirmRemove(name string, prompter RemoveConfirmationPrompter) RemoveConfirmation {
-	confirmed, cancelled := prompter.Confirm(ConfirmPrompt{Message: fmt.Sprintf("Remove instance \"%s\"?", name)})
+func ConfirmRemove(name string, prompter RemoveConfirmationPrompter) (RemoveConfirmation, error) {
+	confirmed, cancelled, err := prompter.Confirm(ConfirmPrompt{Message: fmt.Sprintf("Remove instance \"%s\"?", name)})
+	if err != nil {
+		return RemoveDeclined, err
+	}
 	if cancelled {
-		return RemoveConfirmationCancelled
+		return RemoveConfirmationCancelled, nil
 	}
 	if !confirmed {
-		return RemoveDeclined
+		return RemoveDeclined, nil
 	}
-	return RemoveConfirmed
+	return RemoveConfirmed, nil
 }

@@ -43,10 +43,10 @@ type Result struct {
 
 // Prompter owns the four command-owned interactions without knowing terminal implementation details.
 type Prompter interface {
-	SelectPackage(SelectPackageStep) (string, bool)
-	SelectSource(SelectSourceStep) (string, bool)
-	SelectGlob(SelectGlobStep) ([]string, bool)
-	EditOutputFile(EditOutputFileStep) (string, bool)
+	SelectPackage(SelectPackageStep) (string, bool, error)
+	SelectSource(SelectSourceStep) (string, bool, error)
+	SelectGlob(SelectGlobStep) ([]string, bool, error)
+	EditOutputFile(EditOutputFileStep) (string, bool, error)
 }
 
 // PathStater validates the selected source only after the interactive plan is complete.
@@ -211,26 +211,38 @@ func (module *Module) resolvePlan(directory string) (ZipPlan, bool, error) {
 		switch step := resolution.Step.(type) {
 		case SelectPackageStep:
 			presentPlanningNote(module.presenter, step.Note)
-			value, cancelled := module.prompter.SelectPackage(step)
+			value, cancelled, err := module.prompter.SelectPackage(step)
+			if err != nil {
+				return ZipPlan{}, false, err
+			}
 			if cancelled {
 				return ZipPlan{}, true, nil
 			}
 			answer = PlanningAnswer{Type: PlanningAnswerPackage, Value: value}
 		case SelectSourceStep:
 			presentPlanningNote(module.presenter, step.Note)
-			value, cancelled := module.prompter.SelectSource(step)
+			value, cancelled, err := module.prompter.SelectSource(step)
+			if err != nil {
+				return ZipPlan{}, false, err
+			}
 			if cancelled {
 				return ZipPlan{}, true, nil
 			}
 			answer = PlanningAnswer{Type: PlanningAnswerSource, Value: value}
 		case SelectGlobStep:
-			values, cancelled := module.prompter.SelectGlob(step)
+			values, cancelled, err := module.prompter.SelectGlob(step)
+			if err != nil {
+				return ZipPlan{}, false, err
+			}
 			if cancelled {
 				return ZipPlan{}, true, nil
 			}
 			answer = PlanningAnswer{Type: PlanningAnswerGlob, Values: values}
 		case EditOutputFileStep:
-			value, cancelled := module.prompter.EditOutputFile(step)
+			value, cancelled, err := module.prompter.EditOutputFile(step)
+			if err != nil {
+				return ZipPlan{}, false, err
+			}
 			if cancelled {
 				return ZipPlan{}, true, nil
 			}

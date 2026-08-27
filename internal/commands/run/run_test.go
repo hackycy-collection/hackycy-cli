@@ -175,12 +175,12 @@ type cancellingRunPrompter struct {
 	cancelAfterScript func()
 }
 
-func (prompter *cancellingRunPrompter) SelectScript(prompt ScriptPrompt) (string, bool) {
-	selected, cancelled := prompter.recordingRunPrompter.SelectScript(prompt)
+func (prompter *cancellingRunPrompter) SelectScript(prompt ScriptPrompt) (string, bool, error) {
+	selected, cancelled, err := prompter.recordingRunPrompter.SelectScript(prompt)
 	if prompter.cancelAfterScript != nil {
 		prompter.cancelAfterScript()
 	}
-	return selected, cancelled
+	return selected, cancelled, err
 }
 
 func containsRunEvent(events []string, target string) bool {

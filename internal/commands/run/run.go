@@ -75,7 +75,10 @@ func (module *Module) Run(context context.Context, input Input) (Result, error) 
 	}
 
 	presentIntroduction(module.presenter)
-	script, cancelled := selectScript(module.prompter, discovery.Scripts)
+	script, cancelled, err := selectScript(module.prompter, discovery.Scripts)
+	if err != nil {
+		return Result{}, err
+	}
 	if cancelled {
 		presentCancellation(module.presenter)
 		return Result{}, nil
@@ -87,7 +90,10 @@ func (module *Module) Run(context context.Context, input Input) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
-	manager, cancelled := selectPackageManager(module.prompter, managers)
+	manager, cancelled, err := selectPackageManager(module.prompter, managers)
+	if err != nil {
+		return Result{}, err
+	}
 	if cancelled {
 		presentCancellation(module.presenter)
 		return Result{}, nil

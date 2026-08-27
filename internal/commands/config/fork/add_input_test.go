@@ -161,6 +161,7 @@ func TestValidateAddInputMatchesTheLegacyValidationBoundary(t *testing.T) {
 type promptResponse struct {
 	value     string
 	cancelled bool
+	err       error
 }
 
 type scriptedAddPrompter struct {
@@ -172,31 +173,31 @@ type scriptedAddPrompter struct {
 	calls           []string
 }
 
-func (prompter *scriptedAddPrompter) Text(question TextPrompt) (string, bool) {
+func (prompter *scriptedAddPrompter) Text(question TextPrompt) (string, bool, error) {
 	prompter.calls = append(prompter.calls, "text:"+question.Message)
 	prompter.textQuestions = append(prompter.textQuestions, question)
 	return prompter.next(&prompter.texts)
 }
 
-func (prompter *scriptedAddPrompter) Select(question SelectPrompt) (string, bool) {
+func (prompter *scriptedAddPrompter) Select(question SelectPrompt) (string, bool, error) {
 	prompter.calls = append(prompter.calls, "select:"+question.Message)
 	prompter.selectQuestions = append(prompter.selectQuestions, question)
 	return prompter.next(&prompter.selections)
 }
 
-func (prompter *scriptedAddPrompter) Password(question TextPrompt) (string, bool) {
+func (prompter *scriptedAddPrompter) Password(question TextPrompt) (string, bool, error) {
 	prompter.calls = append(prompter.calls, "password:"+question.Message)
 	prompter.textQuestions = append(prompter.textQuestions, question)
 	return prompter.next(&prompter.passwords)
 }
 
-func (prompter *scriptedAddPrompter) next(responses *[]promptResponse) (string, bool) {
+func (prompter *scriptedAddPrompter) next(responses *[]promptResponse) (string, bool, error) {
 	if len(*responses) == 0 {
-		return "", true
+		return "", true, nil
 	}
 	response := (*responses)[0]
 	*responses = (*responses)[1:]
-	return response.value, response.cancelled
+	return response.value, response.cancelled, response.err
 }
 
 func TestTextPromptValidationFunctionsExposeLegacyMessages(t *testing.T) {

@@ -19,6 +19,7 @@ type RemoveResult struct {
 
 // RemoveDependencies are the command-owned adapters for config cm remove.
 type RemoveDependencies struct {
+	Reader    Reader
 	Prompter  RemoveConfirmationPrompter
 	Writer    RemoveWriter
 	Presenter RemovePresenter
@@ -26,6 +27,7 @@ type RemoveDependencies struct {
 
 // RemoveModule owns config cm remove behavior behind its typed command interface.
 type RemoveModule struct {
+	reader    Reader
 	prompter  RemoveConfirmationPrompter
 	writer    RemoveWriter
 	presenter RemovePresenter
@@ -33,6 +35,9 @@ type RemoveModule struct {
 
 // NewRemove constructs a config cm remove command module.
 func NewRemove(dependencies RemoveDependencies) (*RemoveModule, error) {
+	if dependencies.Reader == nil {
+		return nil, errors.New("config cm remove reader is required")
+	}
 	if dependencies.Prompter == nil {
 		return nil, errors.New("config cm remove prompter is required")
 	}
@@ -43,15 +48,24 @@ func NewRemove(dependencies RemoveDependencies) (*RemoveModule, error) {
 		return nil, errors.New("config cm remove presenter is required")
 	}
 	return &RemoveModule{
+		reader:    dependencies.Reader,
 		prompter:  dependencies.Prompter,
 		writer:    dependencies.Writer,
 		presenter: dependencies.Presenter,
 	}, nil
 }
 
-// Run confirms, removes, and presents one CM profile removal outcome.
+// Run validates, confirms, removes, and presents one CM profile removal outcome.
 func (module *RemoveModule) Run(_ context.Context, request RemoveRequest) (RemoveResult, error) {
-	switch ConfirmRemove(request.Profile, module.prompter) {
+	if err := ValidateRemoveProfile(module.reader, request.Profile); err != nil {
+		return RemoveResult{}, err
+	}
+
+	confirmation, err := ConfirmRemove(request.Profile, module.prompter)
+	if err != nil {
+		return RemoveResult{}, err
+	}
+	switch confirmation {
 	case RemoveConfirmationCancelled:
 		PresentRemoveCancellation(module.presenter)
 		return RemoveResult{Cancelled: true}, nil

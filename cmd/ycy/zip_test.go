@@ -3,6 +3,7 @@ package main
 import (
 	"archive/zip"
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"os"
@@ -13,70 +14,227 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	zipcommand "github.com/hackycy/hackycy-cli/internal/commands/zip"
+	"github.com/hackycy/hackycy-cli/internal/logging"
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
-func TestTerminalZipPrompterSupportsDefaultsSelectionsAndCancellation(t *testing.T) {
-	output := &bytes.Buffer{}
-	prompter := newTerminalZipPrompter(strings.NewReader("2\n\n2,3\ncustom archive\n"), output)
+func TestTerminalZipAdapterTranslatesPlanningAndPresentation(t *testing.T) {
+	experience := terminaltest.NewRecordingExperience(
+		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Value: "two"}},
+		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Value: "one"}},
+		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Values: []string{"**/*.html", "assets/**/*"}}},
+		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Value: "custom archive"}},
+	)
+	run := experience.Open(context.Background())
+	adapter := newTerminalZipAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true})
 	choices := []zipcommand.PlanningChoice{
 		{Value: "one", Label: "one", Hint: "first"},
 		{Value: "two", Label: "two", Hint: "second"},
 	}
-	packageRoot, cancelled := prompter.SelectPackage(zipcommand.SelectPackageStep{Message: "Select a package to zip:", Options: choices})
-	if cancelled || packageRoot != "two" {
-		t.Fatalf("SelectPackage() = (%q, %t)", packageRoot, cancelled)
+	packageRoot, cancelled, err := adapter.SelectPackage(zipcommand.SelectPackageStep{Message: "Select a package to zip:", Options: choices})
+	if err != nil || cancelled || packageRoot != "two" {
+		t.Fatalf("SelectPackage() = (%q, %t, %v)", packageRoot, cancelled, err)
 	}
-	source, cancelled := prompter.SelectSource(zipcommand.SelectSourceStep{Message: "Select a directory to zip:", Options: choices})
-	if cancelled || source != "one" {
-		t.Fatalf("SelectSource() = (%q, %t)", source, cancelled)
+	source, cancelled, err := adapter.SelectSource(zipcommand.SelectSourceStep{Message: "Select a directory to zip:", Options: choices})
+	if err != nil || cancelled || source != "one" {
+		t.Fatalf("SelectSource() = (%q, %t, %v)", source, cancelled, err)
 	}
-	patterns, cancelled := prompter.SelectGlob(zipcommand.SelectGlobStep{
+	patterns, cancelled, err := adapter.SelectGlob(zipcommand.SelectGlobStep{
 		Message:       "Select file patterns to include in the zip:",
 		Options:       []zipcommand.PlanningChoice{{Value: "**/*", Label: "All"}, {Value: "**/*.html", Label: "HTML"}, {Value: "assets/**/*", Label: "Assets"}},
 		InitialValues: []string{"**/*"},
 	})
-	if cancelled || !reflect.DeepEqual(patterns, []string{"**/*.html", "assets/**/*"}) {
-		t.Fatalf("SelectGlob() = (%#v, %t)", patterns, cancelled)
+	if err != nil || cancelled || !reflect.DeepEqual(patterns, []string{"**/*.html", "assets/**/*"}) {
+		t.Fatalf("SelectGlob() = (%#v, %t, %v)", patterns, cancelled, err)
 	}
-	filename, cancelled := prompter.EditOutputFile(zipcommand.EditOutputFileStep{Message: "Enter name", InitialValue: "default"})
-	if cancelled || filename != "custom archive" {
-		t.Fatalf("EditOutputFile() = (%q, %t)", filename, cancelled)
+	filename, cancelled, err := adapter.EditOutputFile(zipcommand.EditOutputFileStep{Message: "Enter name", InitialValue: "default"})
+	if err != nil || cancelled || filename != "custom archive" {
+		t.Fatalf("EditOutputFile() = (%q, %t, %v)", filename, cancelled, err)
 	}
-	if !strings.Contains(output.String(), "2) two - second") || !strings.Contains(output.String(), "Select file patterns") {
-		t.Fatalf("prompt output = %q", output.String())
+	adapter.Intro()
+	adapter.Note(zipcommand.PlanningNote{Title: "Zip plan", Lines: []string{"Source: dist", "Output: archive.zip"}})
+	adapter.Progress("Collecting files...")
+	adapter.Cancel("Operation cancelled.")
+	adapter.Outro("Done!")
+	if err := run.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 
-	cancelledPrompter := newTerminalZipPrompter(strings.NewReader("cancel\n"), &bytes.Buffer{})
-	_, cancelled = cancelledPrompter.SelectSource(zipcommand.SelectSourceStep{Options: choices})
-	if !cancelled {
-		t.Fatal("SelectSource() did not treat cancel as cancellation")
+	operations := experience.Run.Operations()
+	if len(operations) != 10 || operations[0].Kind != terminaltest.AskOperation || operations[4].Kind != terminaltest.PresentOperation || operations[9].Kind != terminaltest.CloseOperation {
+		t.Fatalf("operations = %#v", operations)
+	}
+	packageRequest := operations[0].Value.(terminalexperience.InteractionRequest)
+	if packageRequest.Kind != terminalexperience.InteractionSelect || packageRequest.Message != "Select a package to zip:" || !packageRequest.HasDefault || packageRequest.Default.Value != "one" || !reflect.DeepEqual(packageRequest.Options, []terminalexperience.InteractionOption{{Label: "one", Value: "one", Description: "first"}, {Label: "two", Value: "two", Description: "second"}}) || !reflect.DeepEqual(packageRequest.CancelValues, []string{"q", "quit", "cancel"}) || packageRequest.PlainLead != "Select a package to zip:" || packageRequest.PlainPrompt != "> " || packageRequest.ParsePlain == nil {
+		t.Fatalf("package request = %#v", packageRequest)
+	}
+	globRequest := operations[2].Value.(terminalexperience.InteractionRequest)
+	if globRequest.Kind != terminalexperience.InteractionMultiSelect || !globRequest.HasDefault || !reflect.DeepEqual(globRequest.Default.Values, []string{"**/*"}) || globRequest.ParsePlain == nil {
+		t.Fatalf("glob request = %#v", globRequest)
+	}
+	outputRequest := operations[3].Value.(terminalexperience.InteractionRequest)
+	if outputRequest.Kind != terminalexperience.InteractionText || outputRequest.Placeholder != "default" || !outputRequest.HasDefault || outputRequest.Default.Value != "default" || outputRequest.PlainPrompt != "Enter name [default]: " || outputRequest.ParsePlain == nil {
+		t.Fatalf("output request = %#v", outputRequest)
+	}
+	intro := operations[4].Value.(terminalexperience.PresentationDocument)
+	if !reflect.DeepEqual(intro.Blocks, []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleTitle, Text: "HACKYCY CLI"}, {Role: terminalexperience.VisualRoleActive, Text: "Zip Directory"}}) {
+		t.Fatalf("intro document = %#v", intro)
+	}
+	note := operations[5].Value.(terminalexperience.PresentationDocument)
+	if !reflect.DeepEqual(note.Blocks, []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleActive, Text: "Zip plan"}, {Role: terminalexperience.VisualRoleMuted, Text: "Source: dist\nOutput: archive.zip"}}) {
+		t.Fatalf("note document = %#v", note)
+	}
+	if got := operations[8].Value.(terminalexperience.PresentationDocument).Blocks[0].Role; got != terminalexperience.VisualRoleSuccess {
+		t.Fatalf("success role = %v", got)
 	}
 }
 
-func TestTerminalZipPrompterPreservesDefaultGlobAndOutputName(t *testing.T) {
-	prompter := newTerminalZipPrompter(strings.NewReader("\n\n"), &bytes.Buffer{})
-	patterns, cancelled := prompter.SelectGlob(zipcommand.SelectGlobStep{Options: []zipcommand.PlanningChoice{{Value: "**/*"}}, InitialValues: []string{"**/*"}})
-	if cancelled || !reflect.DeepEqual(patterns, []string{"**/*"}) {
-		t.Fatalf("SelectGlob() = (%#v, %t)", patterns, cancelled)
+func TestTerminalZipAdapterPlainPreservesLegacyInputGrammar(t *testing.T) {
+	stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
+		Input:       strings.NewReader("invalid\n2\n\n2,3\n\nall\nnone\n\n custom archive \ncancel\n"),
+		Output:      stdout,
+		Diagnostics: diagnostics,
+	})
+	run := experience.Open(context.Background())
+	adapter := newTerminalZipAdapter(run, experience.Session())
+	choices := []zipcommand.PlanningChoice{{Value: "one", Label: "one", Hint: "first"}, {Value: "two", Label: "two", Hint: "second"}, {Value: "three", Label: "three"}}
+	packageRoot, cancelled, err := adapter.SelectPackage(zipcommand.SelectPackageStep{Message: "Select a package to zip:", Options: choices})
+	if err != nil || cancelled || packageRoot != "two" {
+		t.Fatalf("SelectPackage() = (%q, %t, %v)", packageRoot, cancelled, err)
 	}
-	name, cancelled := prompter.EditOutputFile(zipcommand.EditOutputFileStep{InitialValue: "default"})
-	if cancelled || name != "default" {
-		t.Fatalf("EditOutputFile() = (%q, %t)", name, cancelled)
+	source, cancelled, err := adapter.SelectSource(zipcommand.SelectSourceStep{Message: "Select a directory to zip:", Options: choices})
+	if err != nil || cancelled || source != "one" {
+		t.Fatalf("SelectSource() = (%q, %t, %v)", source, cancelled, err)
+	}
+	globStep := zipcommand.SelectGlobStep{Message: "Select file patterns to include in the zip:", Options: []zipcommand.PlanningChoice{{Value: "**/*", Label: "All"}, {Value: "**/*.html", Label: "HTML"}, {Value: "assets/**/*", Label: "Assets"}}, InitialValues: []string{"**/*"}}
+	patterns, cancelled, err := adapter.SelectGlob(globStep)
+	if err != nil || cancelled || !reflect.DeepEqual(patterns, []string{"**/*.html", "assets/**/*"}) {
+		t.Fatalf("SelectGlob() = (%#v, %t, %v)", patterns, cancelled, err)
+	}
+	for _, value := range [][]string{{"**/*"}, {"**/*"}, {"**/*"}} {
+		patterns, cancelled, err = adapter.SelectGlob(globStep)
+		if err != nil || cancelled || !reflect.DeepEqual(patterns, value) {
+			t.Fatalf("default glob = (%#v, %t, %v), want %#v", patterns, cancelled, err, value)
+		}
+	}
+	name, cancelled, err := adapter.EditOutputFile(zipcommand.EditOutputFileStep{Message: "Enter name", InitialValue: "default"})
+	if err != nil || cancelled || name != "default" {
+		t.Fatalf("EditOutputFile() default = (%q, %t, %v)", name, cancelled, err)
+	}
+	name, cancelled, err = adapter.EditOutputFile(zipcommand.EditOutputFileStep{Message: "Enter name", InitialValue: "default"})
+	if err != nil || cancelled || name != "custom archive" {
+		t.Fatalf("EditOutputFile() = (%q, %t, %v)", name, cancelled, err)
+	}
+	_, cancelled, err = adapter.SelectSource(zipcommand.SelectSourceStep{Message: "Select a directory to zip:", Options: choices})
+	if err != nil || !cancelled {
+		t.Fatalf("SelectSource() cancellation = (%t, %v)", cancelled, err)
+	}
+	if stdout.Len() != 0 || !strings.Contains(diagnostics.String(), "Invalid selection") || !strings.Contains(diagnostics.String(), "2) two - second") || !strings.Contains(diagnostics.String(), "Enter name [default]: ") || terminaltest.ContainsTerminalControl(append(stdout.Bytes(), diagnostics.Bytes()...)) {
+		t.Fatalf("Plain streams = (%q, %q)", stdout.String(), diagnostics.String())
+	}
+	if err := run.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+
+	for _, cancellation := range []string{"q", "quit", "cancel"} {
+		t.Run(cancellation, func(t *testing.T) {
+			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+				Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
+				Input:       strings.NewReader(cancellation + "\n"),
+				Output:      io.Discard,
+				Diagnostics: io.Discard,
+			})
+			run := experience.Open(context.Background())
+			_, cancelled, err := newTerminalZipAdapter(run, experience.Session()).SelectSource(zipcommand.SelectSourceStep{Options: choices})
+			if err != nil || !cancelled {
+				t.Fatalf("SelectSource() cancellation = (%t, %v)", cancelled, err)
+			}
+			if err := run.Close(); err != nil {
+				t.Fatalf("Close() error = %v", err)
+			}
+		})
 	}
 }
 
-func TestTerminalZipPresenterWritesMappedMessages(t *testing.T) {
-	output := &bytes.Buffer{}
-	presenter := terminalZipPresenter{output: output}
-	presenter.Intro()
-	presenter.Note(zipcommand.PlanningNote{Title: "Zip plan", Lines: []string{"Source: dist", "Output: archive.zip"}})
-	presenter.Progress("Collecting files...")
-	presenter.Cancel("Operation cancelled.")
-	presenter.Outro("Done!")
-	want := "HACKYCY CLI\n\nZip Directory\nZip plan\nSource: dist\nOutput: archive.zip\nCollecting files...\nOperation cancelled.\nDone!\n"
-	if output.String() != want {
-		t.Fatalf("presentation = %q, want %q", output.String(), want)
+func TestZIPPlainJourneyCreatesAStructuralArchive(t *testing.T) {
+	project := t.TempDir()
+	writeStandaloneZIPFile(t, project, "package.json", `{"name":"project","devDependencies":{"vite":"1"}}`)
+	writeStandaloneZIPFile(t, project, "dist/index.html", "<main />")
+	writeStandaloneZIPFile(t, project, "dist/assets/app.js", "console.log('app')")
+	writeStandaloneZIPFile(t, project, "dist/.secret", "not archived")
+	withZIPWorkingDirectory(t, project)
+	stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
+		Input:       strings.NewReader("\n\n\n"),
+		Output:      stdout,
+		Diagnostics: diagnostics,
+	})
+
+	result, err := newZipHandler(experience)(context.Background(), zipcommand.Input{Directory: ".", Open: false, WithDir: "bundle"})
+	if err != nil || result.Kind != zipcommand.ResultCompleted || !strings.Contains(stdout.String(), "Zip Directory") || !strings.Contains(stdout.String(), "Done!") || terminaltest.ContainsTerminalControl(append(stdout.Bytes(), diagnostics.Bytes()...)) {
+		t.Fatalf("Plain zip = (%#v, %v), streams = (%q, %q)", result, err, stdout.String(), diagnostics.String())
+	}
+	archivePath := filepath.Join(project, "dist", "project.zip")
+	archive, err := zip.OpenReader(archivePath)
+	if err != nil {
+		t.Fatalf("open archive: %v", err)
+	}
+	contents := make(map[string]string)
+	for _, file := range archive.File {
+		reader, err := file.Open()
+		if err != nil {
+			t.Fatalf("open archive entry: %v", err)
+		}
+		bytes, err := io.ReadAll(reader)
+		_ = reader.Close()
+		if err != nil {
+			t.Fatalf("read archive entry: %v", err)
+		}
+		contents[file.Name] = string(bytes)
+	}
+	if err := archive.Close(); err != nil {
+		t.Fatalf("close archive: %v", err)
+	}
+	want := map[string]string{"bundle/index.html": "<main />", "bundle/assets/app.js": "console.log('app')"}
+	if !reflect.DeepEqual(contents, want) {
+		t.Fatalf("archive contents = %#v, want %#v", contents, want)
+	}
+}
+
+func TestZIPAutomationFailsBeforeArchiveCreationOrInputRead(t *testing.T) {
+	project := t.TempDir()
+	writeStandaloneZIPFile(t, project, "package.json", `{"name":"project","devDependencies":{"vite":"1"}}`)
+	writeStandaloneZIPFile(t, project, "dist/index.html", "<main />")
+	withZIPWorkingDirectory(t, project)
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
+		Input:       panicZipReader{},
+		Output:      stdout,
+		Diagnostics: stderr,
+	})
+	app, err := cliapp.New(cliapp.BuildInfo{Version: "0.0.0-dev"}, cliapp.Dependencies{
+		Out:     stdout,
+		Err:     stderr,
+		Logging: logging.NewRuntime(logging.Options{Writer: stderr}),
+		ZIP:     newZipHandler(experience),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	outcome := app.Execute(context.Background(), []string{"zip", ".", "--without-open"})
+	if outcome.Code != 1 || !errors.Is(outcome.Err, errZipRequiresInteractive) || stdout.Len() != 0 || stderr.String() != "error: zip requires an interactive terminal\n" || terminaltest.ContainsTerminalControl(append(stdout.Bytes(), stderr.Bytes()...)) {
+		t.Fatalf("Automation outcome = %#v, streams = (%q, %q)", outcome, stdout.String(), stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(project, "dist", "project.zip")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("Automation created archive: %v", err)
 	}
 }
 
@@ -159,7 +317,7 @@ func TestHostZipRevealerUsesPlatformCommands(t *testing.T) {
 	}
 }
 
-func TestZIPStandaloneBinaryCreatesAStructuralArchive(t *testing.T) {
+func TestZIPStandaloneBinaryRejectsRedirectedPlanningAndPreservesHelp(t *testing.T) {
 	repository := repositoryRoot(t)
 	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
 	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
@@ -176,56 +334,18 @@ func TestZIPStandaloneBinaryCreatesAStructuralArchive(t *testing.T) {
 	project := filepath.Join(t.TempDir(), "project")
 	writeStandaloneZIPFile(t, project, "package.json", `{"name":"project","devDependencies":{"vite":"1"}}`)
 	writeStandaloneZIPFile(t, project, "dist/index.html", "<main />")
-	writeStandaloneZIPFile(t, project, "dist/assets/app.js", "console.log('app')")
-	writeStandaloneZIPFile(t, project, "dist/.secret", "not archived")
 	environment := environmentWith(map[string]string{"HOME": t.TempDir(), "USERPROFILE": ""})
 	command := exec.Command(resolveStandaloneBinary(binary), "zip", ".", "--without-open", "--with-dir", "bundle")
 	command.Dir = project
 	command.Env = environment
 	command.Stdin = strings.NewReader("\n\n\n")
 	output, err := command.CombinedOutput()
-	if err != nil || !strings.Contains(string(output), "Zip Directory") || !strings.Contains(string(output), "Done!") {
-		t.Fatalf("zip standalone = (%v, %q)", err, output)
+	if err == nil || string(output) != "error: zip requires an interactive terminal\n" {
+		t.Fatalf("redirected zip = (%v, %q)", err, output)
 	}
 	archivePath := filepath.Join(project, "dist", "project.zip")
-	archive, err := zip.OpenReader(archivePath)
-	if err != nil {
-		t.Fatalf("open archive: %v", err)
-	}
-	contents := make(map[string]string)
-	for _, file := range archive.File {
-		reader, err := file.Open()
-		if err != nil {
-			t.Fatalf("open archive entry: %v", err)
-		}
-		bytes, err := io.ReadAll(reader)
-		_ = reader.Close()
-		if err != nil {
-			t.Fatalf("read archive entry: %v", err)
-		}
-		contents[file.Name] = string(bytes)
-	}
-	want := map[string]string{"bundle/index.html": "<main />", "bundle/assets/app.js": "console.log('app')"}
-	if !reflect.DeepEqual(contents, want) {
-		t.Fatalf("archive contents = %#v, want %#v", contents, want)
-	}
-	if err := archive.Close(); err != nil {
-		t.Fatalf("close archive: %v", err)
-	}
-
-	if err := os.Remove(archivePath); err != nil {
-		t.Fatalf("remove archive before cancellation: %v", err)
-	}
-	command = exec.Command(resolveStandaloneBinary(binary), "zip", ".", "--without-open")
-	command.Dir = project
-	command.Env = environment
-	command.Stdin = strings.NewReader("cancel\n")
-	output, err = command.CombinedOutput()
-	if err != nil || !strings.Contains(string(output), "Operation cancelled.") {
-		t.Fatalf("zip cancellation = (%v, %q)", err, output)
-	}
 	if _, err := os.Stat(archivePath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("cancellation archive = %v, want missing", err)
+		t.Fatalf("redirected zip created archive: %v", err)
 	}
 
 	command = exec.Command(resolveStandaloneBinary(binary), "zip", "--help")
@@ -263,4 +383,26 @@ func writeStandaloneZIPFile(t *testing.T, root, name, contents string) {
 	if err := os.WriteFile(path, []byte(contents), 0o600); err != nil {
 		t.Fatalf("write %s: %v", name, err)
 	}
+}
+
+type panicZipReader struct{}
+
+func (panicZipReader) Read([]byte) (int, error) {
+	panic("zip Automation must not read stdin")
+}
+
+func withZIPWorkingDirectory(t *testing.T, directory string) {
+	t.Helper()
+	workingDirectory, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("get working directory: %v", err)
+	}
+	if err := os.Chdir(directory); err != nil {
+		t.Fatalf("change working directory: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(workingDirectory); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
 }

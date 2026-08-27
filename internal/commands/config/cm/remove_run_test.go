@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/hackycy/hackycy-cli/internal/appconfig"
 )
 
 func TestRemoveModuleRetainsNonMutatingOutcomes(t *testing.T) {
@@ -19,9 +21,11 @@ func TestRemoveModuleRetainsNonMutatingOutcomes(t *testing.T) {
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
+			reader := configuredCMRemoveReader("work")
+			prompter := &scriptedCMRemoveRunPrompter{confirmed: test.confirmed, cancelled: test.confirmCancel}
 			writer := &recordingCMRemoveStore{removed: true}
 			presenter := &recordingCMRemovePresenter{}
-			module := newCMRemoveModule(t, &scriptedCMRemoveRunPrompter{confirmed: test.confirmed, cancelled: test.confirmCancel}, writer, presenter)
+			module := newCMRemoveModule(t, reader, prompter, writer, presenter)
 
 			result, err := module.Run(context.Background(), RemoveRequest{Profile: "work"})
 
@@ -39,9 +43,10 @@ func TestRemoveModuleRetainsNonMutatingOutcomes(t *testing.T) {
 }
 
 func TestRemoveModuleRemovesAndPresentsTheConfirmedProfile(t *testing.T) {
+	reader := configuredCMRemoveReader("work")
 	writer := &recordingCMRemoveStore{removed: true}
 	presenter := &recordingCMRemovePresenter{}
-	module := newCMRemoveModule(t, &scriptedCMRemoveRunPrompter{confirmed: true}, writer, presenter)
+	module := newCMRemoveModule(t, reader, &scriptedCMRemoveRunPrompter{confirmed: true}, writer, presenter)
 
 	result, err := module.Run(context.Background(), RemoveRequest{Profile: "work"})
 
@@ -56,25 +61,48 @@ func TestRemoveModuleRemovesAndPresentsTheConfirmedProfile(t *testing.T) {
 	}
 }
 
-func TestRemoveModuleReturnsMissingAndWriteFailuresWithoutSuccessPresentation(t *testing.T) {
+func TestRemoveModuleValidatesProfileBeforeConfirmationOrDeletion(t *testing.T) {
+	reader := configuredCMRemoveReader()
+	prompter := &scriptedCMRemoveRunPrompter{confirmed: true}
+	writer := &recordingCMRemoveStore{removed: true}
+	presenter := &recordingCMRemovePresenter{}
+	module := newCMRemoveModule(t, reader, prompter, writer, presenter)
+
+	result, err := module.Run(context.Background(), RemoveRequest{Profile: "missing"})
+
+	if err == nil || err.Error() != "CM profile not found: missing" || result != (RemoveResult{}) {
+		t.Fatalf("Run() = (%#v, %v), want missing-profile error", result, err)
+	}
+	if reader.calls != 1 || prompter.calls != 0 || len(writer.names) != 0 || presenter.cancellation != "" || presenter.success != "" {
+		t.Fatalf("validation order = reader:%d prompt:%d writes:%#v presenter:%#v", reader.calls, prompter.calls, writer.names, presenter)
+	}
+}
+
+func TestRemoveModuleReturnsReadInteractionAndWriteFailuresWithoutPresentation(t *testing.T) {
+	readFailure := errors.New("read configuration")
+	interactionFailure := errors.New("interactive terminal unavailable")
+	writeFailure := errors.New("publish configuration")
 	tests := []struct {
 		name      string
+		reader    *recordingCMRemoveReader
+		prompter  *scriptedCMRemoveRunPrompter
 		writer    *recordingCMRemoveStore
-		wantError string
+		wantError error
 	}{
-		{name: "missing", writer: &recordingCMRemoveStore{}, wantError: "CM profile not found: missing"},
-		{name: "write", writer: &recordingCMRemoveStore{err: errors.New("publish configuration")}, wantError: "publish configuration"},
+		{name: "read", reader: &recordingCMRemoveReader{err: readFailure}, prompter: &scriptedCMRemoveRunPrompter{}, writer: &recordingCMRemoveStore{}, wantError: readFailure},
+		{name: "interaction", reader: configuredCMRemoveReader("work"), prompter: &scriptedCMRemoveRunPrompter{err: interactionFailure}, writer: &recordingCMRemoveStore{}, wantError: interactionFailure},
+		{name: "write", reader: configuredCMRemoveReader("work"), prompter: &scriptedCMRemoveRunPrompter{confirmed: true}, writer: &recordingCMRemoveStore{err: writeFailure}, wantError: writeFailure},
 	}
 
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			presenter := &recordingCMRemovePresenter{}
-			module := newCMRemoveModule(t, &scriptedCMRemoveRunPrompter{confirmed: true}, test.writer, presenter)
+			module := newCMRemoveModule(t, test.reader, test.prompter, test.writer, presenter)
 
-			result, err := module.Run(context.Background(), RemoveRequest{Profile: "missing"})
+			result, err := module.Run(context.Background(), RemoveRequest{Profile: "work"})
 
-			if err == nil || err.Error() != test.wantError || result != (RemoveResult{}) {
-				t.Fatalf("Run() = (%#v, %v), want error %q", result, err, test.wantError)
+			if result != (RemoveResult{}) || !errors.Is(err, test.wantError) {
+				t.Fatalf("Run() = (%#v, %v), want error %v", result, err, test.wantError)
 			}
 			if presenter.cancellation != "" || presenter.success != "" {
 				t.Fatalf("failure presented an outcome: %#v", presenter)
@@ -84,14 +112,16 @@ func TestRemoveModuleReturnsMissingAndWriteFailuresWithoutSuccessPresentation(t 
 }
 
 func TestNewRemoveRequiresEveryCommandOwnedAdapter(t *testing.T) {
+	reader := configuredCMRemoveReader("work")
 	prompter := &scriptedCMRemoveRunPrompter{}
 	writer := &recordingCMRemoveStore{}
 	presenter := &recordingCMRemovePresenter{}
 
 	for _, dependencies := range []RemoveDependencies{
-		{Writer: writer, Presenter: presenter},
-		{Prompter: prompter, Presenter: presenter},
-		{Prompter: prompter, Writer: writer},
+		{Prompter: prompter, Writer: writer, Presenter: presenter},
+		{Reader: reader, Writer: writer, Presenter: presenter},
+		{Reader: reader, Prompter: prompter, Presenter: presenter},
+		{Reader: reader, Prompter: prompter, Writer: writer},
 	} {
 		if _, err := NewRemove(dependencies); err == nil {
 			t.Fatalf("NewRemove(%#v) returned nil error", dependencies)
@@ -99,20 +129,42 @@ func TestNewRemoveRequiresEveryCommandOwnedAdapter(t *testing.T) {
 	}
 }
 
-func newCMRemoveModule(t *testing.T, prompter RemoveConfirmationPrompter, writer RemoveWriter, presenter RemovePresenter) *RemoveModule {
+func newCMRemoveModule(t *testing.T, reader Reader, prompter RemoveConfirmationPrompter, writer RemoveWriter, presenter RemovePresenter) *RemoveModule {
 	t.Helper()
-	module, err := NewRemove(RemoveDependencies{Prompter: prompter, Writer: writer, Presenter: presenter})
+	module, err := NewRemove(RemoveDependencies{Reader: reader, Prompter: prompter, Writer: writer, Presenter: presenter})
 	if err != nil {
 		t.Fatalf("NewRemove() returned an error: %v", err)
 	}
 	return module
 }
 
+type recordingCMRemoveReader struct {
+	profiles appconfig.CMProfileList
+	err      error
+	calls    int
+}
+
+func configuredCMRemoveReader(names ...string) *recordingCMRemoveReader {
+	profiles := make([]appconfig.CMProfile, len(names))
+	for index, name := range names {
+		profiles[index] = appconfig.CMProfile{Name: name}
+	}
+	return &recordingCMRemoveReader{profiles: appconfig.CMProfileList{Profiles: profiles}}
+}
+
+func (reader *recordingCMRemoveReader) ListCMProfiles() (appconfig.CMProfileList, error) {
+	reader.calls++
+	return reader.profiles, reader.err
+}
+
 type scriptedCMRemoveRunPrompter struct {
 	confirmed bool
 	cancelled bool
+	err       error
+	calls     int
 }
 
-func (prompter *scriptedCMRemoveRunPrompter) Confirm(RemoveConfirmPrompt) (bool, bool) {
-	return prompter.confirmed, prompter.cancelled
+func (prompter *scriptedCMRemoveRunPrompter) Confirm(RemoveConfirmPrompt) (bool, bool, error) {
+	prompter.calls++
+	return prompter.confirmed, prompter.cancelled, prompter.err
 }

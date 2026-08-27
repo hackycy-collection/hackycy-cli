@@ -1,132 +1,238 @@
 package main
 
 import (
-	"bufio"
+	"context"
 	"errors"
-	"fmt"
-	"io"
 	"os/exec"
 	"runtime"
 	"strconv"
 	"strings"
 
+	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	zipcommand "github.com/hackycy/hackycy-cli/internal/commands/zip"
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 )
 
-type terminalZipPrompter struct {
-	input  *bufio.Reader
-	output io.Writer
+var errZipRequiresInteractive = errors.New("zip requires an interactive terminal")
+
+func newZipHandler(experience *terminalexperience.Runtime) cliapp.ZipHandler {
+	return func(ctx context.Context, input zipcommand.Input) (zipcommand.Result, error) {
+		run := experience.Open(ctx)
+		defer run.Close()
+		adapter := newTerminalZipAdapter(run, experience.Session())
+		module, err := zipcommand.New(zipcommand.Dependencies{
+			Prompter:           adapter,
+			Presenter:          adapter,
+			RemoteNameResolver: newZipRemoteNameResolver(osZipRemoteOutputRunner{}),
+			Revealer:           newHostZipRevealer(osZipHostCommandRunner{}),
+		})
+		if err != nil {
+			return zipcommand.Result{}, err
+		}
+		result, err := module.Run(input)
+		if err != nil {
+			return zipcommand.Result{}, err
+		}
+		if err := adapter.Flush(); err != nil {
+			return zipcommand.Result{}, err
+		}
+		return result, nil
+	}
 }
 
-func newTerminalZipPrompter(input io.Reader, output io.Writer) *terminalZipPrompter {
-	return &terminalZipPrompter{input: bufio.NewReader(input), output: output}
+type terminalZipAdapter struct {
+	run     terminalexperience.ExperienceRun
+	session terminalexperience.Session
+	pending []terminalexperience.PresentationDocument
 }
 
-func newZipModule(input io.Reader, output io.Writer) (*zipcommand.Module, error) {
-	presenter := terminalZipPresenter{output: output}
-	return zipcommand.New(zipcommand.Dependencies{
-		Prompter:           newTerminalZipPrompter(input, output),
-		Presenter:          presenter,
-		RemoteNameResolver: newZipRemoteNameResolver(osZipRemoteOutputRunner{}),
-		Revealer:           newHostZipRevealer(osZipHostCommandRunner{}),
+func newTerminalZipAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalZipAdapter {
+	return &terminalZipAdapter{run: run, session: session}
+}
+
+func (adapter *terminalZipAdapter) SelectPackage(step zipcommand.SelectPackageStep) (string, bool, error) {
+	answer, cancelled, err := adapter.ask(zipChoiceRequest(step.Message, step.Options))
+	return answer.Value, cancelled, err
+}
+
+func (adapter *terminalZipAdapter) SelectSource(step zipcommand.SelectSourceStep) (string, bool, error) {
+	answer, cancelled, err := adapter.ask(zipChoiceRequest(step.Message, step.Options))
+	return answer.Value, cancelled, err
+}
+
+func (adapter *terminalZipAdapter) SelectGlob(step zipcommand.SelectGlobStep) ([]string, bool, error) {
+	options := zipInteractionOptions(step.Options)
+	answer, cancelled, err := adapter.ask(terminalexperience.InteractionRequest{
+		Kind:         terminalexperience.InteractionMultiSelect,
+		Message:      step.Message,
+		PlainLead:    step.Message,
+		PlainPrompt:  "> ",
+		Options:      options,
+		HasDefault:   true,
+		Default:      terminalexperience.InteractionAnswer{Values: append([]string(nil), step.InitialValues...)},
+		CancelValues: []string{"q", "quit", "cancel"},
+		ParsePlain: func(value string) (terminalexperience.InteractionAnswer, error) {
+			return parseZipGlob(value, options, step.InitialValues)
+		},
 	})
+	return append([]string(nil), answer.Values...), cancelled, err
 }
 
-func (prompter *terminalZipPrompter) SelectPackage(step zipcommand.SelectPackageStep) (string, bool) {
-	index, cancelled := prompter.selectChoice(step.Message, step.Options)
-	if cancelled {
-		return "", true
-	}
-	return step.Options[index].Value, false
+func (adapter *terminalZipAdapter) EditOutputFile(step zipcommand.EditOutputFileStep) (string, bool, error) {
+	answer, cancelled, err := adapter.ask(terminalexperience.InteractionRequest{
+		Kind:         terminalexperience.InteractionText,
+		Message:      step.Message,
+		Placeholder:  step.InitialValue,
+		PlainPrompt:  step.Message + " [" + step.InitialValue + "]: ",
+		HasDefault:   true,
+		Default:      terminalexperience.InteractionAnswer{Value: step.InitialValue},
+		CancelValues: []string{"q", "quit", "cancel"},
+		ParsePlain: func(value string) (terminalexperience.InteractionAnswer, error) {
+			return parseZipOutput(value, step.InitialValue), nil
+		},
+	})
+	return answer.Value, cancelled, err
 }
 
-func (prompter *terminalZipPrompter) SelectSource(step zipcommand.SelectSourceStep) (string, bool) {
-	index, cancelled := prompter.selectChoice(step.Message, step.Options)
-	if cancelled {
-		return "", true
+func (adapter *terminalZipAdapter) Intro() {
+	if adapter.session.Kind == terminalexperience.RichInteractive {
+		adapter.present(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
+			{Role: terminalexperience.VisualRoleTitle, Text: "HACKYCY CLI"},
+			{Role: terminalexperience.VisualRoleActive, Text: "Zip Directory"},
+		}})
+		return
 	}
-	return step.Options[index].Value, false
+	adapter.present(terminalZipDocument(adapter.session, "HACKYCY CLI\n\nZip Directory", terminalexperience.VisualRolePlain))
 }
 
-func (prompter *terminalZipPrompter) SelectGlob(step zipcommand.SelectGlobStep) ([]string, bool) {
-	_, _ = fmt.Fprintln(prompter.output, step.Message)
-	for index, option := range step.Options {
-		_, _ = fmt.Fprintf(prompter.output, "%d) %s\n", index+1, option.Label)
+func (adapter *terminalZipAdapter) Note(note zipcommand.PlanningNote) {
+	if adapter.session.Kind == terminalexperience.RichInteractive {
+		adapter.present(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
+			{Role: terminalexperience.VisualRoleActive, Text: note.Title},
+			{Role: terminalexperience.VisualRoleMuted, Text: strings.Join(note.Lines, "\n")},
+		}})
+		return
 	}
-	for {
-		_, _ = fmt.Fprint(prompter.output, "> ")
-		value, eof := prompter.readLine()
-		if isZipCancellation(value) || (value == "" && eof) {
-			return nil, true
-		}
-		if value == "" || strings.EqualFold(value, "all") || strings.EqualFold(value, "none") {
-			return append([]string(nil), step.InitialValues...), false
-		}
-		indices, valid := parseZipIndices(value, len(step.Options))
-		if valid {
-			selected := make([]string, 0, len(indices))
-			for _, index := range indices {
-				selected = append(selected, step.Options[index].Value)
-			}
-			return selected, false
-		}
-		if eof {
-			return nil, true
-		}
-		_, _ = fmt.Fprintln(prompter.output, "Invalid selection")
-	}
+	lines := append([]string{note.Title}, note.Lines...)
+	adapter.present(terminalZipDocument(adapter.session, strings.Join(lines, "\n"), terminalexperience.VisualRolePlain))
 }
 
-func (prompter *terminalZipPrompter) EditOutputFile(step zipcommand.EditOutputFileStep) (string, bool) {
-	for {
-		_, _ = fmt.Fprintf(prompter.output, "%s [%s]: ", step.Message, step.InitialValue)
-		value, eof := prompter.readLine()
-		if isZipCancellation(value) || (value == "" && eof) {
-			return "", true
-		}
-		if value == "" {
-			return step.InitialValue, false
-		}
-		return value, false
-	}
+func (adapter *terminalZipAdapter) Progress(message string) {
+	adapter.present(terminalZipDocument(adapter.session, message, terminalexperience.VisualRoleActive))
 }
 
-func (prompter *terminalZipPrompter) selectChoice(message string, options []zipcommand.PlanningChoice) (int, bool) {
-	_, _ = fmt.Fprintln(prompter.output, message)
-	for index, option := range options {
-		if option.Hint == "" {
-			_, _ = fmt.Fprintf(prompter.output, "%d) %s\n", index+1, option.Label)
-			continue
-		}
-		_, _ = fmt.Fprintf(prompter.output, "%d) %s - %s\n", index+1, option.Label, option.Hint)
-	}
-	for {
-		_, _ = fmt.Fprint(prompter.output, "> ")
-		value, eof := prompter.readLine()
-		if isZipCancellation(value) || (value == "" && eof) || len(options) == 0 {
-			return 0, true
-		}
-		if value == "" {
-			return 0, false
-		}
-		index, err := strconv.Atoi(value)
-		if err == nil && index >= 1 && index <= len(options) {
-			return index - 1, false
-		}
-		if eof {
-			return 0, true
-		}
-		_, _ = fmt.Fprintln(prompter.output, "Invalid selection")
-	}
+func (adapter *terminalZipAdapter) Cancel(message string) {
+	adapter.present(terminalZipDocument(adapter.session, message, terminalexperience.VisualRoleWarning))
 }
 
-func (prompter *terminalZipPrompter) readLine() (string, bool) {
-	line, err := prompter.input.ReadString('\n')
-	return strings.TrimSpace(line), err != nil
+func (adapter *terminalZipAdapter) Outro(message string) {
+	adapter.present(terminalZipDocument(adapter.session, message, terminalexperience.VisualRoleSuccess))
 }
 
-func isZipCancellation(value string) bool {
-	return strings.EqualFold(value, "q") || strings.EqualFold(value, "quit") || strings.EqualFold(value, "cancel")
+func (adapter *terminalZipAdapter) Flush() error {
+	if adapter.session.Kind != terminalexperience.Automation {
+		return nil
+	}
+	for _, document := range adapter.pending {
+		if err := adapter.run.Present(document); err != nil {
+			return err
+		}
+	}
+	adapter.pending = nil
+	return nil
+}
+
+func (adapter *terminalZipAdapter) ask(request terminalexperience.InteractionRequest) (terminalexperience.InteractionAnswer, bool, error) {
+	answer, err := adapter.run.Ask(request)
+	if errors.Is(err, terminalexperience.ErrInteractionCancelled) || errors.Is(err, context.Canceled) {
+		return terminalexperience.InteractionAnswer{}, true, nil
+	}
+	if errors.Is(err, terminalexperience.ErrAutomationInteraction) {
+		return terminalexperience.InteractionAnswer{}, false, errZipRequiresInteractive
+	}
+	if err != nil {
+		return terminalexperience.InteractionAnswer{}, false, err
+	}
+	return answer, false, nil
+}
+
+func (adapter *terminalZipAdapter) present(document terminalexperience.PresentationDocument) {
+	if adapter.session.Kind == terminalexperience.Automation {
+		adapter.pending = append(adapter.pending, document)
+		return
+	}
+	_ = adapter.run.Present(document)
+}
+
+func zipChoiceRequest(message string, choices []zipcommand.PlanningChoice) terminalexperience.InteractionRequest {
+	options := zipInteractionOptions(choices)
+	request := terminalexperience.InteractionRequest{
+		Kind:         terminalexperience.InteractionSelect,
+		Message:      message,
+		PlainLead:    message,
+		PlainPrompt:  "> ",
+		Options:      options,
+		CancelValues: []string{"q", "quit", "cancel"},
+		ParsePlain: func(value string) (terminalexperience.InteractionAnswer, error) {
+			return parseZipSelection(value, options)
+		},
+	}
+	if len(options) > 0 {
+		request.HasDefault = true
+		request.Default = terminalexperience.InteractionAnswer{Value: options[0].Value}
+	}
+	return request
+}
+
+func zipInteractionOptions(choices []zipcommand.PlanningChoice) []terminalexperience.InteractionOption {
+	options := make([]terminalexperience.InteractionOption, 0, len(choices))
+	for _, choice := range choices {
+		options = append(options, terminalexperience.InteractionOption{
+			Label:       choice.Label,
+			Value:       choice.Value,
+			Description: choice.Hint,
+		})
+	}
+	return options
+}
+
+func terminalZipDocument(session terminalexperience.Session, text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
+	if session.Kind != terminalexperience.RichInteractive {
+		role = terminalexperience.VisualRolePlain
+	}
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
+}
+
+func parseZipSelection(value string, options []terminalexperience.InteractionOption) (terminalexperience.InteractionAnswer, error) {
+	index, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || index < 1 || index > len(options) {
+		return terminalexperience.InteractionAnswer{}, errors.New("Invalid selection")
+	}
+	return terminalexperience.InteractionAnswer{Value: options[index-1].Value}, nil
+}
+
+func parseZipGlob(value string, options []terminalexperience.InteractionOption, initialValues []string) (terminalexperience.InteractionAnswer, error) {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "all") || strings.EqualFold(value, "none") {
+		return terminalexperience.InteractionAnswer{Values: append([]string(nil), initialValues...)}, nil
+	}
+	indices, valid := parseZipIndices(value, len(options))
+	if !valid {
+		return terminalexperience.InteractionAnswer{}, errors.New("Invalid selection")
+	}
+	values := make([]string, 0, len(indices))
+	for _, index := range indices {
+		values = append(values, options[index].Value)
+	}
+	return terminalexperience.InteractionAnswer{Values: values}, nil
+}
+
+func parseZipOutput(value, initialValue string) terminalexperience.InteractionAnswer {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		value = initialValue
+	}
+	return terminalexperience.InteractionAnswer{Value: value}
 }
 
 func parseZipIndices(value string, optionCount int) ([]int, bool) {
@@ -234,33 +340,4 @@ func zipRevealCommand(goos, path string) (string, []string, error) {
 	default:
 		return "", nil, errors.New("archive reveal is not supported on this platform")
 	}
-}
-
-type terminalZipPresenter struct {
-	output io.Writer
-}
-
-func (presenter terminalZipPresenter) Intro() {
-	_, _ = fmt.Fprintln(presenter.output, "HACKYCY CLI")
-	_, _ = fmt.Fprintln(presenter.output)
-	_, _ = fmt.Fprintln(presenter.output, "Zip Directory")
-}
-
-func (presenter terminalZipPresenter) Note(note zipcommand.PlanningNote) {
-	_, _ = fmt.Fprintln(presenter.output, note.Title)
-	for _, line := range note.Lines {
-		_, _ = fmt.Fprintln(presenter.output, line)
-	}
-}
-
-func (presenter terminalZipPresenter) Progress(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
-}
-
-func (presenter terminalZipPresenter) Cancel(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
-}
-
-func (presenter terminalZipPresenter) Outro(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
 }

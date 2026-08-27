@@ -1,10 +1,9 @@
 package main
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"fmt"
-	"io"
 	"os"
 	"strconv"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	"github.com/hackycy/hackycy-cli/internal/commands/tunnel"
 	"github.com/hackycy/hackycy-cli/internal/logging"
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 )
 
 func newTunnelServerHandler(logger logging.Logger) cliapp.TunnelServerHandler {
@@ -22,7 +22,7 @@ func newTunnelServerHandler(logger logging.Logger) cliapp.TunnelServerHandler {
 	}
 }
 
-func newTunnelConnectHandler(input io.Reader, output io.Writer, logger logging.Logger, ycyVersion string) cliapp.TunnelConnectHandler {
+func newTunnelConnectHandler(experience *terminalexperience.Runtime, logger logging.Logger, ycyVersion string) cliapp.TunnelConnectHandler {
 	return func(ctx context.Context, optionInput tunnel.ClientOptionInput) error {
 		store, err := appconfig.New(appconfig.Dependencies{})
 		if err != nil {
@@ -32,7 +32,7 @@ func newTunnelConnectHandler(input io.Reader, output io.Writer, logger logging.L
 			Reader:           store,
 			Environment:      os.LookupEnv,
 			DefaultServer:    tunnel.DefaultTunnelServer,
-			SelectConnection: terminalTunnelConnectionSelectorFor(input, output),
+			SelectConnection: terminalTunnelConnectionSelectorFor(experience),
 		})
 		if err != nil {
 			logger.Error("Could not resolve tunnel client configuration", map[string]any{"error": err.Error()})
@@ -56,58 +56,73 @@ func newTunnelConnectHandler(input io.Reader, output io.Writer, logger logging.L
 	}
 }
 
-func terminalTunnelConnectionSelectorFor(input io.Reader, output io.Writer) tunnel.ClientConnectionSelector {
-	inputFile, inputIsFile := input.(*os.File)
-	outputFile, outputIsFile := output.(*os.File)
-	if !inputIsFile || !outputIsFile || !terminal(inputFile) || !terminal(outputFile) {
+func terminalTunnelConnectionSelectorFor(experience *terminalexperience.Runtime) tunnel.ClientConnectionSelector {
+	if experience.Session().Kind == terminalexperience.Automation {
 		return nil
 	}
-	selector := newTerminalTunnelConnectionSelector(input, output)
-	return selector.Select
+	return func(ctx context.Context, connections []appconfig.TunnelConnection) (string, bool, error) {
+		run := experience.Open(ctx)
+		defer run.Close()
+		return newTerminalTunnelConnectionAdapter(run, experience.Session()).Select(ctx, connections)
+	}
 }
 
-type terminalTunnelConnectionSelector struct {
-	input  *bufio.Reader
-	output io.Writer
+type terminalTunnelConnectionAdapter struct {
+	run     terminalexperience.ExperienceRun
+	session terminalexperience.Session
 }
 
-func newTerminalTunnelConnectionSelector(input io.Reader, output io.Writer) *terminalTunnelConnectionSelector {
-	return &terminalTunnelConnectionSelector{input: bufio.NewReader(input), output: output}
+func newTerminalTunnelConnectionAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalTunnelConnectionAdapter {
+	return &terminalTunnelConnectionAdapter{run: run, session: session}
 }
 
-func (selector *terminalTunnelConnectionSelector) Select(ctx context.Context, connections []appconfig.TunnelConnection) (string, bool, error) {
-	if err := ctx.Err(); err != nil {
+func (adapter *terminalTunnelConnectionAdapter) Select(_ context.Context, connections []appconfig.TunnelConnection) (string, bool, error) {
+	answer, err := adapter.run.Ask(terminalexperience.InteractionRequest{
+		Kind:         terminalexperience.InteractionSelect,
+		Message:      "Select a tunnel connection",
+		PlainLead:    "Select a tunnel connection",
+		PlainPrompt:  "> ",
+		Options:      tunnelConnectionInteractionOptions(connections),
+		CancelValues: []string{"", "q", "quit", "cancel"},
+		ParsePlain: func(value string) (terminalexperience.InteractionAnswer, error) {
+			return parseTunnelConnectionSelection(value, connections)
+		},
+	})
+	if errors.Is(err, terminalexperience.ErrInteractionCancelled) {
+		_ = adapter.run.Present(terminalTunnelConnectionDocument(adapter.session, "Cancelled"))
+		return "", true, nil
+	}
+	if err != nil {
 		return "", false, err
 	}
-	_, _ = fmt.Fprintln(selector.output, "Select a tunnel connection")
-	for index, connection := range connections {
-		_, _ = fmt.Fprintf(selector.output, "%d) %s  %s\n", index+1, connection.Server, maskTunnelToken(connection.Token))
-	}
-	for {
-		if err := ctx.Err(); err != nil {
-			return "", false, err
-		}
-		_, _ = fmt.Fprint(selector.output, "> ")
-		line, err := selector.input.ReadString('\n')
-		value := strings.TrimSpace(line)
-		if value == "" || isTunnelSelectionCancellation(value) {
-			_, _ = fmt.Fprintln(selector.output, "Cancelled")
-			return "", true, nil
-		}
-		index, parseErr := strconv.Atoi(value)
-		if parseErr == nil && index >= 1 && index <= len(connections) {
-			return connections[index-1].ID, false, nil
-		}
-		if err != nil {
-			_, _ = fmt.Fprintln(selector.output, "Cancelled")
-			return "", true, nil
-		}
-		_, _ = fmt.Fprintln(selector.output, "Invalid selection")
-	}
+	return answer.Value, false, nil
 }
 
-func isTunnelSelectionCancellation(value string) bool {
-	return strings.EqualFold(value, "q") || strings.EqualFold(value, "quit") || strings.EqualFold(value, "cancel")
+func tunnelConnectionInteractionOptions(connections []appconfig.TunnelConnection) []terminalexperience.InteractionOption {
+	options := make([]terminalexperience.InteractionOption, 0, len(connections))
+	for _, connection := range connections {
+		options = append(options, terminalexperience.InteractionOption{
+			Label: fmt.Sprintf("%s  %s", connection.Server, maskTunnelToken(connection.Token)),
+			Value: connection.ID,
+		})
+	}
+	return options
+}
+
+func parseTunnelConnectionSelection(value string, connections []appconfig.TunnelConnection) (terminalexperience.InteractionAnswer, error) {
+	index, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || index < 1 || index > len(connections) {
+		return terminalexperience.InteractionAnswer{}, errors.New("Invalid selection")
+	}
+	return terminalexperience.InteractionAnswer{Value: connections[index-1].ID}, nil
+}
+
+func terminalTunnelConnectionDocument(session terminalexperience.Session, text string) terminalexperience.PresentationDocument {
+	role := terminalexperience.VisualRolePlain
+	if session.Kind == terminalexperience.RichInteractive {
+		role = terminalexperience.VisualRoleWarning
+	}
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
 }
 
 func maskTunnelToken(token string) string {

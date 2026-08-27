@@ -31,17 +31,20 @@ type AddTextPrompt struct {
 
 // AddPrompter presents the add interaction without coupling the command to a terminal library.
 type AddPrompter interface {
-	Text(AddTextPrompt) (value string, cancelled bool)
-	Password(AddTextPrompt) (value string, cancelled bool)
+	Text(AddTextPrompt) (value string, cancelled bool, err error)
+	Password(AddTextPrompt) (value string, cancelled bool, err error)
 }
 
 // PromptAdd collects the legacy CM profile questions in their observable order.
 func PromptAdd(prompter AddPrompter) (AddInput, bool, error) {
-	name, cancelled := prompter.Text(AddTextPrompt{
+	name, cancelled, err := prompter.Text(AddTextPrompt{
 		Message:     "Profile name",
 		Placeholder: "e.g. openai, deepseek, work",
 		Validate:    validateAddName,
 	})
+	if err != nil {
+		return AddInput{}, false, err
+	}
 	if cancelled {
 		return AddInput{}, true, nil
 	}
@@ -49,11 +52,14 @@ func PromptAdd(prompter AddPrompter) (AddInput, bool, error) {
 		return AddInput{}, false, err
 	}
 
-	baseURL, cancelled := prompter.Text(AddTextPrompt{
+	baseURL, cancelled, err := prompter.Text(AddTextPrompt{
 		Message:     "OpenAI-compatible base URL",
 		Placeholder: "https://api.openai.com/v1",
 		Validate:    validateAddBaseURL,
 	})
+	if err != nil {
+		return AddInput{}, false, err
+	}
 	if cancelled {
 		return AddInput{}, true, nil
 	}
@@ -61,11 +67,14 @@ func PromptAdd(prompter AddPrompter) (AddInput, bool, error) {
 		return AddInput{}, false, err
 	}
 
-	model, cancelled := prompter.Text(AddTextPrompt{
+	model, cancelled, err := prompter.Text(AddTextPrompt{
 		Message:     "Model",
 		Placeholder: "gpt-4.1-mini",
 		Validate:    validateAddModel,
 	})
+	if err != nil {
+		return AddInput{}, false, err
+	}
 	if cancelled {
 		return AddInput{}, true, nil
 	}
@@ -73,10 +82,13 @@ func PromptAdd(prompter AddPrompter) (AddInput, bool, error) {
 		return AddInput{}, false, err
 	}
 
-	apiKey, cancelled := prompter.Password(AddTextPrompt{
+	apiKey, cancelled, err := prompter.Password(AddTextPrompt{
 		Message:  "API key",
 		Validate: validateAddAPIKey,
 	})
+	if err != nil {
+		return AddInput{}, false, err
+	}
 	if cancelled {
 		return AddInput{}, true, nil
 	}

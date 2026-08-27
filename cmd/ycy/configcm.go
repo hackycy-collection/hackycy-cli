@@ -4,25 +4,12 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
 	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	configcm "github.com/hackycy/hackycy-cli/internal/commands/config/cm"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 )
-
-type terminalCMPresenter struct {
-	output io.Writer
-}
-
-func (presenter terminalCMPresenter) Cancel(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
-}
-
-func (presenter terminalCMPresenter) Success(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
-}
 
 func newConfigCMListHandler(experience *terminalexperience.Runtime) cliapp.ConfigCMListHandler {
 	return func(context context.Context, input configcm.Input) (configcm.Result, error) {
@@ -98,16 +85,22 @@ func terminalCMListRow(profile configcm.Profile) string {
 	return fmt.Sprintf("%s %s %s %s", marker, profile.Name, profile.Model, profile.BaseURL)
 }
 
-func newConfigCMAddHandler(input io.Reader, output io.Writer) cliapp.ConfigCMAddHandler {
+func newConfigCMAddHandler(experience *terminalexperience.Runtime) cliapp.ConfigCMAddHandler {
 	return func(context context.Context, request configcm.AddRequest) (configcm.AddResult, error) {
+		if experience.Session().Kind == terminalexperience.Automation {
+			return configcm.AddResult{}, errConfigCMAddRequiresInteractive
+		}
 		store, err := appconfig.New(appconfig.Dependencies{})
 		if err != nil {
 			return configcm.AddResult{}, err
 		}
+		run := experience.Open(context)
+		defer run.Close()
+		adapter := newTerminalCMAddAdapter(run, experience.Session())
 		module, err := configcm.NewAdd(configcm.AddDependencies{
-			Prompter:  newTerminalCMAddPrompter(input, output),
+			Prompter:  adapter,
 			Writer:    store,
-			Presenter: terminalCMPresenter{output: output},
+			Presenter: adapter,
 		})
 		if err != nil {
 			return configcm.AddResult{}, err
@@ -186,16 +179,20 @@ func terminalCMSetDocument(session terminalexperience.Session, result configcm.S
 	}}}
 }
 
-func newConfigCMRemoveHandler(input io.Reader, output io.Writer) cliapp.ConfigCMRemoveHandler {
+func newConfigCMRemoveHandler(experience *terminalexperience.Runtime) cliapp.ConfigCMRemoveHandler {
 	return func(context context.Context, request configcm.RemoveRequest) (configcm.RemoveResult, error) {
 		store, err := appconfig.New(appconfig.Dependencies{})
 		if err != nil {
 			return configcm.RemoveResult{}, err
 		}
+		run := experience.Open(context)
+		defer run.Close()
+		adapter := newTerminalCMRemoveAdapter(run, experience.Session())
 		module, err := configcm.NewRemove(configcm.RemoveDependencies{
-			Prompter:  newTerminalCMRemovePrompter(input, output),
+			Reader:    store,
+			Prompter:  adapter,
 			Writer:    store,
-			Presenter: terminalCMPresenter{output: output},
+			Presenter: adapter,
 		})
 		if err != nil {
 			return configcm.RemoveResult{}, err

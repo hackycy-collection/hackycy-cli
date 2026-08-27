@@ -1,6 +1,7 @@
 package rm
 
 import (
+	"errors"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -10,10 +11,10 @@ func TestSelectExplicitTargetsUsesDefaultNegativeConfirmationAndForceBypass(t *t
 	targets := []string{"/tmp/one", "/tmp/two"}
 	prompter := &scriptedPrompter{confirmed: true}
 
-	selected, cancelled := selectExplicitTargets(targets, false, prompter)
+	selected, cancelled, err := selectExplicitTargets(targets, false, prompter)
 
-	if cancelled || !reflect.DeepEqual(selected, targets) {
-		t.Fatalf("selected explicit targets = (%#v, %t), want (%#v, false)", selected, cancelled, targets)
+	if err != nil || cancelled || !reflect.DeepEqual(selected, targets) {
+		t.Fatalf("selected explicit targets = (%#v, %t, %v), want (%#v, false, nil)", selected, cancelled, err, targets)
 	}
 	wantPrompt := ExplicitConfirmationPrompt{Message: "Delete 2 items?", Initial: false}
 	if !reflect.DeepEqual(prompter.explicitPrompt, wantPrompt) {
@@ -21,9 +22,9 @@ func TestSelectExplicitTargetsUsesDefaultNegativeConfirmationAndForceBypass(t *t
 	}
 
 	forcePrompter := &scriptedPrompter{}
-	selected, cancelled = selectExplicitTargets([]string{"/tmp/one"}, true, forcePrompter)
-	if cancelled || !reflect.DeepEqual(selected, []string{"/tmp/one"}) || forcePrompter.explicitCalls != 0 {
-		t.Fatalf("forced explicit targets = (%#v, %t), calls = %d", selected, cancelled, forcePrompter.explicitCalls)
+	selected, cancelled, err = selectExplicitTargets([]string{"/tmp/one"}, true, forcePrompter)
+	if err != nil || cancelled || !reflect.DeepEqual(selected, []string{"/tmp/one"}) || forcePrompter.explicitCalls != 0 {
+		t.Fatalf("forced explicit targets = (%#v, %t, %v), calls = %d", selected, cancelled, err, forcePrompter.explicitCalls)
 	}
 }
 
@@ -37,9 +38,9 @@ func TestSelectExplicitTargetsTreatsDeclineAndCancellationAsCancellation(t *test
 		{name: "cancelled", prompter: scriptedPrompter{confirmCancelled: true}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			selected, cancelled := selectExplicitTargets([]string{"/tmp/one"}, false, &testCase.prompter)
-			if !cancelled || len(selected) != 0 || testCase.prompter.explicitCalls != 1 {
-				t.Fatalf("selected explicit targets = (%#v, %t), calls = %d", selected, cancelled, testCase.prompter.explicitCalls)
+			selected, cancelled, err := selectExplicitTargets([]string{"/tmp/one"}, false, &testCase.prompter)
+			if err != nil || !cancelled || len(selected) != 0 || testCase.prompter.explicitCalls != 1 {
+				t.Fatalf("selected explicit targets = (%#v, %t, %v), calls = %d", selected, cancelled, err, testCase.prompter.explicitCalls)
 			}
 			if testCase.prompter.explicitPrompt.Message != "Delete 1 item?" {
 				t.Fatalf("singular prompt = %#v", testCase.prompter.explicitPrompt)
@@ -51,18 +52,18 @@ func TestSelectExplicitTargetsTreatsDeclineAndCancellationAsCancellation(t *test
 func TestSelectSmartActionPresentsAllActionsAndReturnsCancellation(t *testing.T) {
 	prompter := &scriptedPrompter{action: smartActions[3]}
 
-	action, cancelled := selectSmartAction(prompter)
+	action, cancelled, err := selectSmartAction(prompter)
 
-	if cancelled || action != smartActions[3] {
-		t.Fatalf("smart action = (%#v, %t), want (%#v, false)", action, cancelled, smartActions[3])
+	if err != nil || cancelled || action != smartActions[3] {
+		t.Fatalf("smart action = (%#v, %t, %v), want (%#v, false, nil)", action, cancelled, err, smartActions[3])
 	}
 	wantPrompt := SmartActionPrompt{Message: "Select a clean action", Options: smartActions}
 	if !reflect.DeepEqual(prompter.actionPrompt, wantPrompt) {
 		t.Fatalf("action prompt = %#v, want %#v", prompter.actionPrompt, wantPrompt)
 	}
 
-	_, cancelled = selectSmartAction(&scriptedPrompter{actionCancelled: true})
-	if !cancelled {
+	_, cancelled, err = selectSmartAction(&scriptedPrompter{actionCancelled: true})
+	if err != nil || !cancelled {
 		t.Fatal("cancelled smart action = false, want true")
 	}
 }
@@ -115,6 +116,20 @@ func TestSelectSmartTargetsKeepsEmptySelectionDistinctFromCancellation(t *testin
 	}
 }
 
+func TestSelectionReturnsInteractionFailuresWithoutChangingThePromptOutcome(t *testing.T) {
+	failure := errors.New("interactive terminal unavailable")
+	prompter := &scriptedPrompter{err: failure}
+	if _, cancelled, err := selectExplicitTargets([]string{"/tmp/one"}, false, prompter); cancelled || !errors.Is(err, failure) {
+		t.Fatalf("explicit selection = (cancelled=%t, err=%v)", cancelled, err)
+	}
+	if _, cancelled, err := selectSmartAction(prompter); cancelled || !errors.Is(err, failure) {
+		t.Fatalf("smart action = (cancelled=%t, err=%v)", cancelled, err)
+	}
+	if _, cancelled, err := selectSmartTargets(t.TempDir(), []string{"/tmp/one"}, false, prompter); cancelled || !errors.Is(err, failure) {
+		t.Fatalf("smart targets = (cancelled=%t, err=%v)", cancelled, err)
+	}
+}
+
 type scriptedPrompter struct {
 	confirmed        bool
 	confirmCancelled bool
@@ -122,6 +137,7 @@ type scriptedPrompter struct {
 	actionCancelled  bool
 	targets          []string
 	targetsCancelled bool
+	err              error
 
 	explicitPrompt ExplicitConfirmationPrompt
 	actionPrompt   SmartActionPrompt
@@ -130,19 +146,19 @@ type scriptedPrompter struct {
 	targetCalls    int
 }
 
-func (prompter *scriptedPrompter) ConfirmExplicit(prompt ExplicitConfirmationPrompt) (bool, bool) {
+func (prompter *scriptedPrompter) ConfirmExplicit(prompt ExplicitConfirmationPrompt) (bool, bool, error) {
 	prompter.explicitCalls++
 	prompter.explicitPrompt = prompt
-	return prompter.confirmed, prompter.confirmCancelled
+	return prompter.confirmed, prompter.confirmCancelled, prompter.err
 }
 
-func (prompter *scriptedPrompter) SelectSmartAction(prompt SmartActionPrompt) (SmartAction, bool) {
+func (prompter *scriptedPrompter) SelectSmartAction(prompt SmartActionPrompt) (SmartAction, bool, error) {
 	prompter.actionPrompt = prompt
-	return prompter.action, prompter.actionCancelled
+	return prompter.action, prompter.actionCancelled, prompter.err
 }
 
-func (prompter *scriptedPrompter) SelectSmartTargets(prompt SmartTargetPrompt) ([]string, bool) {
+func (prompter *scriptedPrompter) SelectSmartTargets(prompt SmartTargetPrompt) ([]string, bool, error) {
 	prompter.targetCalls++
 	prompter.targetPrompt = prompt
-	return prompter.targets, prompter.targetsCancelled
+	return prompter.targets, prompter.targetsCancelled, prompter.err
 }

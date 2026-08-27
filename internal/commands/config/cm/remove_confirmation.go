@@ -9,7 +9,7 @@ type RemoveConfirmPrompt struct {
 
 // RemoveConfirmationPrompter confirms one requested CM profile removal.
 type RemoveConfirmationPrompter interface {
-	Confirm(RemoveConfirmPrompt) (confirmed bool, cancelled bool)
+	Confirm(RemoveConfirmPrompt) (confirmed bool, cancelled bool, err error)
 }
 
 // RemoveConfirmation records the read-only decision before a CM profile deletion.
@@ -22,13 +22,16 @@ const (
 )
 
 // ConfirmRemove asks for the legacy CM profile removal confirmation without mutating configuration.
-func ConfirmRemove(name string, prompter RemoveConfirmationPrompter) RemoveConfirmation {
-	confirmed, cancelled := prompter.Confirm(RemoveConfirmPrompt{Message: fmt.Sprintf("Remove CM profile \"%s\"?", name)})
+func ConfirmRemove(name string, prompter RemoveConfirmationPrompter) (RemoveConfirmation, error) {
+	confirmed, cancelled, err := prompter.Confirm(RemoveConfirmPrompt{Message: fmt.Sprintf("Remove CM profile \"%s\"?", name)})
+	if err != nil {
+		return RemoveDeclined, err
+	}
 	if cancelled {
-		return RemoveConfirmationCancelled
+		return RemoveConfirmationCancelled, nil
 	}
 	if !confirmed {
-		return RemoveDeclined
+		return RemoveDeclined, nil
 	}
-	return RemoveConfirmed
+	return RemoveConfirmed, nil
 }

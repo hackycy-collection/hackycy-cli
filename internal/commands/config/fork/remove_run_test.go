@@ -160,16 +160,18 @@ func (reader removeRunReader) ListForkInstances() ([]appconfig.ForkInstance, err
 type removeRunPrompter struct {
 	selection     string
 	selectCancel  bool
+	selectErr     error
 	confirmed     bool
 	confirmCancel bool
+	confirmErr    error
 }
 
-func (prompter *removeRunPrompter) Select(SelectPrompt) (string, bool) {
-	return prompter.selection, prompter.selectCancel
+func (prompter *removeRunPrompter) Select(SelectPrompt) (string, bool, error) {
+	return prompter.selection, prompter.selectCancel, prompter.selectErr
 }
 
-func (prompter *removeRunPrompter) Confirm(ConfirmPrompt) (bool, bool) {
-	return prompter.confirmed, prompter.confirmCancel
+func (prompter *removeRunPrompter) Confirm(ConfirmPrompt) (bool, bool, error) {
+	return prompter.confirmed, prompter.confirmCancel, prompter.confirmErr
 }
 
 type removeRunWriter struct {

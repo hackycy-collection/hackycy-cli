@@ -188,20 +188,20 @@ type cancellingPrompter struct {
 	cancelAfterSmartPaths func()
 }
 
-func (prompter *cancellingPrompter) ConfirmExplicit(prompt ExplicitConfirmationPrompt) (bool, bool) {
-	confirmed, cancelled := prompter.scriptedPrompter.ConfirmExplicit(prompt)
+func (prompter *cancellingPrompter) ConfirmExplicit(prompt ExplicitConfirmationPrompt) (bool, bool, error) {
+	confirmed, cancelled, err := prompter.scriptedPrompter.ConfirmExplicit(prompt)
 	if prompter.cancelAfterExplicit != nil {
 		prompter.cancelAfterExplicit()
 	}
-	return confirmed, cancelled
+	return confirmed, cancelled, err
 }
 
-func (prompter *cancellingPrompter) SelectSmartTargets(prompt SmartTargetPrompt) ([]string, bool) {
-	targets, cancelled := prompter.scriptedPrompter.SelectSmartTargets(prompt)
+func (prompter *cancellingPrompter) SelectSmartTargets(prompt SmartTargetPrompt) ([]string, bool, error) {
+	targets, cancelled, err := prompter.scriptedPrompter.SelectSmartTargets(prompt)
 	if prompter.cancelAfterSmartPaths != nil {
 		prompter.cancelAfterSmartPaths()
 	}
-	return targets, cancelled
+	return targets, cancelled, err
 }
 
 func containsEvent(events []string, target string) bool {

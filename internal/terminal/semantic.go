@@ -33,14 +33,20 @@ type InteractionAnswer struct {
 
 // InteractionRequest describes command intent without choosing a prompt toolkit.
 type InteractionRequest struct {
-	Kind        InteractionKind
-	Message     string
-	Description string
-	Placeholder string
-	Options     []InteractionOption
-	Default     InteractionAnswer
-	HasDefault  bool
-	Validate    func(InteractionAnswer) error
+	Kind         InteractionKind
+	Message      string
+	Description  string
+	Placeholder  string
+	Options      []InteractionOption
+	Default      InteractionAnswer
+	HasDefault   bool
+	CancelValues []string
+	PlainLead    string
+	PlainPrompt  string
+	// ParsePlain preserves a command-owned established Plain Interactive input grammar.
+	// It is not used by Rich Interactive forms or Automation Sessions.
+	ParsePlain func(string) (InteractionAnswer, error)
+	Validate   func(InteractionAnswer) error
 }
 
 // VisualRole identifies the semantic meaning of presentation text.

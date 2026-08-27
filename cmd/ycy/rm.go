@@ -1,177 +1,257 @@
 package main
 
 import (
-	"bufio"
-	"fmt"
-	"io"
+	"context"
+	"errors"
 	"os"
 	"strconv"
 	"strings"
 
+	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	rmcommand "github.com/hackycy/hackycy-cli/internal/commands/rm"
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 )
 
-func newRMModule(input io.Reader, output io.Writer) (*rmcommand.Module, error) {
-	return rmcommand.New(rmcommand.Dependencies{
-		WorkingDirectory: os.Getwd,
-		Prompter:         newTerminalRMPrompter(input, output),
-		Remover:          osRMRemover{},
-		Presenter:        terminalRMPresenter{output: output},
+var errRMRequiresInteractive = errors.New("rm requires an interactive terminal")
+
+func newRMHandler(experience *terminalexperience.Runtime) cliapp.RmHandler {
+	return func(ctx context.Context, input rmcommand.Input) (rmcommand.Result, error) {
+		run := experience.Open(ctx)
+		defer run.Close()
+		adapter := newTerminalRMAdapter(run, experience.Session())
+		module, err := rmcommand.New(rmcommand.Dependencies{
+			WorkingDirectory: os.Getwd,
+			Prompter:         adapter,
+			Remover:          osRMRemover{},
+			Presenter:        adapter,
+		})
+		if err != nil {
+			return rmcommand.Result{}, err
+		}
+		result, err := module.Run(ctx, input)
+		if err != nil {
+			return rmcommand.Result{}, err
+		}
+		if err := adapter.Flush(); err != nil {
+			return rmcommand.Result{}, err
+		}
+		return result, nil
+	}
+}
+
+type terminalRMAdapter struct {
+	run     terminalexperience.ExperienceRun
+	session terminalexperience.Session
+	pending []terminalexperience.PresentationDocument
+}
+
+func newTerminalRMAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalRMAdapter {
+	return &terminalRMAdapter{run: run, session: session}
+}
+
+func (adapter *terminalRMAdapter) ConfirmExplicit(prompt rmcommand.ExplicitConfirmationPrompt) (bool, bool, error) {
+	answer, cancelled, err := adapter.ask(terminalexperience.InteractionRequest{
+		Kind:        terminalexperience.InteractionConfirm,
+		Message:     prompt.Message,
+		HasDefault:  true,
+		Default:     terminalexperience.InteractionAnswer{Confirmed: prompt.Initial},
+		PlainPrompt: prompt.Message + " [y/N]: ",
+		ParsePlain:  parseRMConfirmation,
 	})
+	return answer.Confirmed, cancelled, err
 }
 
-type terminalRMPrompter struct {
-	input  *bufio.Reader
-	output io.Writer
-}
-
-func newTerminalRMPrompter(input io.Reader, output io.Writer) *terminalRMPrompter {
-	return &terminalRMPrompter{input: bufio.NewReader(input), output: output}
-}
-
-func (prompter *terminalRMPrompter) ConfirmExplicit(prompt rmcommand.ExplicitConfirmationPrompt) (bool, bool) {
-	for {
-		_, _ = fmt.Fprintf(prompter.output, "%s [y/N]: ", prompt.Message)
-		value, eof := prompter.readLine()
-		if eof && value == "" {
-			return false, true
+func (adapter *terminalRMAdapter) SelectSmartAction(prompt rmcommand.SmartActionPrompt) (rmcommand.SmartAction, bool, error) {
+	request := terminalexperience.InteractionRequest{
+		Kind:         terminalexperience.InteractionSelect,
+		Message:      prompt.Message,
+		PlainLead:    prompt.Message,
+		PlainPrompt:  "> ",
+		Options:      rmSmartActionOptions(prompt.Options),
+		CancelValues: []string{"q", "quit", "cancel"},
+		ParsePlain: func(value string) (terminalexperience.InteractionAnswer, error) {
+			return parseRMSmartAction(value, prompt.Options)
+		},
+	}
+	if len(prompt.Options) > 0 {
+		request.HasDefault = true
+		request.Default = terminalexperience.InteractionAnswer{Value: prompt.Options[0].ID}
+	}
+	answer, cancelled, err := adapter.ask(request)
+	if err != nil || cancelled {
+		return rmcommand.SmartAction{}, cancelled, err
+	}
+	for _, option := range prompt.Options {
+		if option.ID == answer.Value {
+			return option, false, nil
 		}
-		switch strings.ToLower(value) {
-		case "y", "yes":
-			return true, false
-		case "", "n", "no":
-			return false, false
-		default:
-			_, _ = fmt.Fprintln(prompter.output, "Invalid confirmation")
-			if eof {
-				return false, true
-			}
+	}
+	return rmcommand.SmartAction{}, false, errors.New("invalid selection")
+}
+
+func (adapter *terminalRMAdapter) SelectSmartTargets(prompt rmcommand.SmartTargetPrompt) ([]string, bool, error) {
+	answer, cancelled, err := adapter.ask(terminalexperience.InteractionRequest{
+		Kind:         terminalexperience.InteractionMultiSelect,
+		Message:      prompt.Message,
+		PlainLead:    prompt.Message,
+		PlainPrompt:  "> ",
+		Options:      rmSmartTargetOptions(prompt.Options),
+		HasDefault:   true,
+		Default:      terminalexperience.InteractionAnswer{Values: append([]string(nil), prompt.InitialValues...)},
+		CancelValues: []string{"q", "quit", "cancel"},
+		ParsePlain: func(value string) (terminalexperience.InteractionAnswer, error) {
+			return parseRMSmartTargets(value, prompt)
+		},
+	})
+	if err != nil || cancelled {
+		return nil, cancelled, err
+	}
+	return append([]string{}, answer.Values...), false, nil
+}
+
+func (adapter *terminalRMAdapter) Intro(message string) {
+	if adapter.session.Kind == terminalexperience.RichInteractive {
+		adapter.present(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
+			{Role: terminalexperience.VisualRoleTitle, Text: "HACKYCY CLI"},
+			{Role: terminalexperience.VisualRoleActive, Text: message},
+		}})
+		return
+	}
+	adapter.present(terminalRMDocument(adapter.session, "HACKYCY CLI\n\n"+message, terminalexperience.VisualRolePlain))
+}
+
+func (adapter *terminalRMAdapter) Paths(paths []string) {
+	var text strings.Builder
+	text.WriteByte('\n')
+	for _, path := range paths {
+		text.WriteString("  ")
+		text.WriteString(path)
+		text.WriteByte('\n')
+	}
+	text.WriteByte('\n')
+	adapter.present(terminalRMDocument(adapter.session, text.String(), terminalexperience.VisualRoleMuted))
+}
+
+func (adapter *terminalRMAdapter) Notice(message string) {
+	adapter.present(terminalRMDocument(adapter.session, message, terminalexperience.VisualRoleWarning))
+}
+
+func (adapter *terminalRMAdapter) ProgressStart(message string) {
+	adapter.present(terminalRMDocument(adapter.session, message, terminalexperience.VisualRoleActive))
+}
+
+func (adapter *terminalRMAdapter) ProgressStop(message string) {
+	adapter.present(terminalRMDocument(adapter.session, message, terminalexperience.VisualRoleMuted))
+}
+
+func (adapter *terminalRMAdapter) Cancel(message string) {
+	adapter.present(terminalRMDocument(adapter.session, message, terminalexperience.VisualRoleWarning))
+}
+
+func (adapter *terminalRMAdapter) Outro(message string) {
+	adapter.present(terminalRMDocument(adapter.session, message, terminalexperience.VisualRoleSuccess))
+}
+
+func (adapter *terminalRMAdapter) Flush() error {
+	if adapter.session.Kind != terminalexperience.Automation {
+		return nil
+	}
+	for _, document := range adapter.pending {
+		if err := adapter.run.Present(document); err != nil {
+			return err
 		}
+	}
+	adapter.pending = nil
+	return nil
+}
+
+func (adapter *terminalRMAdapter) ask(request terminalexperience.InteractionRequest) (terminalexperience.InteractionAnswer, bool, error) {
+	answer, err := adapter.run.Ask(request)
+	if errors.Is(err, terminalexperience.ErrInteractionCancelled) || errors.Is(err, context.Canceled) {
+		return terminalexperience.InteractionAnswer{}, true, nil
+	}
+	if errors.Is(err, terminalexperience.ErrAutomationInteraction) {
+		return terminalexperience.InteractionAnswer{}, false, errRMRequiresInteractive
+	}
+	if err != nil {
+		return terminalexperience.InteractionAnswer{}, false, err
+	}
+	return answer, false, nil
+}
+
+func (adapter *terminalRMAdapter) present(document terminalexperience.PresentationDocument) {
+	if adapter.session.Kind == terminalexperience.Automation {
+		adapter.pending = append(adapter.pending, document)
+		return
+	}
+	_ = adapter.run.Present(document)
+}
+
+func terminalRMDocument(session terminalexperience.Session, text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
+	if session.Kind != terminalexperience.RichInteractive {
+		role = terminalexperience.VisualRolePlain
+	}
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
+}
+
+func rmSmartActionOptions(actions []rmcommand.SmartAction) []terminalexperience.InteractionOption {
+	options := make([]terminalexperience.InteractionOption, 0, len(actions))
+	for _, action := range actions {
+		options = append(options, terminalexperience.InteractionOption{Label: action.Label, Value: action.ID})
+	}
+	return options
+}
+
+func rmSmartTargetOptions(targets []rmcommand.SmartTargetChoice) []terminalexperience.InteractionOption {
+	options := make([]terminalexperience.InteractionOption, 0, len(targets))
+	for _, target := range targets {
+		options = append(options, terminalexperience.InteractionOption{Label: target.Label, Value: target.Value})
+	}
+	return options
+}
+
+func parseRMConfirmation(value string) (terminalexperience.InteractionAnswer, error) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "y", "yes":
+		return terminalexperience.InteractionAnswer{Confirmed: true}, nil
+	case "n", "no":
+		return terminalexperience.InteractionAnswer{Confirmed: false}, nil
+	default:
+		return terminalexperience.InteractionAnswer{}, errors.New("Invalid confirmation")
 	}
 }
 
-func (prompter *terminalRMPrompter) SelectSmartAction(prompt rmcommand.SmartActionPrompt) (rmcommand.SmartAction, bool) {
-	_, _ = fmt.Fprintln(prompter.output, prompt.Message)
-	for index, option := range prompt.Options {
-		_, _ = fmt.Fprintf(prompter.output, "%d) %s\n", index+1, option.Label)
+func parseRMSmartAction(value string, actions []rmcommand.SmartAction) (terminalexperience.InteractionAnswer, error) {
+	index, err := strconv.Atoi(strings.TrimSpace(value))
+	if err != nil || index < 1 || index > len(actions) {
+		return terminalexperience.InteractionAnswer{}, errors.New("Invalid selection")
 	}
-	for {
-		_, _ = fmt.Fprint(prompter.output, "> ")
-		value, eof := prompter.readLine()
-		if eof && value == "" {
-			return rmcommand.SmartAction{}, true
-		}
-		if isRMCancellation(value) {
-			return rmcommand.SmartAction{}, true
-		}
-		if value == "" && len(prompt.Options) > 0 {
-			return prompt.Options[0], false
-		}
-		index, err := strconv.Atoi(value)
-		if err == nil && index >= 1 && index <= len(prompt.Options) {
-			return prompt.Options[index-1], false
-		}
-		if eof {
-			return rmcommand.SmartAction{}, true
-		}
-		_, _ = fmt.Fprintln(prompter.output, "Invalid selection")
-	}
+	return terminalexperience.InteractionAnswer{Value: actions[index-1].ID}, nil
 }
 
-func (prompter *terminalRMPrompter) SelectSmartTargets(prompt rmcommand.SmartTargetPrompt) ([]string, bool) {
-	_, _ = fmt.Fprintln(prompter.output, prompt.Message)
-	for index, option := range prompt.Options {
-		_, _ = fmt.Fprintf(prompter.output, "%d) %s\n", index+1, option.Label)
+func parseRMSmartTargets(value string, prompt rmcommand.SmartTargetPrompt) (terminalexperience.InteractionAnswer, error) {
+	value = strings.TrimSpace(value)
+	if strings.EqualFold(value, "all") {
+		return terminalexperience.InteractionAnswer{Values: append([]string(nil), prompt.InitialValues...)}, nil
 	}
-	for {
-		_, _ = fmt.Fprint(prompter.output, "> ")
-		value, eof := prompter.readLine()
-		if eof && value == "" {
-			return nil, true
-		}
-		if isRMCancellation(value) {
-			return nil, true
-		}
-		if value == "" || strings.EqualFold(value, "all") {
-			return append([]string(nil), prompt.InitialValues...), false
-		}
-		if strings.EqualFold(value, "none") {
-			return []string{}, false
-		}
-		selected, valid := selectRMTargetIndexes(value, prompt.Options)
-		if valid {
-			return selected, false
-		}
-		if eof {
-			return nil, true
-		}
-		_, _ = fmt.Fprintln(prompter.output, "Invalid selection")
+	if strings.EqualFold(value, "none") {
+		return terminalexperience.InteractionAnswer{Values: []string{}}, nil
 	}
-}
-
-func (prompter *terminalRMPrompter) readLine() (string, bool) {
-	line, err := prompter.input.ReadString('\n')
-	return strings.TrimSpace(line), err != nil
-}
-
-func selectRMTargetIndexes(value string, options []rmcommand.SmartTargetChoice) ([]string, bool) {
-	selected := make([]string, 0, len(options))
-	seen := make(map[int]bool, len(options))
+	selected := make([]string, 0, len(prompt.Options))
+	seen := make(map[int]bool, len(prompt.Options))
 	for _, part := range strings.Split(value, ",") {
 		index, err := strconv.Atoi(strings.TrimSpace(part))
-		if err != nil || index < 1 || index > len(options) || seen[index] {
-			return nil, false
+		if err != nil || index < 1 || index > len(prompt.Options) || seen[index] {
+			return terminalexperience.InteractionAnswer{}, errors.New("Invalid selection")
 		}
 		seen[index] = true
-		selected = append(selected, options[index-1].Value)
+		selected = append(selected, prompt.Options[index-1].Value)
 	}
-	return selected, true
-}
-
-func isRMCancellation(value string) bool {
-	return strings.EqualFold(value, "q") || strings.EqualFold(value, "quit") || strings.EqualFold(value, "cancel")
+	return terminalexperience.InteractionAnswer{Values: selected}, nil
 }
 
 type osRMRemover struct{}
 
 func (osRMRemover) RemovePath(path string) error {
 	return os.RemoveAll(path)
-}
-
-type terminalRMPresenter struct {
-	output io.Writer
-}
-
-func (presenter terminalRMPresenter) Intro(message string) {
-	_, _ = fmt.Fprintln(presenter.output, "HACKYCY CLI")
-	_, _ = fmt.Fprintln(presenter.output)
-	_, _ = fmt.Fprintln(presenter.output, message)
-}
-
-func (presenter terminalRMPresenter) Paths(paths []string) {
-	_, _ = fmt.Fprintln(presenter.output)
-	for _, path := range paths {
-		_, _ = fmt.Fprintf(presenter.output, "  %s\n", path)
-	}
-	_, _ = fmt.Fprintln(presenter.output)
-}
-
-func (presenter terminalRMPresenter) Notice(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
-}
-
-func (presenter terminalRMPresenter) ProgressStart(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
-}
-
-func (presenter terminalRMPresenter) ProgressStop(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
-}
-
-func (presenter terminalRMPresenter) Cancel(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
-}
-
-func (presenter terminalRMPresenter) Outro(message string) {
-	_, _ = fmt.Fprintln(presenter.output, message)
 }

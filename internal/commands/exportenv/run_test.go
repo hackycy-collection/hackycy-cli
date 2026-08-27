@@ -136,6 +136,40 @@ func TestModuleReportsCancellationWithoutReadingOrWriting(t *testing.T) {
 	}
 }
 
+func TestModuleReturnsSelectorFailureWithoutReadingWritingOrPresenting(t *testing.T) {
+	workingDirectory := t.TempDir()
+	if err := os.WriteFile(filepath.Join(workingDirectory, ".env"), []byte("BASE=base\n"), 0o600); err != nil {
+		t.Fatalf("write base environment file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workingDirectory, ".env.production"), []byte("PROD=production\n"), 0o600); err != nil {
+		t.Fatalf("write selected environment file: %v", err)
+	}
+	failure := errors.New("interactive terminal unavailable")
+	selector := &recordingSelector{err: failure}
+	reader := &countingFailureReader{}
+	writer := &countingFailureWriter{}
+	presenter := &recordingPresenter{}
+	module, err := New(Dependencies{
+		WorkingDirectory: func() (string, error) { return workingDirectory, nil },
+		Selector:         selector,
+		Reader:           reader,
+		Writer:           writer,
+		Presenter:        presenter,
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	result, err := module.Run(context.Background(), Input{Output: "output.json"})
+
+	if result != (Result{}) || !errors.Is(err, failure) {
+		t.Fatalf("Run() = (%#v, %v), want selector failure", result, err)
+	}
+	if reader.calls != 0 || writer.calls != 0 || len(presenter.outros) != 0 || len(presenter.printed) != 0 || len(presenter.alerts) != 0 {
+		t.Fatalf("selector failure performed work: reader=%d writer=%d presenter=%#v", reader.calls, writer.calls, presenter)
+	}
+}
+
 func TestModuleReportsOutputTargetBeforeMissingParentFailure(t *testing.T) {
 	workingDirectory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workingDirectory, ".env"), []byte("VALUE=value\n"), 0o600); err != nil {

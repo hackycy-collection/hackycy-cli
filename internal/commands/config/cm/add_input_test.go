@@ -142,6 +142,7 @@ func TestTextPromptValidationFunctionsExposeLegacyMessages(t *testing.T) {
 type cmAddPromptResponse struct {
 	value     string
 	cancelled bool
+	err       error
 }
 
 type scriptedCMAddPrompter struct {
@@ -150,23 +151,23 @@ type scriptedCMAddPrompter struct {
 	calls     []string
 }
 
-func (prompter *scriptedCMAddPrompter) Text(question AddTextPrompt) (string, bool) {
+func (prompter *scriptedCMAddPrompter) Text(question AddTextPrompt) (string, bool, error) {
 	prompter.calls = append(prompter.calls, "text:"+question.Message)
 	prompter.questions = append(prompter.questions, question)
 	return prompter.next()
 }
 
-func (prompter *scriptedCMAddPrompter) Password(question AddTextPrompt) (string, bool) {
+func (prompter *scriptedCMAddPrompter) Password(question AddTextPrompt) (string, bool, error) {
 	prompter.calls = append(prompter.calls, "password:"+question.Message)
 	prompter.questions = append(prompter.questions, question)
 	return prompter.next()
 }
 
-func (prompter *scriptedCMAddPrompter) next() (string, bool) {
+func (prompter *scriptedCMAddPrompter) next() (string, bool, error) {
 	if len(prompter.responses) == 0 {
-		return "", true
+		return "", true, nil
 	}
 	response := prompter.responses[0]
 	prompter.responses = prompter.responses[1:]
-	return response.value, response.cancelled
+	return response.value, response.cancelled, response.err
 }

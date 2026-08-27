@@ -87,7 +87,10 @@ func (module *Module) runExplicit(context context.Context, workingDirectory stri
 	if !input.Force {
 		presentExplicitPaths(module.presenter, plan.existing)
 	}
-	targets, cancelled := selectExplicitTargets(plan.existing, input.Force, module.prompter)
+	targets, cancelled, err := selectExplicitTargets(plan.existing, input.Force, module.prompter)
+	if err != nil {
+		return Result{}, err
+	}
 	if cancelled {
 		presentCancellation(module.presenter)
 		return Result{}, nil
@@ -101,7 +104,10 @@ func (module *Module) runExplicit(context context.Context, workingDirectory stri
 }
 
 func (module *Module) runSmart(context context.Context, workingDirectory string, input Input) (Result, error) {
-	action, cancelled := selectSmartAction(module.prompter)
+	action, cancelled, err := selectSmartAction(module.prompter)
+	if err != nil {
+		return Result{}, err
+	}
 	if cancelled {
 		presentCancellation(module.presenter)
 		return Result{}, nil

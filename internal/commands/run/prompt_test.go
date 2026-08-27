@@ -1,6 +1,7 @@
 package run
 
 import (
+	"errors"
 	"reflect"
 	"testing"
 )
@@ -12,10 +13,10 @@ func TestSelectScriptPreservesTheLegacyPromptAndScriptHints(t *testing.T) {
 		{Name: "build", Command: "go build ./cmd/ycy"},
 	}
 
-	selected, cancelled := selectScript(prompter, scripts)
+	selected, cancelled, err := selectScript(prompter, scripts)
 
-	if cancelled || selected != "build" {
-		t.Fatalf("selectScript() = (%q, %t)", selected, cancelled)
+	if err != nil || cancelled || selected != "build" {
+		t.Fatalf("selectScript() = (%q, %t, %v)", selected, cancelled, err)
 	}
 	want := ScriptPrompt{
 		Message: "Select a script to run:",
@@ -31,8 +32,8 @@ func TestSelectScriptPreservesTheLegacyPromptAndScriptHints(t *testing.T) {
 
 func TestSelectScriptReportsCancellation(t *testing.T) {
 	prompter := &recordingRunPrompter{scriptCancelled: true}
-	_, cancelled := selectScript(prompter, []Script{{Name: "check", Command: "go test ./..."}})
-	if !cancelled {
+	_, cancelled, err := selectScript(prompter, []Script{{Name: "check", Command: "go test ./..."}})
+	if err != nil || !cancelled {
 		t.Fatal("selectScript() did not report cancellation")
 	}
 }
@@ -41,10 +42,10 @@ func TestSelectPackageManagerPreservesTheComputedOrder(t *testing.T) {
 	prompter := &recordingRunPrompter{manager: PackageManagerExternal}
 	order := []PackageManager{PackageManagerExternal, PackageManagerPNPM, PackageManagerNPM, PackageManagerYarn}
 
-	selected, cancelled := selectPackageManager(prompter, order)
+	selected, cancelled, err := selectPackageManager(prompter, order)
 
-	if cancelled || selected != PackageManagerExternal {
-		t.Fatalf("selectPackageManager() = (%q, %t)", selected, cancelled)
+	if err != nil || cancelled || selected != PackageManagerExternal {
+		t.Fatalf("selectPackageManager() = (%q, %t, %v)", selected, cancelled, err)
 	}
 	want := PackageManagerPrompt{
 		Message: "Select a package manager:",
@@ -62,9 +63,20 @@ func TestSelectPackageManagerPreservesTheComputedOrder(t *testing.T) {
 
 func TestSelectPackageManagerReportsCancellation(t *testing.T) {
 	prompter := &recordingRunPrompter{managerCancelled: true}
-	_, cancelled := selectPackageManager(prompter, []PackageManager{PackageManagerPNPM})
-	if !cancelled {
+	_, cancelled, err := selectPackageManager(prompter, []PackageManager{PackageManagerPNPM})
+	if err != nil || !cancelled {
 		t.Fatal("selectPackageManager() did not report cancellation")
+	}
+}
+
+func TestSelectorsReturnPromptFailures(t *testing.T) {
+	failure := errors.New("interactive terminal unavailable")
+	prompter := &recordingRunPrompter{err: failure}
+	if _, cancelled, err := selectScript(prompter, []Script{{Name: "check"}}); cancelled || !errors.Is(err, failure) {
+		t.Fatalf("selectScript() = (cancelled=%t, err=%v)", cancelled, err)
+	}
+	if _, cancelled, err := selectPackageManager(prompter, []PackageManager{PackageManagerNPM}); cancelled || !errors.Is(err, failure) {
+		t.Fatalf("selectPackageManager() = (cancelled=%t, err=%v)", cancelled, err)
 	}
 }
 
@@ -73,16 +85,17 @@ type recordingRunPrompter struct {
 	scriptCancelled  bool
 	manager          PackageManager
 	managerCancelled bool
+	err              error
 	scriptPrompt     ScriptPrompt
 	managerPrompt    PackageManagerPrompt
 }
 
-func (prompter *recordingRunPrompter) SelectScript(prompt ScriptPrompt) (string, bool) {
+func (prompter *recordingRunPrompter) SelectScript(prompt ScriptPrompt) (string, bool, error) {
 	prompter.scriptPrompt = prompt
-	return prompter.script, prompter.scriptCancelled
+	return prompter.script, prompter.scriptCancelled, prompter.err
 }
 
-func (prompter *recordingRunPrompter) SelectPackageManager(prompt PackageManagerPrompt) (PackageManager, bool) {
+func (prompter *recordingRunPrompter) SelectPackageManager(prompt PackageManagerPrompt) (PackageManager, bool, error) {
 	prompter.managerPrompt = prompt
-	return prompter.manager, prompter.managerCancelled
+	return prompter.manager, prompter.managerCancelled, prompter.err
 }

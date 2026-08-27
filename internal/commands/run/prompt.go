@@ -27,11 +27,11 @@ type PackageManagerPrompt struct {
 
 // Prompter owns the two interactive selections required by run.
 type Prompter interface {
-	SelectScript(ScriptPrompt) (name string, cancelled bool)
-	SelectPackageManager(PackageManagerPrompt) (PackageManager, bool)
+	SelectScript(ScriptPrompt) (name string, cancelled bool, err error)
+	SelectPackageManager(PackageManagerPrompt) (PackageManager, bool, error)
 }
 
-func selectScript(prompter Prompter, scripts []Script) (string, bool) {
+func selectScript(prompter Prompter, scripts []Script) (string, bool, error) {
 	options := make([]ScriptChoice, 0, len(scripts))
 	for _, script := range scripts {
 		options = append(options, ScriptChoice{
@@ -46,7 +46,7 @@ func selectScript(prompter Prompter, scripts []Script) (string, bool) {
 	})
 }
 
-func selectPackageManager(prompter Prompter, managers []PackageManager) (PackageManager, bool) {
+func selectPackageManager(prompter Prompter, managers []PackageManager) (PackageManager, bool, error) {
 	options := make([]PackageManagerChoice, 0, len(managers))
 	for _, manager := range managers {
 		options = append(options, PackageManagerChoice{Value: manager, Label: string(manager)})
