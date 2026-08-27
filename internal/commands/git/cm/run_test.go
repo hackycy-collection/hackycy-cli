@@ -77,6 +77,94 @@ func TestModuleRunAppliesStagingModesBeforeCapturingTheSnapshot(t *testing.T) {
 	})
 }
 
+func TestModuleEmitsTypedStageAndGeneratePhaseLedger(t *testing.T) {
+	root := t.TempDir()
+	writeStageFile(t, root, "value.go")
+	tracker := &recordingCMTracker{}
+	runner := newModuleRunner(root, "M  value.go\x00")
+	module := newModuleWithTracker(t, runner, &recordingCMResolver{profile: commitMessageProfile()}, successfulProviderTransport(), &stagePrompter{useInitialValues: true}, &recordingCommitPrompter{}, tracker)
+
+	result, err := module.Run(context.Background(), Input{Stage: true})
+	if err != nil || result.Generated == nil {
+		t.Fatalf("Run() = (%#v, %v)", result, err)
+	}
+	if tracker.closed != 1 {
+		t.Fatalf("closed phase reporters = %d, want 1", tracker.closed)
+	}
+	if got, want := cmPhaseKinds(tracker.phases), []PhaseKind{PhaseStage, PhaseStage, PhaseCollect, PhaseCollect, PhaseGenerate, PhaseGenerate}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("phase kinds = %#v, want %#v", got, want)
+	}
+	if tracker.phases[0].State != PhaseActive || tracker.phases[1].State != PhaseCompleted || tracker.phases[2].State != PhaseActive || tracker.phases[3].FileCount != 1 || tracker.phases[4].State != PhaseActive || tracker.phases[5].State != PhaseCompleted {
+		t.Fatalf("phase ledger = %#v", tracker.phases)
+	}
+}
+
+func TestModuleEmitsTypedCommitAndPushPhaseLedger(t *testing.T) {
+	root := t.TempDir()
+	writeStageFile(t, root, "value.go")
+	tracker := &recordingCMTracker{}
+	runner := newModuleRunner(root, "M  value.go\x00")
+	runner.responses[snapshotRunnerKey([]string{"-C", root, "branch", "--show-current"})] = GitOutput{Stdout: []byte("main\n")}
+	module := newModuleWithTracker(t, runner, &recordingCMResolver{profile: commitMessageProfile()}, successfulProviderTransport(), &stagePrompter{}, &recordingCommitPrompter{confirmed: true}, tracker)
+
+	result, err := module.Run(context.Background(), Input{Staged: true, Push: modeString("origin")})
+	if err != nil || !result.Committed || !result.Pushed || result.PushRemote != "origin" {
+		t.Fatalf("Run() = (%#v, %v)", result, err)
+	}
+	if tracker.closed != 2 || len(tracker.segments) != 2 {
+		t.Fatalf("tracker = %#v", tracker)
+	}
+	if got, want := cmPhaseKinds(tracker.segments[0]), []PhaseKind{PhaseCollect, PhaseCollect, PhaseGenerate, PhaseGenerate}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("generation phase kinds = %#v, want %#v", got, want)
+	}
+	if got, want := tracker.segments[1], []Phase{
+		{Kind: PhaseCommit, State: PhaseActive},
+		{Kind: PhaseCommit, State: PhaseCompleted},
+		{Kind: PhasePush, State: PhaseActive, Remote: "origin"},
+		{Kind: PhasePush, State: PhaseCompleted, Remote: "origin"},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("commit/push phase ledger = %#v, want %#v", got, want)
+	}
+}
+
+func TestModuleFinalizesPushPhaseAndKeepsCommitFactWhenPushFails(t *testing.T) {
+	root := t.TempDir()
+	writeStageFile(t, root, "value.go")
+	tracker := &recordingCMTracker{}
+	runner := newModuleRunner(root, "M  value.go\x00")
+	runner.responses[snapshotRunnerKey([]string{"-C", root, "branch", "--show-current"})] = GitOutput{Stdout: []byte("main\n")}
+	runner.responses[snapshotRunnerKey([]string{"-C", root, "push", "-u", "origin", "main"})] = GitOutput{Stderr: []byte("remote rejected\n"), ExitCode: 1}
+	module := newModuleWithTracker(t, runner, &recordingCMResolver{profile: commitMessageProfile()}, successfulProviderTransport(), &stagePrompter{}, &recordingCommitPrompter{confirmed: true}, tracker)
+
+	result, err := module.Run(context.Background(), Input{Staged: true, Push: modeString("origin")})
+	if err == nil || err.Error() != "remote rejected" || !result.Committed || result.Pushed || result.PushRemote != "" {
+		t.Fatalf("Run() = (%#v, %v)", result, err)
+	}
+	if tracker.closed != 2 || len(tracker.segments) != 2 {
+		t.Fatalf("tracker = %#v", tracker)
+	}
+	if got, want := tracker.segments[1][len(tracker.segments[1])-1], (Phase{Kind: PhasePush, State: PhaseFailed, Remote: "origin"}); got != want {
+		t.Fatalf("final phase = %#v, want %#v", got, want)
+	}
+}
+
+func TestModuleFinalizesActiveCMPhaseWhenGenerationFails(t *testing.T) {
+	root := t.TempDir()
+	writeStageFile(t, root, "value.go")
+	tracker := &recordingCMTracker{}
+	failure := errors.New("provider unavailable")
+	module := newModuleWithTracker(t, newModuleRunner(root, "?? value.go\x00"), &recordingCMResolver{profile: commitMessageProfile()}, providerTransportFunc(func(*http.Request) (*http.Response, error) {
+		return nil, failure
+	}), &stagePrompter{}, &recordingCommitPrompter{}, tracker)
+
+	if _, err := module.Run(context.Background(), Input{}); !errors.Is(err, failure) {
+		t.Fatalf("Run() error = %v, want provider failure", err)
+	}
+	if tracker.closed != 1 || len(tracker.phases) == 0 || tracker.phases[len(tracker.phases)-1] != (Phase{Kind: PhaseGenerate, State: PhaseFailed, FileCount: 1}) {
+		t.Fatalf("failed phase ledger = %#v, closed = %d", tracker.phases, tracker.closed)
+	}
+}
+
 func TestModuleRunConfirmsThenRechecksAndCommits(t *testing.T) {
 	root := t.TempDir()
 	writeStageFile(t, root, "value.go")
@@ -104,6 +192,33 @@ func TestModuleRunConfirmsThenRechecksAndCommits(t *testing.T) {
 			t.Fatalf("Run() = (%#v, %v)", result, err)
 		}
 		requireSnapshotCalls(t, runner, []string{"-C", root, "commit", "-m", result.Generated.Message})
+	})
+}
+
+func TestModulePropagatesInteractionFailuresBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	writeStageFile(t, root, "value.go")
+	t.Run("stage selection", func(t *testing.T) {
+		runner := newModuleRunner(root, " M value.go\x00")
+		promptErr := errors.New("terminal unavailable")
+		module := newModuleWithPrompts(t, runner, &recordingCMResolver{profile: commitMessageProfile()}, successfulProviderTransport(), &stagePrompter{err: promptErr}, &recordingCommitPrompter{})
+
+		result, err := module.Run(context.Background(), Input{Stage: true})
+		if !errors.Is(err, promptErr) || result.RepositoryRoot != root || result.Generated != nil {
+			t.Fatalf("Run() = (%#v, %v)", result, err)
+		}
+		runner.requireNoCall(t, []string{"-C", root, "add", "-A", "--", "value.go"})
+	})
+	t.Run("commit confirmation", func(t *testing.T) {
+		runner := newModuleRunner(root, "M  value.go\x00")
+		promptErr := errors.New("terminal unavailable")
+		module := newModuleWithPrompts(t, runner, &recordingCMResolver{profile: commitMessageProfile()}, successfulProviderTransport(), &stagePrompter{}, &recordingCommitPrompter{err: promptErr})
+
+		result, err := module.Run(context.Background(), Input{Staged: true})
+		if !errors.Is(err, promptErr) || result.Generated == nil || !result.PromptedCommit || result.Committed {
+			t.Fatalf("Run() = (%#v, %v)", result, err)
+		}
+		runner.requireNoCall(t, []string{"-C", root, "commit", "-m", result.Generated.Message})
 	})
 }
 
@@ -221,23 +336,77 @@ func newModuleWithPrompter(t *testing.T, runner *snapshotRunner, resolver Profil
 }
 
 func newModuleWithPrompts(t *testing.T, runner *snapshotRunner, resolver ProfileResolver, transport ProviderTransport, prompter StagePrompter, committer CommitPrompter) *Module {
+	return newModuleWithTracker(t, runner, resolver, transport, prompter, committer, nil)
+}
+
+func newModuleWithTracker(t *testing.T, runner *snapshotRunner, resolver ProfileResolver, transport ProviderTransport, prompter StagePrompter, committer CommitPrompter, tracker Tracker) *Module {
 	t.Helper()
-	module, err := New(Dependencies{Git: runner, Files: diskSnapshotFileSystem{}, Prompter: prompter, Committer: committer, Resolver: resolver, Transport: transport})
+	if tracker == nil {
+		tracker = discardCMTracker{}
+	}
+	module, err := New(Dependencies{Git: runner, Files: diskSnapshotFileSystem{}, Prompter: prompter, Committer: committer, Resolver: resolver, Transport: transport, Tracker: tracker})
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
 	return module
 }
 
+type discardCMTracker struct{}
+
+func (discardCMTracker) Start(context.Context) (PhaseReporter, error) {
+	return discardCMPhaseReporter{}, nil
+}
+
+type discardCMPhaseReporter struct{}
+
+func (discardCMPhaseReporter) Report(Phase) {}
+
+func (discardCMPhaseReporter) Close() error { return nil }
+
 type recordingCommitPrompter struct {
 	prompt    CommitPrompt
 	confirmed bool
 	cancelled bool
+	err       error
 }
 
-func (prompter *recordingCommitPrompter) ConfirmCommit(prompt CommitPrompt) (bool, bool) {
+func (prompter *recordingCommitPrompter) ConfirmCommit(prompt CommitPrompt) (bool, bool, error) {
 	prompter.prompt = prompt
-	return prompter.confirmed, prompter.cancelled
+	return prompter.confirmed, prompter.cancelled, prompter.err
+}
+
+type recordingCMTracker struct {
+	phases   []Phase
+	segments [][]Phase
+	closed   int
+}
+
+func (tracker *recordingCMTracker) Start(context.Context) (PhaseReporter, error) {
+	tracker.segments = append(tracker.segments, nil)
+	return recordingCMPhaseReporter{tracker: tracker, segment: len(tracker.segments) - 1}, nil
+}
+
+type recordingCMPhaseReporter struct {
+	tracker *recordingCMTracker
+	segment int
+}
+
+func (reporter recordingCMPhaseReporter) Report(phase Phase) {
+	reporter.tracker.phases = append(reporter.tracker.phases, phase)
+	reporter.tracker.segments[reporter.segment] = append(reporter.tracker.segments[reporter.segment], phase)
+}
+
+func (reporter recordingCMPhaseReporter) Close() error {
+	reporter.tracker.closed++
+	return nil
+}
+
+func cmPhaseKinds(phases []Phase) []PhaseKind {
+	kinds := make([]PhaseKind, 0, len(phases))
+	for _, phase := range phases {
+		kinds = append(kinds, phase.Kind)
+	}
+	return kinds
 }
 
 func newModuleRunner(root, status string) *snapshotRunner {

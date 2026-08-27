@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	cmcommand "github.com/hackycy/hackycy-cli/internal/commands/git/cm"
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 )
 
 func TestOSCMGitRunnerPassesArgvAndInputAndCapturesOutput(t *testing.T) {
@@ -110,8 +111,15 @@ func TestGitCMHandlerComposesTheProductionAdaptersForNoChanges(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	t.Setenv("USERPROFILE", "")
 	output := &bytes.Buffer{}
+	diagnostics := &bytes.Buffer{}
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
+		Input:       strings.NewReader(""),
+		Output:      output,
+		Diagnostics: diagnostics,
+	})
 
-	result, err := newGitCMHandler(strings.NewReader(""), output)(context.Background(), cmcommand.Input{})
+	result, err := newGitCMHandler(experience)(context.Background(), cmcommand.Input{})
 	if err != nil || !result.NoChanges || result.NoChangeScope != cmcommand.ScopeAllUncommitted {
 		t.Fatalf("handler() = (%#v, %v)", result, err)
 	}

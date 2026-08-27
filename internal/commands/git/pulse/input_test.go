@@ -7,17 +7,17 @@ import (
 
 func TestSelectDaysUsesExplicitLegacyValuesWithoutPrompting(t *testing.T) {
 	days := -1
-	got, cancelled := selectDays(Input{Days: &days}, panicPulsePrompter{})
-	if cancelled || got != -1 {
-		t.Fatalf("selectDays() = (%d, %t), want -1, false", got, cancelled)
+	got, cancelled, err := selectDays(Input{Days: &days}, panicPulsePrompter{})
+	if err != nil || cancelled || got != -1 {
+		t.Fatalf("selectDays() = (%d, %t, %v), want -1, false, nil", got, cancelled, err)
 	}
 }
 
 func TestSelectDaysProvidesTheLegacyPromptChoices(t *testing.T) {
 	prompter := &scriptedPulsePrompter{days: 7}
-	got, cancelled := selectDays(Input{}, prompter)
-	if cancelled || got != 7 {
-		t.Fatalf("selectDays() = (%d, %t), want 7, false", got, cancelled)
+	got, cancelled, err := selectDays(Input{}, prompter)
+	if err != nil || cancelled || got != 7 {
+		t.Fatalf("selectDays() = (%d, %t, %v), want 7, false, nil", got, cancelled, err)
 	}
 	want := DayPrompt{
 		Message: "Select date range:",
@@ -35,18 +35,18 @@ func TestSelectDaysProvidesTheLegacyPromptChoices(t *testing.T) {
 }
 
 func TestSelectDaysReturnsPromptCancellation(t *testing.T) {
-	_, cancelled := selectDays(Input{}, &scriptedPulsePrompter{daysCancelled: true})
-	if !cancelled {
+	_, cancelled, err := selectDays(Input{}, &scriptedPulsePrompter{daysCancelled: true})
+	if err != nil || !cancelled {
 		t.Fatal("selectDays() did not return cancellation")
 	}
 }
 
 type panicPulsePrompter struct{}
 
-func (panicPulsePrompter) SelectDays(DayPrompt) (int, bool) {
+func (panicPulsePrompter) SelectDays(DayPrompt) (int, bool, error) {
 	panic("day prompt must not be called")
 }
 
-func (panicPulsePrompter) SelectAuthors(AuthorPrompt) ([]string, bool) {
+func (panicPulsePrompter) SelectAuthors(AuthorPrompt) ([]string, bool, error) {
 	panic("author prompt must not be called")
 }

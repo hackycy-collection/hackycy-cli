@@ -39,11 +39,8 @@ func TestModuleRunComposesScanPromptFetchAuthorSelectionAndReport(t *testing.T) 
 	if got, want := presenter.introductions, []string{root}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("introductions = %#v, want %#v", got, want)
 	}
-	if presenter.scanStarts != 1 || presenter.foundRepositories != 2 || presenter.repositoriesFound != 2 {
-		t.Fatalf("scan presentation = %#v", presenter)
-	}
-	if presenter.fetchStarts != 1 || presenter.fetchProgress != 2 {
-		t.Fatalf("fetch presentation = %#v", presenter)
+	if presenter.repositoriesFound != 2 {
+		t.Fatalf("repository result presentation = %#v", presenter)
 	}
 	if !reflect.DeepEqual(presenter.reports, []Report{wantReport}) {
 		t.Fatalf("presented reports = %#v", presenter.reports)
@@ -51,6 +48,59 @@ func TestModuleRunComposesScanPromptFetchAuthorSelectionAndReport(t *testing.T) 
 	if got := runner.sinceArguments(); !reflect.DeepEqual(got, []string{"--since=2026-08-22 00:00:00", "--since=2026-08-22 00:00:00"}) {
 		t.Fatalf("since arguments = %#v", got)
 	}
+}
+
+func TestModuleRunEmitsTypedScanAndFetchPhases(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "nested")
+	makePulseDirectory(t, filepath.Join(root, ".git"))
+	makePulseDirectory(t, filepath.Join(nested, ".git"))
+	tracker := &recordingPulseTracker{}
+	module := newPulseModuleWithDependencies(t, Dependencies{
+		WorkingDirectory: func() (string, error) { return root, nil },
+		Stater:           osPulseStater{},
+		Reader:           osDirectoryReader{},
+		Yield:            func() {},
+		Git: &modulePulseGitRunner{logs: map[string]pulseGitResponse{
+			root:   {output: GitOutput{Stdout: []byte("Ada\x1f2026-08-23 10:00:00\x1froot")}},
+			nested: {output: GitOutput{Stdout: []byte("Ben\x1f2026-08-22 10:00:00\x1fnested")}},
+		}},
+		Prompter:  &scriptedPulsePrompter{days: 1, authors: []string{"Ada"}},
+		Presenter: &recordingPulsePresenter{},
+		Tracker:   tracker,
+		Now:       time.Now,
+	})
+
+	if _, err := module.Run(context.Background(), Input{}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if got, want := tracker.started, []PhaseKind{PhaseScan, PhaseFetch}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("started phases = %#v, want %#v", got, want)
+	}
+	if tracker.closed != 2 {
+		t.Fatalf("closed phase reporters = %d, want 2", tracker.closed)
+	}
+	if len(tracker.phases) < 4 {
+		t.Fatalf("phase updates = %#v", tracker.phases)
+	}
+	scan := phaseUpdates(tracker.phases, PhaseScan)
+	if first, last := scan[0], scan[len(scan)-1]; first.State != PhaseActive || first.Root != root || last.State != PhaseCompleted {
+		t.Fatalf("scan phase boundaries = %#v", tracker.phases)
+	}
+	fetch := phaseUpdates(tracker.phases, PhaseFetch)
+	if first, last := fetch[0], fetch[len(fetch)-1]; first.State != PhaseActive || first.Total != 2 || last.State != PhaseCompleted {
+		t.Fatalf("fetch phase boundaries = %#v", tracker.phases)
+	}
+}
+
+func phaseUpdates(phases []Phase, kind PhaseKind) []Phase {
+	updates := make([]Phase, 0)
+	for _, phase := range phases {
+		if phase.Kind == kind {
+			updates = append(updates, phase)
+		}
+	}
+	return updates
 }
 
 func TestModuleRunReturnsSuccessfulNoResultAndPromptCancellationOutcomes(t *testing.T) {
@@ -232,6 +282,9 @@ func newPulseModuleForTest(t *testing.T, root string, runner GitRunner, prompter
 
 func newPulseModuleWithDependencies(t *testing.T, dependencies Dependencies) *Module {
 	t.Helper()
+	if dependencies.Tracker == nil {
+		dependencies.Tracker = discardPulseTracker{}
+	}
 	module, err := New(dependencies)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
@@ -262,21 +315,23 @@ type scriptedPulsePrompter struct {
 	dayPrompt        DayPrompt
 	days             int
 	daysCancelled    bool
+	daysErr          error
 	dayCalls         int
 	authorPrompt     AuthorPrompt
 	authors          []string
 	authorsCancelled bool
+	authorsErr       error
 }
 
-func (prompter *scriptedPulsePrompter) SelectDays(prompt DayPrompt) (int, bool) {
+func (prompter *scriptedPulsePrompter) SelectDays(prompt DayPrompt) (int, bool, error) {
 	prompter.dayPrompt = prompt
 	prompter.dayCalls++
-	return prompter.days, prompter.daysCancelled
+	return prompter.days, prompter.daysCancelled, prompter.daysErr
 }
 
-func (prompter *scriptedPulsePrompter) SelectAuthors(prompt AuthorPrompt) ([]string, bool) {
+func (prompter *scriptedPulsePrompter) SelectAuthors(prompt AuthorPrompt) ([]string, bool, error) {
 	prompter.authorPrompt = prompt
-	return prompter.authors, prompter.authorsCancelled
+	return prompter.authors, prompter.authorsCancelled, prompter.authorsErr
 }
 
 type modulePulseGitRunner struct {
@@ -344,6 +399,42 @@ type recordingPulsePresenter struct {
 	noCommits         int
 	cancelled         int
 	reports           []Report
+}
+
+type discardPulseTracker struct{}
+
+func (discardPulseTracker) Start(context.Context, PhaseKind) (PhaseReporter, error) {
+	return discardPulsePhaseReporter{}, nil
+}
+
+type discardPulsePhaseReporter struct{}
+
+func (discardPulsePhaseReporter) Report(Phase) {}
+
+func (discardPulsePhaseReporter) Close() error { return nil }
+
+type recordingPulseTracker struct {
+	started []PhaseKind
+	phases  []Phase
+	closed  int
+}
+
+func (tracker *recordingPulseTracker) Start(_ context.Context, kind PhaseKind) (PhaseReporter, error) {
+	tracker.started = append(tracker.started, kind)
+	return recordingPulsePhaseReporter{tracker: tracker}, nil
+}
+
+type recordingPulsePhaseReporter struct {
+	tracker *recordingPulseTracker
+}
+
+func (reporter recordingPulsePhaseReporter) Report(phase Phase) {
+	reporter.tracker.phases = append(reporter.tracker.phases, phase)
+}
+
+func (reporter recordingPulsePhaseReporter) Close() error {
+	reporter.tracker.closed++
+	return nil
 }
 
 func (presenter *recordingPulsePresenter) Introduction(root string) {

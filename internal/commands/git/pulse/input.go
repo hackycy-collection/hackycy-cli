@@ -20,13 +20,13 @@ type DayPrompt struct {
 
 // Prompter owns the two interactive selections required by git pulse.
 type Prompter interface {
-	SelectDays(DayPrompt) (days int, cancelled bool)
+	SelectDays(DayPrompt) (days int, cancelled bool, err error)
 	AuthorPrompter
 }
 
-func selectDays(input Input, prompter Prompter) (int, bool) {
+func selectDays(input Input, prompter Prompter) (int, bool, error) {
 	if input.Days != nil {
-		return *input.Days, false
+		return *input.Days, false, nil
 	}
 	return prompter.SelectDays(DayPrompt{
 		Message: "Select date range:",

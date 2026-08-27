@@ -50,6 +50,16 @@ func resolveExecutionMode(input Input) (executionMode, error) {
 	return mode, nil
 }
 
+// RequiresInteraction reports whether the established flag combination reaches
+// file selection or commit confirmation.
+func RequiresInteraction(input Input) (bool, error) {
+	mode, err := resolveExecutionMode(input)
+	if err != nil {
+		return false, err
+	}
+	return mode.PromptStage || mode.CreateCommit, nil
+}
+
 func truthyOptional(value *string) bool {
 	return value != nil && *value != ""
 }

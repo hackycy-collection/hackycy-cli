@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"sync"
 )
 
@@ -21,11 +22,12 @@ type ExperienceOptions struct {
 
 // Runtime is the concrete terminal Experience for one invocation.
 type Runtime struct {
-	session     Session
-	input       io.Reader
-	output      io.Writer
-	diagnostics *LeaseAwareDiagnosticWriter
-	width       int
+	session            Session
+	input              io.Reader
+	output             io.Writer
+	diagnostics        *LeaseAwareDiagnosticWriter
+	diagnosticTerminal *os.File
+	width              int
 }
 
 // NewExperience constructs a terminal Experience from explicit inherited streams.
@@ -36,13 +38,17 @@ func NewExperience(options ExperienceOptions) *Runtime {
 	if options.Output == nil {
 		options.Output = io.Discard
 	}
-	return &Runtime{
+	runtime := &Runtime{
 		session:     options.Session,
 		input:       options.Input,
 		output:      options.Output,
 		diagnostics: NewLeaseAwareDiagnosticWriter(options.Diagnostics),
 		width:       options.Width,
 	}
+	if terminal, ok := options.Diagnostics.(*os.File); ok {
+		runtime.diagnosticTerminal = terminal
+	}
+	return runtime
 }
 
 // Session returns the immutable capability selected for this Experience.
@@ -123,25 +129,13 @@ func (run *runtimeRun) Track(operation TrackedOperation) (err error) {
 		}
 	}()
 
-	if operation.Updates == nil {
-		return nil
+	if run.runtime.session.Kind == RichInteractive {
+		return run.trackRich(lease.Writer(), operation)
 	}
-	for {
-		select {
-		case <-run.ctx.Done():
-			if operation.RequestCancel != nil {
-				operation.RequestCancel()
-			}
-			return run.ctx.Err()
-		case phase, open := <-operation.Updates:
-			if !open {
-				return nil
-			}
-			if err := run.presentPhase(lease.Writer(), phase); err != nil {
-				return err
-			}
-		}
+	if run.runtime.session.Kind == Automation {
+		return run.trackSilently(operation)
 	}
+	return run.trackPlain(lease.Writer(), operation)
 }
 
 func (run *runtimeRun) Close() error {

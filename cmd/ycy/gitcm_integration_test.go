@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,8 +13,11 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
+
+	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
 func TestGitCMStandaloneBinaryExposesThePublicLeaf(t *testing.T) {
@@ -159,7 +164,7 @@ func TestGitCMStandaloneBinaryCreatesAStagedCommitThroughTheNormalHook(t *testin
 	server, provider := newGitCMMessageProvider(t, "feat(cm): commit through hook")
 	defer server.Close()
 
-	output, err := runGitCMStandalone(binary, repository, gitCMProviderEnvironment(t, server.URL), "\n", "git", "cm", "--staged")
+	output, err := runGitCMPlainStandalone(t, binary, repository, gitCMProviderEnvironment(t, server.URL), "\n", "git", "cm", "--staged")
 	if err != nil {
 		t.Fatalf("git cm --staged: %v\n%s", err, output)
 	}
@@ -207,7 +212,7 @@ func TestGitCMStandaloneBinaryHandlesNoChangesAndStagePromptTermination(t *testi
 			repository := newGitCMRepository(t)
 			writeGitCMFile(t, filepath.Join(repository, "README.md"), "untracked change\n")
 			beforeHead := gitCMOutput(t, repository, "rev-parse", "HEAD")
-			output, err := runGitCMStandalone(binary, repository, gitCMNoProviderEnvironment(t), testCase.input, "git", "cm", "--stage")
+			output, err := runGitCMPlainStandalone(t, binary, repository, gitCMNoProviderEnvironment(t), testCase.input, "git", "cm", "--stage")
 			if err != nil {
 				t.Fatalf("git cm --stage: %v\n%s", err, output)
 			}
@@ -239,7 +244,7 @@ func TestGitCMStandaloneBinaryStagesOnlyTheSelectedTrackedChange(t *testing.T) {
 	server, provider := newGitCMMessageProvider(t, "feat(cm): commit selected change")
 	defer server.Close()
 
-	output, err := runGitCMStandalone(binary, repository, gitCMProviderEnvironment(t, server.URL), "2\n\n", "git", "cm", "--stage")
+	output, err := runGitCMPlainStandalone(t, binary, repository, gitCMProviderEnvironment(t, server.URL), "2\n\n", "git", "cm", "--stage")
 	if err != nil {
 		t.Fatalf("git cm --stage: %v\n%s", err, output)
 	}
@@ -271,7 +276,7 @@ func TestGitCMStandaloneBinaryStagesAllChangesBeforeCommitting(t *testing.T) {
 	server, provider := newGitCMMessageProvider(t, "feat(cm): commit every change")
 	defer server.Close()
 
-	output, err := runGitCMStandalone(binary, repository, gitCMProviderEnvironment(t, server.URL), "\n", "git", "cm", "--stage-all")
+	output, err := runGitCMPlainStandalone(t, binary, repository, gitCMProviderEnvironment(t, server.URL), "\n", "git", "cm", "--stage-all")
 	if err != nil {
 		t.Fatalf("git cm --stage-all: %v\n%s", err, output)
 	}
@@ -346,7 +351,7 @@ func TestGitCMStandaloneBinaryKeepsTheIndexWhenCommitConfirmationIsDeclined(t *t
 	server, provider := newGitCMMessageProvider(t, "feat(cm): decline commit")
 	defer server.Close()
 
-	output, err := runGitCMStandalone(binary, repository, gitCMProviderEnvironment(t, server.URL), "no\n", "git", "cm", "--staged")
+	output, err := runGitCMPlainStandalone(t, binary, repository, gitCMProviderEnvironment(t, server.URL), "no\n", "git", "cm", "--staged")
 	if err != nil {
 		t.Fatalf("git cm --staged with declined confirmation: %v\n%s", err, output)
 	}
@@ -380,7 +385,7 @@ func TestGitCMStandaloneBinaryPropagatesAFailingPreCommitHook(t *testing.T) {
 	server, provider := newGitCMMessageProvider(t, "feat(cm): reject hook")
 	defer server.Close()
 
-	output, err := runGitCMStandalone(binary, repository, gitCMProviderEnvironment(t, server.URL), "\n", "git", "cm", "--staged")
+	output, err := runGitCMPlainStandalone(t, binary, repository, gitCMProviderEnvironment(t, server.URL), "\n", "git", "cm", "--staged")
 	if exitCode(err) != 1 {
 		t.Fatalf("git cm --staged error = %v, want exit 1\n%s", err, output)
 	}
@@ -428,7 +433,7 @@ func TestGitCMStandaloneBinaryRejectsAStaleSnapshotBeforeCommit(t *testing.T) {
 	}))
 	defer server.Close()
 
-	output, err := runGitCMStandalone(binary, repository, gitCMProviderEnvironment(t, server.URL), "\n", "git", "cm", "--staged")
+	output, err := runGitCMPlainStandalone(t, binary, repository, gitCMProviderEnvironment(t, server.URL), "\n", "git", "cm", "--staged")
 	if exitCode(err) != 1 {
 		t.Fatalf("git cm --staged stale snapshot error = %v, want exit 1\n%s", err, output)
 	}
@@ -468,7 +473,7 @@ func TestGitCMStandaloneBinaryPushesAStagedCommitToTheDefaultLocalRemote(t *test
 	server, provider := newGitCMMessageProvider(t, "feat(cm): push local commit")
 	defer server.Close()
 
-	output, err := runGitCMStandalone(binary, repository, gitCMProviderEnvironment(t, server.URL), "\n", "git", "cm", "--staged", "--push")
+	output, err := runGitCMPlainStandalone(t, binary, repository, gitCMProviderEnvironment(t, server.URL), "\n", "git", "cm", "--staged", "--push")
 	if err != nil {
 		t.Fatalf("git cm --staged --push: %v\n%s", err, output)
 	}
@@ -505,7 +510,7 @@ func TestGitCMStandaloneBinaryReturnsAPartialResultWhenTheLocalPushFails(t *test
 	server, provider := newGitCMMessageProvider(t, "feat(cm): retain commit on push failure")
 	defer server.Close()
 
-	output, err := runGitCMStandalone(binary, repository, gitCMProviderEnvironment(t, server.URL), "\n", "git", "cm", "--staged", "--push")
+	output, err := runGitCMPlainStandalone(t, binary, repository, gitCMProviderEnvironment(t, server.URL), "\n", "git", "cm", "--staged", "--push")
 	if exitCode(err) != 1 {
 		t.Fatalf("git cm --staged --push error = %v, want exit 1\n%s", err, output)
 	}
@@ -572,7 +577,7 @@ func TestGitCMStandaloneBinaryStagePushSelectsCommitsAndPushesToTheDefaultLocalR
 	server, provider := newGitCMMessageProvider(t, "feat(cm): stage and push selected change")
 	defer server.Close()
 
-	output, err := runGitCMStandalone(binary, repository, gitCMProviderEnvironment(t, server.URL), "2\n\n", "git", "cm", "--stage-push")
+	output, err := runGitCMPlainStandalone(t, binary, repository, gitCMProviderEnvironment(t, server.URL), "2\n\n", "git", "cm", "--stage-push")
 	if err != nil {
 		t.Fatalf("git cm --stage-push: %v\n%s", err, output)
 	}
@@ -672,6 +677,57 @@ func runGitCMStandalone(binary, directory string, environment []string, input st
 	command.Env = environment
 	command.Stdin = strings.NewReader(input)
 	return command.CombinedOutput()
+}
+
+func runGitCMPlainStandalone(t *testing.T, binary, directory string, environment []string, input string, arguments ...string) ([]byte, error) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled PTY fixture is unavailable on Windows")
+	}
+	command := exec.Command(resolveStandaloneBinary(binary), arguments...)
+	command.Dir = directory
+	command.Env = make([]string, 0, len(environment)+1)
+	for _, entry := range environment {
+		key, _, _ := strings.Cut(entry, "=")
+		if key != "TERM" {
+			command.Env = append(command.Env, entry)
+		}
+	}
+	command.Env = append(command.Env, "TERM=dumb")
+
+	process, err := terminaltest.StartPTY(command)
+	if errors.Is(err, terminaltest.ErrPTYUnsupported) {
+		t.Skip(err)
+	}
+	if err != nil {
+		t.Fatalf("start Plain PTY command: %v", err)
+	}
+	defer func() {
+		_ = process.Close()
+	}()
+
+	var output bytes.Buffer
+	readDone := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(&output, process.Terminal())
+		readDone <- err
+	}()
+	if _, err := io.WriteString(process.Terminal(), input); err != nil {
+		t.Fatalf("write Plain PTY input: %v", err)
+	}
+	waitErr := process.Wait()
+	if err := process.Close(); err != nil {
+		t.Fatalf("close Plain PTY: %v", err)
+	}
+	select {
+	case readErr := <-readDone:
+		if readErr != nil && !errors.Is(readErr, syscall.EIO) {
+			t.Fatalf("read Plain PTY output: %v", readErr)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatalf("timed out reading Plain PTY output: %q", output.String())
+	}
+	return output.Bytes(), waitErr
 }
 
 func gitCMOutput(t *testing.T, directory string, arguments ...string) string {

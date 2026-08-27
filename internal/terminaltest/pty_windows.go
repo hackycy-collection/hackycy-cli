@@ -15,3 +15,11 @@ var ErrPTYUnsupported = errors.New("controlled pseudoterminals are not supported
 func StartPTY(_ *exec.Cmd) (*PTYProcess, error) {
 	return nil, ErrPTYUnsupported
 }
+
+// Resize reports that the controlled Unix PTY fixture is unavailable on Windows.
+func (process *PTYProcess) Resize(_, _ uint16) error {
+	if process == nil {
+		return ErrPTYUnsupported
+	}
+	return ErrPTYUnsupported
+}

@@ -22,7 +22,7 @@ type StagePrompt struct {
 
 // StagePrompter owns the interactive file selection boundary.
 type StagePrompter interface {
-	SelectFiles(StagePrompt) (selected []string, cancelled bool)
+	SelectFiles(StagePrompt) (selected []string, cancelled bool, err error)
 }
 
 // StageResult records the observable stage-selection outcome.
@@ -41,25 +41,54 @@ func StageSelectedChanges(ctx context.Context, runner GitRunner, fileSystem Snap
 	if prompter == nil {
 		return StageResult{}, errors.New("Git staging prompt is required")
 	}
-	state, err := InspectRepository(ctx, runner, ScopeAllUncommitted)
+	plan, err := prepareStage(ctx, runner)
 	if err != nil {
 		return StageResult{}, err
 	}
-	result := StageResult{RepositoryRoot: state.Root}
-	if len(state.Files) == 0 {
+	result := StageResult{RepositoryRoot: plan.state.Root}
+	if len(plan.state.Files) == 0 {
 		result.NoChanges = true
 		return result, nil
 	}
-	prompt := StagePrompt{Message: "Select files to stage", Options: make([]StageOption, 0, len(state.Files)), InitialValues: make([]string, 0, len(state.Files))}
-	for _, file := range state.Files {
-		prompt.Options = append(prompt.Options, StageOption{Value: file.Path, Label: file.Status})
-		prompt.InitialValues = append(prompt.InitialValues, file.Path)
+	selected, cancelled, err := prompter.SelectFiles(plan.prompt)
+	if err != nil {
+		return result, err
 	}
-	selected, cancelled := prompter.SelectFiles(prompt)
 	if cancelled {
 		result.Cancelled = true
 		return result, nil
 	}
+	return applyStagePlan(ctx, runner, fileSystem, plan, selected)
+}
+
+type stagePlan struct {
+	state  RepositoryState
+	prompt StagePrompt
+}
+
+func prepareStage(ctx context.Context, runner GitRunner) (stagePlan, error) {
+	state, err := InspectRepository(ctx, runner, ScopeAllUncommitted)
+	if err != nil {
+		return stagePlan{}, err
+	}
+	plan := stagePlan{state: state}
+	if len(state.Files) == 0 {
+		return plan, nil
+	}
+	plan.prompt = StagePrompt{
+		Message:       "Select files to stage",
+		Options:       make([]StageOption, 0, len(state.Files)),
+		InitialValues: make([]string, 0, len(state.Files)),
+	}
+	for _, file := range state.Files {
+		plan.prompt.Options = append(plan.prompt.Options, StageOption{Value: file.Path, Label: file.Status})
+		plan.prompt.InitialValues = append(plan.prompt.InitialValues, file.Path)
+	}
+	return plan, nil
+}
+
+func applyStagePlan(ctx context.Context, runner GitRunner, fileSystem SnapshotFileSystem, plan stagePlan, selected []string) (StageResult, error) {
+	result := StageResult{RepositoryRoot: plan.state.Root}
 	if len(selected) == 0 {
 		result.NothingSelected = true
 		return result, nil
@@ -69,7 +98,7 @@ func StageSelectedChanges(ctx context.Context, runner GitRunner, fileSystem Snap
 		selectedSet[filePath] = struct{}{}
 	}
 	unselected := make([]string, 0)
-	for _, file := range state.Files {
+	for _, file := range plan.state.Files {
 		if file.IndexStatus == '?' {
 			continue
 		}
@@ -78,11 +107,11 @@ func StageSelectedChanges(ctx context.Context, runner GitRunner, fileSystem Snap
 		}
 	}
 	if len(unselected) > 0 {
-		if err := runGitMutation(ctx, runner, []string{"-C", state.Root, "restore", "--staged", "--"}, unselected, "git restore --staged failed"); err != nil {
+		if err := runGitMutation(ctx, runner, []string{"-C", plan.state.Root, "restore", "--staged", "--"}, unselected, "git restore --staged failed"); err != nil {
 			return StageResult{}, err
 		}
 	}
-	if err := stageFilePaths(ctx, runner, fileSystem, state.Root, selected); err != nil {
+	if err := stageFilePaths(ctx, runner, fileSystem, plan.state.Root, selected); err != nil {
 		return StageResult{}, err
 	}
 	return result, nil

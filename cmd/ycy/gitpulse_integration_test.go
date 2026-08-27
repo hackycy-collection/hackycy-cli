@@ -31,42 +31,12 @@ func TestGitPulseStandaloneBinaryScansContainedWorkspaceActivity(t *testing.T) {
 		"NO_COLOR":    "1",
 	})
 	output, err := runGitPulseStandalone(binary, t.TempDir(), environment, "1,2\n", "git", "pulse", workspace, "--days", "3tail")
-	if err != nil {
-		t.Fatalf("git pulse = (%v, %q)", err, output)
-	}
-	text := string(output)
-	for _, expected := range []string{
-		"HACKYCY CLI",
-		"Git Commit Tree",
-		"Workspace: " + workspace,
-		"Found 3 repositories",
-		"Found 2 commits in 2 repositories",
-		"alpha",
-		"beta",
-		"Ada",
-		"Ben",
-		"alpha commit",
-		"beta commit",
-	} {
-		if !strings.Contains(text, expected) {
-			t.Fatalf("git pulse output does not contain %q:\n%s", expected, text)
-		}
-	}
-	if strings.Contains(text, "ignored commit") || strings.Contains(text, "ignored") {
-		t.Fatalf("git pulse traversed an excluded repository:\n%s", text)
-	}
-	if strings.Contains(text, "linked-worktree") {
-		t.Fatalf("git pulse discovered a linked worktree:\n%s", text)
-	}
-	if strings.Contains(text, "unborn (") {
-		t.Fatalf("git pulse reported commits from an unborn repository:\n%s", text)
-	}
-	if strings.Contains(text, "\x1b[") {
-		t.Fatalf("NO_COLOR output contains ANSI: %q", text)
+	if exitCode(err) != 1 || string(output) != "error: git pulse requires an interactive terminal\n" {
+		t.Fatalf("redirected author selection = (%v, %q)", err, output)
 	}
 
 	emptyOutput, err := runGitPulseStandalone(binary, t.TempDir(), environment, "", "git", "pulse", workspace, "--days=0")
-	if err != nil || !strings.Contains(string(emptyOutput), "No commits found in the specified date range.") {
+	if err != nil || !strings.Contains(string(emptyOutput), "No commits found in the specified date range.") || strings.Contains(string(emptyOutput), "\x1b[") {
 		t.Fatalf("zero-day git pulse = (%v, %q)", err, emptyOutput)
 	}
 

@@ -1,31 +1,55 @@
 package main
 
 import (
-	"bufio"
+	"context"
+	"errors"
 	"fmt"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
+	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	pulsecommand "github.com/hackycy/hackycy-cli/internal/commands/git/pulse"
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 )
 
-func newGitPulseModule(input io.Reader, output io.Writer) (*pulsecommand.Module, error) {
-	return pulsecommand.New(pulsecommand.Dependencies{
-		WorkingDirectory: os.Getwd,
-		Stater:           osPulsePathStater{},
-		Reader:           osPulseDirectoryReader{},
-		Yield:            runtime.Gosched,
-		Git:              newOSPulseGitRunner(),
-		Prompter:         newTerminalPulsePrompter(input, output),
-		Presenter:        terminalPulsePresenter{output: output},
-		Now:              time.Now,
-	})
+var errGitPulseRequiresInteractive = errors.New("git pulse requires an interactive terminal")
+
+func newGitPulseHandler(experience *terminalexperience.Runtime) cliapp.GitPulseHandler {
+	return func(ctx context.Context, input pulsecommand.Input) (pulsecommand.Result, error) {
+		ctx, cancel := context.WithCancel(ctx)
+		defer cancel()
+		run := experience.Open(ctx)
+		defer run.Close()
+		adapter := newTerminalPulseAdapter(run, experience.Session(), cancel)
+		module, err := pulsecommand.New(pulsecommand.Dependencies{
+			WorkingDirectory: os.Getwd,
+			Stater:           osPulsePathStater{},
+			Reader:           osPulseDirectoryReader{},
+			Yield:            runtime.Gosched,
+			Git:              newOSPulseGitRunner(),
+			Prompter:         adapter,
+			Presenter:        adapter,
+			Tracker:          adapter,
+			Now:              time.Now,
+		})
+		if err != nil {
+			return pulsecommand.Result{}, err
+		}
+		result, err := module.Run(ctx, input)
+		if err != nil {
+			return result, err
+		}
+		if err := adapter.Flush(); err != nil {
+			return result, err
+		}
+		return result, nil
+	}
 }
 
 type osPulsePathStater struct{}
@@ -40,170 +64,316 @@ func (osPulseDirectoryReader) ReadDir(path string) ([]os.DirEntry, error) {
 	return os.ReadDir(path)
 }
 
-type terminalPulsePrompter struct {
-	input  *bufio.Reader
-	output io.Writer
+type terminalPulseAdapter struct {
+	run           terminalexperience.ExperienceRun
+	session       terminalexperience.Session
+	requestCancel context.CancelFunc
+	pending       []terminalexperience.PresentationDocument
+	presentErr    error
 }
 
-func newTerminalPulsePrompter(input io.Reader, output io.Writer) *terminalPulsePrompter {
-	return &terminalPulsePrompter{input: bufio.NewReader(input), output: output}
+func newTerminalPulseAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session, requestCancel context.CancelFunc) *terminalPulseAdapter {
+	return &terminalPulseAdapter{run: run, session: session, requestCancel: requestCancel}
 }
 
-func (prompter *terminalPulsePrompter) SelectDays(prompt pulsecommand.DayPrompt) (int, bool) {
-	_, _ = fmt.Fprintln(prompter.output, prompt.Message)
-	for index, option := range prompt.Options {
-		_, _ = fmt.Fprintf(prompter.output, "%d) %s\n", index+1, option.Label)
+func (adapter *terminalPulseAdapter) SelectDays(prompt pulsecommand.DayPrompt) (int, bool, error) {
+	answer, cancelled, err := adapter.ask(pulseDayRequest(prompt))
+	if err != nil || cancelled {
+		return 0, cancelled, err
 	}
-	index, cancelled := prompter.selectIndex(len(prompt.Options))
-	if cancelled {
-		return 0, true
+	days, err := strconv.Atoi(answer.Value)
+	if err != nil {
+		return 0, false, err
 	}
-	return prompt.Options[index].Value, false
+	return days, false, nil
 }
 
-func (prompter *terminalPulsePrompter) SelectAuthors(prompt pulsecommand.AuthorPrompt) ([]string, bool) {
-	_, _ = fmt.Fprintln(prompter.output, prompt.Message)
-	for index, option := range prompt.Options {
-		_, _ = fmt.Fprintf(prompter.output, "%d) %s\n", index+1, option.Label)
+func (adapter *terminalPulseAdapter) SelectAuthors(prompt pulsecommand.AuthorPrompt) ([]string, bool, error) {
+	answer, cancelled, err := adapter.ask(pulseAuthorRequest(prompt))
+	if err != nil || cancelled {
+		return nil, cancelled, err
 	}
-	for {
-		_, _ = fmt.Fprint(prompter.output, "> ")
-		value, eof := prompter.readLine()
-		if isPulseCancellation(value) || (value == "" && eof) {
-			return nil, true
-		}
-		if value == "" && len(prompt.InitialValues) > 0 {
-			return append([]string(nil), prompt.InitialValues...), false
-		}
-		indices, valid := parsePulseIndices(value, len(prompt.Options))
-		if valid && (!prompt.Required || len(indices) > 0) {
-			selected := make([]string, 0, len(indices))
-			for _, index := range indices {
-				selected = append(selected, prompt.Options[index].Value)
+	return append([]string(nil), answer.Values...), false, nil
+}
+
+func (adapter *terminalPulseAdapter) Introduction(root string) {
+	document := terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
+		{Role: terminalexperience.VisualRoleTitle, Text: "HACKYCY CLI"},
+		{Role: terminalexperience.VisualRoleActive, Text: "Git Commit Tree"},
+		{Role: terminalexperience.VisualRoleMuted, Text: "Workspace: " + root},
+	}}
+	if adapter.session.Kind != terminalexperience.RichInteractive {
+		document = terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
+			Role: terminalexperience.VisualRolePlain,
+			Text: "HACKYCY CLI\n\nGit Commit Tree\nWorkspace: " + root,
+		}}}
+	}
+	adapter.present(document)
+}
+
+func (adapter *terminalPulseAdapter) RepositoriesFound(count int) {
+	adapter.present(pulseDocument(adapter.session, fmt.Sprintf("Found %d %s", count, pulsePlural(count, "repository", "repositories")), terminalexperience.VisualRoleSuccess))
+}
+
+func (adapter *terminalPulseAdapter) NoRepositories() {
+	adapter.present(pulseDocument(adapter.session, "No Git repositories found.", terminalexperience.VisualRoleWarning))
+}
+
+func (adapter *terminalPulseAdapter) NoCommits() {
+	adapter.present(pulseDocument(adapter.session, "No commits found in the specified date range.", terminalexperience.VisualRoleWarning))
+}
+
+func (adapter *terminalPulseAdapter) Cancelled() {
+	adapter.present(pulseDocument(adapter.session, "Operation cancelled.", terminalexperience.VisualRoleError))
+}
+
+func (adapter *terminalPulseAdapter) Present(report pulsecommand.Report) {
+	if adapter.session.Kind != terminalexperience.RichInteractive {
+		adapter.present(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
+			Role: terminalexperience.VisualRolePlain,
+			Text: pulseReportText(report),
+		}}})
+		return
+	}
+	blocks := []terminalexperience.PresentationBlock{{
+		Role: terminalexperience.VisualRoleSuccess,
+		Text: fmt.Sprintf("Found %d %s in %d %s", report.CommitCount, pulsePlural(report.CommitCount, "commit", "commits"), len(report.Repositories), pulsePlural(len(report.Repositories), "repository", "repositories")),
+	}}
+	for _, repository := range report.Repositories {
+		blocks = append(blocks,
+			terminalexperience.PresentationBlock{Role: terminalexperience.VisualRoleActive, Text: fmt.Sprintf("%s (%d %s)", filepath.Base(repository.Path), len(repository.Commits), pulsePlural(len(repository.Commits), "commit", "commits"))},
+			terminalexperience.PresentationBlock{Role: terminalexperience.VisualRoleMuted, Text: "   " + filepath.Dir(repository.Path) + string(filepath.Separator)},
+		)
+		for index, commit := range repository.Commits {
+			connector := "|-"
+			if index == len(repository.Commits)-1 {
+				connector = "`-"
 			}
-			return selected, false
+			blocks = append(blocks, terminalexperience.PresentationBlock{Role: terminalexperience.VisualRolePlain, Text: fmt.Sprintf("   %s %s | %s | %s", connector, commit.Date, commit.Author, commit.Subject)})
 		}
-		if eof {
-			return nil, true
+	}
+	adapter.present(terminalexperience.PresentationDocument{Blocks: blocks})
+}
+
+func (adapter *terminalPulseAdapter) Start(_ context.Context, _ pulsecommand.PhaseKind) (pulsecommand.PhaseReporter, error) {
+	reporter := &terminalPulsePhaseReporter{
+		updates:  make(chan terminalexperience.OperationPhase, 1),
+		finished: make(chan struct{}),
+	}
+	go func() {
+		err := adapter.run.Track(terminalexperience.TrackedOperation{
+			Label:         "Git Pulse",
+			Updates:       reporter.updates,
+			RequestCancel: adapter.requestCancel,
+		})
+		reporter.complete(err)
+	}()
+	return reporter, nil
+}
+
+func (adapter *terminalPulseAdapter) Flush() error {
+	if adapter.presentErr != nil {
+		return adapter.presentErr
+	}
+	if adapter.session.Kind != terminalexperience.Automation {
+		return nil
+	}
+	for _, document := range adapter.pending {
+		if err := adapter.run.Present(document); err != nil {
+			return err
 		}
-		if prompt.Required && value == "" {
-			_, _ = fmt.Fprintln(prompter.output, "At least one author is required.")
-		} else {
-			_, _ = fmt.Fprintln(prompter.output, "Invalid selection")
-		}
+	}
+	adapter.pending = nil
+	return nil
+}
+
+func (adapter *terminalPulseAdapter) ask(request terminalexperience.InteractionRequest) (terminalexperience.InteractionAnswer, bool, error) {
+	answer, err := adapter.run.Ask(request)
+	if errors.Is(err, terminalexperience.ErrInteractionCancelled) || errors.Is(err, context.Canceled) {
+		return terminalexperience.InteractionAnswer{}, true, nil
+	}
+	if errors.Is(err, terminalexperience.ErrAutomationInteraction) {
+		return terminalexperience.InteractionAnswer{}, false, errGitPulseRequiresInteractive
+	}
+	if err != nil {
+		return terminalexperience.InteractionAnswer{}, false, err
+	}
+	return answer, false, nil
+}
+
+func (adapter *terminalPulseAdapter) present(document terminalexperience.PresentationDocument) {
+	if adapter.session.Kind == terminalexperience.Automation {
+		adapter.pending = append(adapter.pending, document)
+		return
+	}
+	if err := adapter.run.Present(document); err != nil && adapter.presentErr == nil {
+		adapter.presentErr = err
 	}
 }
 
-func (prompter *terminalPulsePrompter) selectIndex(optionCount int) (int, bool) {
-	for {
-		_, _ = fmt.Fprint(prompter.output, "> ")
-		value, eof := prompter.readLine()
-		if value == "" || isPulseCancellation(value) {
-			return 0, true
-		}
-		index, err := strconv.Atoi(value)
-		if err == nil && index >= 1 && index <= optionCount {
-			return index - 1, false
-		}
-		if eof {
-			return 0, true
-		}
-		_, _ = fmt.Fprintln(prompter.output, "Invalid selection")
+func pulseDayRequest(prompt pulsecommand.DayPrompt) terminalexperience.InteractionRequest {
+	options := make([]terminalexperience.InteractionOption, 0, len(prompt.Options))
+	for _, option := range prompt.Options {
+		options = append(options, terminalexperience.InteractionOption{Label: option.Label, Value: strconv.Itoa(option.Value)})
+	}
+	return terminalexperience.InteractionRequest{
+		Kind:         terminalexperience.InteractionSelect,
+		Message:      prompt.Message,
+		PlainLead:    prompt.Message,
+		PlainPrompt:  "> ",
+		Options:      options,
+		CancelValues: []string{"", "q", "quit", "cancel"},
+		ParsePlain: func(value string) (terminalexperience.InteractionAnswer, error) {
+			index, err := strconv.Atoi(strings.TrimSpace(value))
+			if err != nil || index < 1 || index > len(options) {
+				return terminalexperience.InteractionAnswer{}, errors.New("Invalid selection")
+			}
+			return terminalexperience.InteractionAnswer{Value: options[index-1].Value}, nil
+		},
 	}
 }
 
-func (prompter *terminalPulsePrompter) readLine() (string, bool) {
-	line, err := prompter.input.ReadString('\n')
-	return strings.TrimSpace(line), err != nil
-}
-
-func isPulseCancellation(value string) bool {
-	return strings.EqualFold(value, "q") || strings.EqualFold(value, "quit") || strings.EqualFold(value, "cancel")
-}
-
-func parsePulseIndices(value string, optionCount int) ([]int, bool) {
-	parts := strings.FieldsFunc(value, func(character rune) bool {
-		return character == ',' || character == ' ' || character == '\t'
-	})
-	if len(parts) == 0 {
-		return nil, false
+func pulseAuthorRequest(prompt pulsecommand.AuthorPrompt) terminalexperience.InteractionRequest {
+	options := make([]terminalexperience.InteractionOption, 0, len(prompt.Options))
+	for _, option := range prompt.Options {
+		options = append(options, terminalexperience.InteractionOption{Label: option.Label, Value: option.Value})
 	}
-	indices := make([]int, 0, len(parts))
-	seen := make(map[int]struct{}, len(parts))
-	for _, part := range parts {
-		index, err := strconv.Atoi(part)
-		if err != nil || index < 1 || index > optionCount {
-			return nil, false
-		}
-		index--
-		if _, exists := seen[index]; exists {
-			continue
-		}
-		seen[index] = struct{}{}
-		indices = append(indices, index)
+	request := terminalexperience.InteractionRequest{
+		Kind:         terminalexperience.InteractionMultiSelect,
+		Message:      prompt.Message,
+		PlainLead:    prompt.Message,
+		PlainPrompt:  "> ",
+		Options:      options,
+		CancelValues: []string{"q", "quit", "cancel"},
+		ParsePlain: func(value string) (terminalexperience.InteractionAnswer, error) {
+			indices := strings.FieldsFunc(value, func(character rune) bool {
+				return character == ',' || character == ' ' || character == '\t'
+			})
+			if len(indices) == 0 {
+				if prompt.Required {
+					return terminalexperience.InteractionAnswer{}, errors.New("At least one author is required.")
+				}
+				return terminalexperience.InteractionAnswer{Values: []string{}}, nil
+			}
+			selected := make([]string, 0, len(indices))
+			seen := make(map[int]struct{}, len(indices))
+			for _, value := range indices {
+				index, err := strconv.Atoi(value)
+				if err != nil || index < 1 || index > len(options) {
+					return terminalexperience.InteractionAnswer{}, errors.New("Invalid selection")
+				}
+				index--
+				if _, duplicate := seen[index]; duplicate {
+					continue
+				}
+				seen[index] = struct{}{}
+				selected = append(selected, options[index].Value)
+			}
+			return terminalexperience.InteractionAnswer{Values: selected}, nil
+		},
 	}
-	return indices, true
+	if len(prompt.InitialValues) > 0 {
+		request.HasDefault = true
+		request.Default = terminalexperience.InteractionAnswer{Values: append([]string(nil), prompt.InitialValues...)}
+	}
+	return request
 }
 
-type terminalPulsePresenter struct {
-	output io.Writer
+func pulseDocument(session terminalexperience.Session, text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
+	if session.Kind != terminalexperience.RichInteractive {
+		role = terminalexperience.VisualRolePlain
+	}
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
 }
 
-func (presenter terminalPulsePresenter) Introduction(root string) {
-	_, _ = fmt.Fprintln(presenter.output, "HACKYCY CLI")
-	_, _ = fmt.Fprintln(presenter.output)
-	_, _ = fmt.Fprintln(presenter.output, "Git Commit Tree")
-	_, _ = fmt.Fprintf(presenter.output, "Workspace: %s\n", root)
-}
-
-func (presenter terminalPulsePresenter) ScanStarted() {
-	_, _ = fmt.Fprintln(presenter.output, "Scanning repositories...")
-}
-
-func (presenter terminalPulsePresenter) RepositoryFound(root, repository string, count int) {
-	_, _ = fmt.Fprintf(presenter.output, "Scanning repositories... [%d] %s\n", count, pulseRelativePath(root, repository))
-}
-
-func (presenter terminalPulsePresenter) RepositoriesFound(count int) {
-	_, _ = fmt.Fprintf(presenter.output, "Found %d %s\n", count, pulsePlural(count, "repository", "repositories"))
-}
-
-func (presenter terminalPulsePresenter) NoRepositories() {
-	_, _ = fmt.Fprintln(presenter.output, "No Git repositories found.")
-}
-
-func (presenter terminalPulsePresenter) FetchStarted(total int) {
-	_, _ = fmt.Fprintf(presenter.output, "Fetching commits... [0/%d]\n", total)
-}
-
-func (presenter terminalPulsePresenter) FetchProgress(root, repository string, done, total int) {
-	_, _ = fmt.Fprintf(presenter.output, "Fetching commits... [%d/%d] %s\n", done, total, pulseRelativePath(root, repository))
-}
-
-func (presenter terminalPulsePresenter) NoCommits() {
-	_, _ = fmt.Fprintln(presenter.output, "No commits found in the specified date range.")
-}
-
-func (presenter terminalPulsePresenter) Cancelled() {
-	_, _ = fmt.Fprintln(presenter.output, "Operation cancelled.")
-}
-
-func (presenter terminalPulsePresenter) Present(report pulsecommand.Report) {
-	_, _ = fmt.Fprintln(presenter.output)
-	_, _ = fmt.Fprintf(presenter.output, "Found %d %s in %d %s\n\n", report.CommitCount, pulsePlural(report.CommitCount, "commit", "commits"), len(report.Repositories), pulsePlural(len(report.Repositories), "repository", "repositories"))
+func pulseReportText(report pulsecommand.Report) string {
+	var output strings.Builder
+	output.WriteByte('\n')
+	_, _ = fmt.Fprintf(&output, "Found %d %s in %d %s\n\n", report.CommitCount, pulsePlural(report.CommitCount, "commit", "commits"), len(report.Repositories), pulsePlural(len(report.Repositories), "repository", "repositories"))
 	for groupIndex, repository := range report.Repositories {
-		_, _ = fmt.Fprintf(presenter.output, "%s (%d %s)\n", filepath.Base(repository.Path), len(repository.Commits), pulsePlural(len(repository.Commits), "commit", "commits"))
-		_, _ = fmt.Fprintf(presenter.output, "   %s%c\n", filepath.Dir(repository.Path), filepath.Separator)
+		_, _ = fmt.Fprintf(&output, "%s (%d %s)\n", filepath.Base(repository.Path), len(repository.Commits), pulsePlural(len(repository.Commits), "commit", "commits"))
+		_, _ = fmt.Fprintf(&output, "   %s%c\n", filepath.Dir(repository.Path), filepath.Separator)
 		for commitIndex, commit := range repository.Commits {
 			connector := "|-"
 			if commitIndex == len(repository.Commits)-1 {
 				connector = "`-"
 			}
-			_, _ = fmt.Fprintf(presenter.output, "   %s %s | %s | %s\n", connector, commit.Date, commit.Author, commit.Subject)
+			_, _ = fmt.Fprintf(&output, "   %s %s | %s | %s\n", connector, commit.Date, commit.Author, commit.Subject)
 		}
 		if groupIndex < len(report.Repositories)-1 {
-			_, _ = fmt.Fprintln(presenter.output)
+			_, _ = fmt.Fprintln(&output)
 		}
+	}
+	return output.String()
+}
+
+type terminalPulsePhaseReporter struct {
+	updates  chan terminalexperience.OperationPhase
+	finished chan struct{}
+
+	mu     sync.Mutex
+	closed bool
+	err    error
+}
+
+func (reporter *terminalPulsePhaseReporter) Report(phase pulsecommand.Phase) {
+	update := terminalPulsePhase(phase)
+	select {
+	case reporter.updates <- update:
+	case <-reporter.finished:
+	}
+}
+
+func (reporter *terminalPulsePhaseReporter) Close() error {
+	reporter.mu.Lock()
+	if !reporter.closed {
+		close(reporter.updates)
+		reporter.closed = true
+	}
+	reporter.mu.Unlock()
+	<-reporter.finished
+	reporter.mu.Lock()
+	defer reporter.mu.Unlock()
+	return reporter.err
+}
+
+func (reporter *terminalPulsePhaseReporter) complete(err error) {
+	reporter.mu.Lock()
+	reporter.err = err
+	reporter.mu.Unlock()
+	close(reporter.finished)
+}
+
+func terminalPulsePhase(phase pulsecommand.Phase) terminalexperience.OperationPhase {
+	name := "Scanning repositories"
+	detail := ""
+	switch phase.Kind {
+	case pulsecommand.PhaseFetch:
+		name = "Fetching commits"
+		if phase.Total > 0 {
+			detail = fmt.Sprintf("[%d/%d]", phase.Completed, phase.Total)
+		}
+		if phase.Repository != "" {
+			detail = strings.TrimSpace(detail + " " + pulseRelativePath(phase.Root, phase.Repository))
+		}
+	default:
+		if phase.Repository != "" {
+			detail = fmt.Sprintf("[%d] %s", phase.Completed, pulseRelativePath(phase.Root, phase.Repository))
+		}
+	}
+	return terminalexperience.OperationPhase{Name: name, Detail: detail, State: terminalPulsePhaseState(phase.State)}
+}
+
+func terminalPulsePhaseState(state pulsecommand.PhaseState) terminalexperience.PhaseState {
+	switch state {
+	case pulsecommand.PhaseCompleted:
+		return terminalexperience.PhaseCompleted
+	case pulsecommand.PhaseCancelled:
+		return terminalexperience.PhaseCancelled
+	case pulsecommand.PhaseFailed:
+		return terminalexperience.PhaseFailed
+	default:
+		return terminalexperience.PhaseActive
 	}
 }
 

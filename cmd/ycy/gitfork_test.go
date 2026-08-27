@@ -12,66 +12,151 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
+	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	forkcommand "github.com/hackycy/hackycy-cli/internal/commands/git/fork"
+	"github.com/hackycy/hackycy-cli/internal/logging"
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
-func TestTerminalGitForkPrompterUsesTheLegacyDefaultYesAndCancellationForms(t *testing.T) {
+func TestTerminalGitForkAdapterTranslatesConfirmationPhasesAndPresentation(t *testing.T) {
+	experience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Confirmed: true}})
+	run := experience.Open(context.Background())
+	adapter := newTerminalGitForkAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true}, func() {})
 	prompt := forkcommand.OverwritePrompt{Destination: "project", Message: "Directory \"project\" is not empty. Overwrite?"}
 
-	defaultOutput := &bytes.Buffer{}
-	confirmed, cancelled := newTerminalGitForkPrompter(strings.NewReader("\n"), defaultOutput).ConfirmOverwrite(prompt)
-	if !confirmed || cancelled || defaultOutput.String() != "Directory \"project\" is not empty. Overwrite? [Y/n]: " {
-		t.Fatalf("default overwrite = (%t, %t, %q)", confirmed, cancelled, defaultOutput.String())
+	adapter.Introduction()
+	confirmed, cancelled, err := adapter.ConfirmOverwrite(prompt)
+	if err != nil || cancelled || !confirmed {
+		t.Fatalf("ConfirmOverwrite() = (%t, %t, %v)", confirmed, cancelled, err)
+	}
+	reporter, err := adapter.Start(context.Background())
+	if err != nil {
+		t.Fatalf("Start() error = %v", err)
+	}
+	reporter.Report(forkcommand.Phase{Kind: forkcommand.PhaseArchive, State: forkcommand.PhaseActive, Ref: "main", Destination: "chosen"})
+	if err := reporter.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
+	}
+	adapter.Outcome(forkcommand.Result{
+		Repository:  forkcommand.Repository{Host: "github.example", Owner: "group", Name: "project", ProviderType: "github"},
+		Destination: "chosen",
+		Ref:         "main",
+		Acquisition: "archive",
+	})
+	if err := run.Close(); err != nil {
+		t.Fatalf("Close() error = %v", err)
 	}
 
-	for _, test := range []struct {
-		input         string
-		wantConfirmed bool
-		wantCancelled bool
-	}{
-		{input: "no\n"},
-		{input: "cancel\n", wantCancelled: true},
-		{input: "unexpected\nyes\n", wantConfirmed: true},
-	} {
-		output := &bytes.Buffer{}
-		confirmed, cancelled := newTerminalGitForkPrompter(strings.NewReader(test.input), output).ConfirmOverwrite(prompt)
-		if confirmed != test.wantConfirmed || cancelled != test.wantCancelled {
-			t.Fatalf("input %q overwrite = (%t, %t)", test.input, confirmed, cancelled)
-		}
-		if strings.HasPrefix(test.input, "unexpected") && !strings.Contains(output.String(), "Invalid confirmation") {
-			t.Fatalf("invalid confirmation output = %q", output.String())
-		}
+	operations := experience.Run.Operations()
+	if len(operations) != 5 || operations[0].Kind != terminaltest.PresentOperation || operations[1].Kind != terminaltest.AskOperation || operations[2].Kind != terminaltest.TrackOperation || operations[3].Kind != terminaltest.PresentOperation || operations[4].Kind != terminaltest.CloseOperation {
+		t.Fatalf("operations = %#v", operations)
+	}
+	confirmation := operations[1].Value.(terminalexperience.InteractionRequest)
+	if confirmation.Kind != terminalexperience.InteractionConfirm || confirmation.Message != prompt.Message || !confirmation.HasDefault || !confirmation.Default.Confirmed || confirmation.PlainPrompt != prompt.Message+" [Y/n]: " || !reflect.DeepEqual(confirmation.CancelValues, []string{"q", "quit", "cancel"}) {
+		t.Fatalf("confirmation request = %#v", confirmation)
+	}
+	if _, err := confirmation.ParsePlain("maybe"); err == nil || err.Error() != "Invalid confirmation" {
+		t.Fatalf("invalid confirmation parse error = %v", err)
+	}
+	tracked := operations[2].Value.(terminalexperience.TrackedOperation)
+	if tracked.Label != "Git Fork" || tracked.RequestCancel == nil {
+		t.Fatalf("tracked operation = %#v", tracked)
+	}
+	var phases []terminalexperience.OperationPhase
+	for phase := range tracked.Updates {
+		phases = append(phases, phase)
+	}
+	if got, want := phases, []terminalexperience.OperationPhase{{Name: "Downloading archive", Detail: "main", State: terminalexperience.PhaseActive}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("tracked phases = %#v, want %#v", got, want)
+	}
+	outcome := operations[3].Value.(terminalexperience.PresentationDocument)
+	if got, want := outcome.Blocks, []terminalexperience.PresentationBlock{
+		{Role: terminalexperience.VisualRoleMuted, Text: "Resolved: github.example/group/project (github)"},
+		{Role: terminalexperience.VisualRoleActive, Text: "Branch: main"},
+		{Role: terminalexperience.VisualRoleSuccess, Text: "Archive downloaded and extracted"},
+		{Role: terminalexperience.VisualRoleSuccess, Text: "Done! Project created at chosen"},
+	}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("outcome = %#v, want %#v", got, want)
 	}
 }
 
-func TestTerminalGitForkPresenterRendersTheCommandMilestones(t *testing.T) {
-	output := &bytes.Buffer{}
-	presenter := terminalGitForkPresenter{output: output}
-	presenter.Introduction()
-	presenter.Resolved(forkcommand.Repository{Host: "github.example", Owner: "group", Name: "project", ProviderType: "github"})
-	presenter.DefaultBranchStarted()
-	presenter.DefaultBranchResolved("main")
-	presenter.ArchiveStarted()
-	presenter.ArchiveSucceeded()
-	presenter.Completed("chosen")
-	presenter.DefaultBranchFailed(errors.New("default unavailable"))
-	presenter.ArchiveFailed(errors.New("archive unavailable"))
-	presenter.CloneStarted()
-	presenter.CloneSucceeded()
-	presenter.Cancelled()
+func TestTerminalGitForkAdapterPreservesPlainConfirmationSyntax(t *testing.T) {
+	prompt := forkcommand.OverwritePrompt{Destination: "project", Message: "Directory \"project\" is not empty. Overwrite?"}
+	for _, testCase := range []struct {
+		name          string
+		input         string
+		wantConfirmed bool
+		wantCancelled bool
+		invalid       bool
+	}{
+		{name: "default yes", input: "\n", wantConfirmed: true},
+		{name: "declined", input: "no\n"},
+		{name: "cancelled", input: "cancel\n", wantCancelled: true},
+		{name: "invalid then confirmed", input: "unexpected\nyes\n", wantConfirmed: true, invalid: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
+			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+				Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
+				Input:       strings.NewReader(testCase.input),
+				Output:      stdout,
+				Diagnostics: diagnostics,
+			})
+			run := experience.Open(context.Background())
+			confirmed, cancelled, err := newTerminalGitForkAdapter(run, experience.Session(), func() {}).ConfirmOverwrite(prompt)
+			if closeErr := run.Close(); closeErr != nil {
+				t.Fatalf("Close() error = %v", closeErr)
+			}
+			if err != nil || confirmed != testCase.wantConfirmed || cancelled != testCase.wantCancelled {
+				t.Fatalf("ConfirmOverwrite() = (%t, %t, %v)", confirmed, cancelled, err)
+			}
+			if !strings.HasPrefix(diagnostics.String(), prompt.Message+" [Y/n]: ") {
+				t.Fatalf("confirmation prompt = %q", diagnostics.String())
+			}
+			if testCase.invalid != strings.Contains(diagnostics.String(), "Invalid confirmation") {
+				t.Fatalf("confirmation diagnostics = %q", diagnostics.String())
+			}
+			if stdout.Len() != 0 || terminaltest.ContainsTerminalControl(diagnostics.Bytes()) {
+				t.Fatalf("Plain streams = (%q, %q)", stdout.String(), diagnostics.String())
+			}
+		})
+	}
+}
 
-	want := "HACKYCY CLI\n\nGit Fork\n" +
-		"Resolved: github.example/group/project (github)\n" +
-		"Fetching default branch...\nBranch: main\nDownloading archive...\nArchive downloaded and extracted\nDone! Project created at chosen\n" +
-		"Failed to get default branch: default unavailable\nFalling back to git clone with remote default branch.\n" +
-		"Archive download failed: archive unavailable\nFalling back to git clone...\nCloned and cleaned up\nCancelled\n"
-	if output.String() != want {
-		t.Fatalf("presentation = %q, want %q", output.String(), want)
+func TestTerminalGitForkAdapterMapsCancellationAutomationAndRedactsFallbackFacts(t *testing.T) {
+	cancelledExperience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrInteractionCancelled})
+	cancelledAdapter := newTerminalGitForkAdapter(cancelledExperience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.RichInteractive}, func() {})
+	if confirmed, cancelled, err := cancelledAdapter.ConfirmOverwrite(forkcommand.OverwritePrompt{}); err != nil || confirmed || !cancelled {
+		t.Fatalf("cancelled ConfirmOverwrite() = (%t, %t, %v)", confirmed, cancelled, err)
+	}
+
+	automationExperience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrAutomationInteraction})
+	automationAdapter := newTerminalGitForkAdapter(automationExperience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.Automation}, func() {})
+	if _, _, err := automationAdapter.ConfirmOverwrite(forkcommand.OverwritePrompt{}); !errors.Is(err, errGitForkRequiresInteractive) {
+		t.Fatalf("Automation ConfirmOverwrite() error = %v", err)
+	}
+
+	document := gitForkOutcomeDocument(terminalexperience.Session{Kind: terminalexperience.PlainInteractive}, forkcommand.Result{
+		Repository:         forkcommand.Repository{Host: "github.example", Owner: "group", Name: "project", ProviderType: "github"},
+		Destination:        "chosen",
+		DefaultBranchError: errors.New("default request failed: token=branch-secret"),
+		ArchiveError:       errors.New("archive request failed: Authorization: Bearer archive-secret"),
+		Acquisition:        "clone",
+	})
+	for _, block := range document.Blocks {
+		if block.Role != terminalexperience.VisualRolePlain || strings.Contains(block.Text, "branch-secret") || strings.Contains(block.Text, "archive-secret") {
+			t.Fatalf("redacted fallback block = %#v", block)
+		}
+	}
+	if text := terminalexperience.RenderPlain(document); !strings.Contains(text, "[REDACTED]") {
+		t.Fatalf("redacted fallback output = %q", text)
 	}
 }
 
@@ -131,8 +216,20 @@ func TestGitForkHandlerUsesEncryptedConfigAndALocalProviderArchive(t *testing.T)
 	t.Setenv("USERPROFILE", "")
 	configureGitForkFixture(t, home, server.URL)
 	destination := filepath.Join(t.TempDir(), "destination")
-	output := &bytes.Buffer{}
-	handler := newGitForkHandler(strings.NewReader(""), output)
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatalf("create destination: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(destination, "old.txt"), []byte("replace"), 0o600); err != nil {
+		t.Fatalf("write existing destination: %v", err)
+	}
+	output, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
+		Input:       strings.NewReader("unexpected\nyes\n"),
+		Output:      output,
+		Diagnostics: diagnostics,
+	})
+	handler := newGitForkHandler(experience)
 	result, err := handler(context.Background(), forkcommand.Input{Repository: "fixture:group/project", Destination: destination})
 	if err != nil || string(result.Acquisition) != "archive" || result.Ref != "main" {
 		t.Fatalf("handler result = (%#v, %v)", result, err)
@@ -152,6 +249,14 @@ func TestGitForkHandlerUsesEncryptedConfigAndALocalProviderArchive(t *testing.T)
 	if strings.Contains(text, "fixture-token") {
 		t.Fatalf("output disclosed the configured token: %q", text)
 	}
+	for _, expected := range []string{"Directory \"", "Invalid confirmation", "Resolving repository", "Fetching default branch", "Downloading archive", "Project ready"} {
+		if !strings.Contains(diagnostics.String(), expected) {
+			t.Fatalf("diagnostics does not contain %q:\n%s", expected, diagnostics.String())
+		}
+	}
+	if terminaltest.ContainsTerminalControl(append(output.Bytes(), diagnostics.Bytes()...)) {
+		t.Fatalf("Plain streams contain terminal control: (%q, %q)", output.String(), diagnostics.String())
+	}
 }
 
 func TestGitForkHandlerLeavesANonemptyDestinationOnDeclinedOverwrite(t *testing.T) {
@@ -166,8 +271,14 @@ func TestGitForkHandlerLeavesANonemptyDestinationOnDeclinedOverwrite(t *testing.
 	if err := os.WriteFile(kept, []byte("keep"), 0o600); err != nil {
 		t.Fatalf("write destination: %v", err)
 	}
-	output := &bytes.Buffer{}
-	handler := newGitForkHandler(strings.NewReader("no\n"), output)
+	output, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
+		Input:       strings.NewReader("no\n"),
+		Output:      output,
+		Diagnostics: diagnostics,
+	})
+	handler := newGitForkHandler(experience)
 	result, err := handler(context.Background(), forkcommand.Input{Repository: "owner/project", Destination: destination})
 	if err != nil || !result.Cancelled {
 		t.Fatalf("handler result = (%#v, %v)", result, err)
@@ -177,6 +288,47 @@ func TestGitForkHandlerLeavesANonemptyDestinationOnDeclinedOverwrite(t *testing.
 	}
 	if !strings.Contains(output.String(), "Cancelled") {
 		t.Fatalf("cancellation output = %q", output.String())
+	}
+	if !strings.Contains(diagnostics.String(), "[Y/n]: ") || terminaltest.ContainsTerminalControl(append(output.Bytes(), diagnostics.Bytes()...)) {
+		t.Fatalf("Plain cancellation streams = (%q, %q)", output.String(), diagnostics.String())
+	}
+}
+
+func TestGitForkAutomationFailsBeforeReadingOrRemovingANonemptyDestination(t *testing.T) {
+	destination := filepath.Join(t.TempDir(), "destination")
+	if err := os.MkdirAll(destination, 0o700); err != nil {
+		t.Fatalf("create destination: %v", err)
+	}
+	kept := filepath.Join(destination, "kept.txt")
+	if err := os.WriteFile(kept, []byte("keep"), 0o600); err != nil {
+		t.Fatalf("write destination: %v", err)
+	}
+	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
+		Input:       panicGitForkReader{},
+		Output:      stdout,
+		Diagnostics: stderr,
+	})
+	app, err := cliapp.New(cliapp.BuildInfo{Version: "0.0.0-dev"}, cliapp.Dependencies{
+		Out:     stdout,
+		Err:     stderr,
+		Logging: logging.NewRuntime(logging.Options{Writer: stderr}),
+		GitFork: newGitForkHandler(experience),
+	})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	outcome := app.Execute(context.Background(), []string{"git", "fork", "owner/project", destination})
+	if outcome.Code != 1 || !errors.Is(outcome.Err, errGitForkRequiresInteractive) || stdout.Len() != 0 || stderr.String() != "error: git fork requires an interactive terminal\n" {
+		t.Fatalf("Automation outcome = %#v, streams = (%q, %q)", outcome, stdout.String(), stderr.String())
+	}
+	if contents, err := os.ReadFile(kept); err != nil || string(contents) != "keep" {
+		t.Fatalf("Automation failure mutated destination = (%q, %v)", contents, err)
+	}
+	if terminaltest.ContainsTerminalControl(append(stdout.Bytes(), stderr.Bytes()...)) {
+		t.Fatalf("Automation streams contain terminal control: (%q, %q)", stdout.String(), stderr.String())
 	}
 }
 
@@ -211,8 +363,14 @@ func TestGitForkHandlerFallsBackToTheLocalGitRunnerAndCleansMetadata(t *testing.
 	t.Setenv("USERPROFILE", "")
 	configureGitForkFixture(t, home, server.URL)
 	destination := filepath.Join(root, "destination")
-	output := &bytes.Buffer{}
-	result, err := newGitForkHandler(strings.NewReader(""), output)(context.Background(), forkcommand.Input{Repository: "fixture:group/project", Destination: destination})
+	output, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
+		Input:       strings.NewReader(""),
+		Output:      output,
+		Diagnostics: diagnostics,
+	})
+	result, err := newGitForkHandler(experience)(context.Background(), forkcommand.Input{Repository: "fixture:group/project", Destination: destination})
 	if err != nil || string(result.Acquisition) != "clone" {
 		t.Fatalf("handler result = (%#v, %v)", result, err)
 	}
@@ -231,6 +389,9 @@ func TestGitForkHandlerFallsBackToTheLocalGitRunnerAndCleansMetadata(t *testing.
 	}
 	if !strings.Contains(output.String(), "Archive download failed") || !strings.Contains(output.String(), "Cloned and cleaned up") || strings.Contains(output.String(), "fixture-token") {
 		t.Fatalf("clone fallback output = %q", output.String())
+	}
+	if !strings.Contains(diagnostics.String(), "Falling back to git clone") || terminaltest.ContainsTerminalControl(append(output.Bytes(), diagnostics.Bytes()...)) {
+		t.Fatalf("Plain clone streams = (%q, %q)", output.String(), diagnostics.String())
 	}
 }
 
@@ -314,4 +475,10 @@ func gitForkFixtureArchive(t *testing.T, files map[string]string) []byte {
 		t.Fatalf("close gzip: %v", err)
 	}
 	return compressed.Bytes()
+}
+
+type panicGitForkReader struct{}
+
+func (panicGitForkReader) Read([]byte) (int, error) {
+	panic("git fork Automation must not read stdin")
 }

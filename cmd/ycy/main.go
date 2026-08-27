@@ -69,12 +69,6 @@ func main() {
 		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
 		os.Exit(1)
 	}
-	gitPulseModule, err := newGitPulseModule(terminalRoot.input, terminalRoot.output)
-	if err != nil {
-		_, _ = fmt.Fprintln(terminalRoot.output)
-		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
-		os.Exit(1)
-	}
 	app, err := cliapp.New(cliapp.BuildInfo{Version: version}, cliapp.Dependencies{
 		Out:              terminalRoot.output,
 		Err:              normalDiagnostics,
@@ -99,9 +93,9 @@ func main() {
 		TunnelConnect:    newTunnelConnectHandler(terminalRoot.experience, runtime.Logger("tunnel.client"), version),
 		Upgrade:          newUpgradeHandler(terminalRoot.experience, version),
 		GitHeat:          gitHeat,
-		GitPulse:         gitPulseModule.Run,
-		GitFork:          newGitForkHandler(terminalRoot.input, terminalRoot.output),
-		GitCM:            newGitCMHandler(terminalRoot.input, terminalRoot.output),
+		GitPulse:         newGitPulseHandler(terminalRoot.experience),
+		GitFork:          newGitForkHandler(terminalRoot.experience),
+		GitCM:            newGitCMHandler(terminalRoot.experience),
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(terminalRoot.output)

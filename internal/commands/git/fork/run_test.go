@@ -35,6 +35,36 @@ func TestModuleUsesTheArchiveAfterDefaultBranchResolution(t *testing.T) {
 	}
 }
 
+func TestModuleEmitsOneTypedAcquisitionPhaseLedger(t *testing.T) {
+	tracker := &recordingForkTracker{}
+	module := newTestModule(t, &testModuleDependencies{
+		provider:  &fakeProvider{defaultBranch: "main", archive: []byte("archive")},
+		extractor: &fakeArchiveExtractor{},
+		tracker:   tracker,
+	})
+
+	if _, err := module.Run(context.Background(), Input{Repository: "owner/project"}); err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if tracker.closed != 1 {
+		t.Fatalf("closed phase reporters = %d, want 1", tracker.closed)
+	}
+	if got, want := forkPhaseKinds(tracker.phases), []PhaseKind{PhaseResolve, PhaseResolve, PhaseDefaultBranch, PhaseDefaultBranch, PhaseArchive, PhaseArchive, PhaseReady}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("phase kinds = %#v, want %#v", got, want)
+	}
+	if tracker.phases[0].State != PhaseActive || tracker.phases[1].State != PhaseCompleted || tracker.phases[3].Ref != "main" || tracker.phases[len(tracker.phases)-1].State != PhaseCompleted {
+		t.Fatalf("phase ledger = %#v", tracker.phases)
+	}
+}
+
+func forkPhaseKinds(phases []Phase) []PhaseKind {
+	kinds := make([]PhaseKind, 0, len(phases))
+	for _, phase := range phases {
+		kinds = append(kinds, phase.Kind)
+	}
+	return kinds
+}
+
 func TestModulePresentsTheObservableAcquisitionMilestones(t *testing.T) {
 	events := []string{}
 	module := newTestModule(t, &testModuleDependencies{
@@ -47,8 +77,7 @@ func TestModulePresentsTheObservableAcquisitionMilestones(t *testing.T) {
 		t.Fatalf("Run() error = %v", err)
 	}
 	if got, want := events, []string{
-		"intro", "resolved:github.com/owner/project", "read:" + testForkPath("project"), "branch-start", "branch", "branch:main",
-		"archive-start", "archive:main", "extract:" + testForkPath("project"), "archive-succeeded", "completed:project",
+		"intro", "read:" + testForkPath("project"), "branch", "archive:main", "extract:" + testForkPath("project"), "outcome:project",
 	}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("presentation and operation order = %#v, want %#v", got, want)
 	}
@@ -64,7 +93,7 @@ func TestModulePresentsTheObservableAcquisitionMilestones(t *testing.T) {
 	if err != nil || !result.Cancelled {
 		t.Fatalf("cancelled Run() = (%#v, %v)", result, err)
 	}
-	if got, want := events, []string{"intro", "resolved:github.com/owner/project", "read:" + testForkPath("project"), "prompt", "cancelled"}; !reflect.DeepEqual(got, want) {
+	if got, want := events, []string{"intro", "read:" + testForkPath("project"), "prompt", "cancelled"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("cancellation order = %#v, want %#v", got, want)
 	}
 }
@@ -192,6 +221,25 @@ func TestModuleRetainsLegacyDestinationConfirmationAndReadErrorBehavior(t *testi
 	}
 }
 
+func TestModuleReturnsOverwriteInteractionFailureBeforeMutation(t *testing.T) {
+	events := []string{}
+	interactionFailure := errors.New("interactive terminal unavailable")
+	remover := &fakeDirectoryRemover{events: &events}
+	module := newTestModule(t, &testModuleDependencies{
+		events:      &events,
+		directories: fakeDirectoryReader{events: &events, entries: []fs.DirEntry{testDirectoryEntry{}}},
+		prompter:    &fakeOverwritePrompter{events: &events, err: interactionFailure},
+		remover:     remover,
+	})
+
+	if _, err := module.Run(context.Background(), Input{Repository: "owner/project", Destination: "existing"}); !errors.Is(err, interactionFailure) {
+		t.Fatalf("Run() error = %v, want interaction failure", err)
+	}
+	if len(remover.paths) != 0 || !reflect.DeepEqual(events, []string{"read:" + testForkPath("existing"), "prompt"}) {
+		t.Fatalf("interaction failure events = %#v, removed = %#v", events, remover.paths)
+	}
+}
+
 func TestModuleReturnsCloneFailuresAndRequiresEveryBoundary(t *testing.T) {
 	cloneFailure := errors.New("clone failed")
 	module := newTestModule(t, &testModuleDependencies{
@@ -217,6 +265,7 @@ func TestModuleReturnsCloneFailuresAndRequiresEveryBoundary(t *testing.T) {
 		{name: "clone runner", apply: func(dependencies *testModuleDependencies) { dependencies.cloneRunner = nil }, want: "git fork clone runner is required"},
 		{name: "remover", apply: func(dependencies *testModuleDependencies) { dependencies.remover = nil }, want: "git fork directory remover is required"},
 		{name: "presenter", apply: func(dependencies *testModuleDependencies) { dependencies.presenter = nil }, want: "git fork presenter is required"},
+		{name: "tracker", apply: func(dependencies *testModuleDependencies) { dependencies.tracker = nil }, want: "git fork tracker is required"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			dependencies := valid.withDefaults(nil)
@@ -239,6 +288,7 @@ type testModuleDependencies struct {
 	cloneRunner      CloneRunner
 	remover          DirectoryRemover
 	presenter        Presenter
+	tracker          Tracker
 }
 
 func newTestModule(t *testing.T, overrides *testModuleDependencies) *Module {
@@ -282,6 +332,9 @@ func (dependencies testModuleDependencies) withDefaults(events *[]string) testMo
 	if dependencies.presenter == nil {
 		dependencies.presenter = noopForkPresenter{}
 	}
+	if dependencies.tracker == nil {
+		dependencies.tracker = noopForkTracker{}
+	}
 	return dependencies
 }
 
@@ -289,7 +342,7 @@ func (dependencies testModuleDependencies) dependencies() Dependencies {
 	return Dependencies{
 		Config: dependencies.config, WorkingDirectory: dependencies.workingDirectory, Directories: dependencies.directories,
 		Prompter: dependencies.prompter, Provider: dependencies.provider, Extractor: dependencies.extractor,
-		CloneRunner: dependencies.cloneRunner, Remover: dependencies.remover, Presenter: dependencies.presenter,
+		CloneRunner: dependencies.cloneRunner, Remover: dependencies.remover, Presenter: dependencies.presenter, Tracker: dependencies.tracker,
 	}
 }
 
@@ -308,11 +361,12 @@ type fakeOverwritePrompter struct {
 	events    *[]string
 	confirmed bool
 	cancelled bool
+	err       error
 }
 
-func (prompter *fakeOverwritePrompter) ConfirmOverwrite(prompt OverwritePrompt) (bool, bool) {
+func (prompter *fakeOverwritePrompter) ConfirmOverwrite(prompt OverwritePrompt) (bool, bool, error) {
 	recordTestEvent(prompter.events, "prompt")
-	return prompter.confirmed, prompter.cancelled
+	return prompter.confirmed, prompter.cancelled, prompter.err
 }
 
 type fakeProvider struct {
@@ -362,67 +416,56 @@ func (testDirectoryEntry) Info() (fs.FileInfo, error) { return nil, nil }
 
 type noopForkPresenter struct{}
 
-func (noopForkPresenter) Introduction()                {}
-func (noopForkPresenter) Resolved(Repository)          {}
-func (noopForkPresenter) DefaultBranchStarted()        {}
-func (noopForkPresenter) DefaultBranchResolved(string) {}
-func (noopForkPresenter) DefaultBranchFailed(error)    {}
-func (noopForkPresenter) ArchiveStarted()              {}
-func (noopForkPresenter) ArchiveSucceeded()            {}
-func (noopForkPresenter) ArchiveFailed(error)          {}
-func (noopForkPresenter) CloneStarted()                {}
-func (noopForkPresenter) CloneSucceeded()              {}
-func (noopForkPresenter) Cancelled()                   {}
-func (noopForkPresenter) Completed(string)             {}
+func (noopForkPresenter) Introduction()  {}
+func (noopForkPresenter) Cancelled()     {}
+func (noopForkPresenter) Outcome(Result) {}
+
+type noopForkTracker struct{}
+
+func (noopForkTracker) Start(context.Context) (PhaseReporter, error) {
+	return noopForkPhaseReporter{}, nil
+}
+
+type noopForkPhaseReporter struct{}
+
+func (noopForkPhaseReporter) Report(Phase) {}
+
+func (noopForkPhaseReporter) Close() error { return nil }
 
 type recordingForkPresenter struct {
 	events *[]string
+}
+
+type recordingForkTracker struct {
+	phases []Phase
+	closed int
+}
+
+func (tracker *recordingForkTracker) Start(context.Context) (PhaseReporter, error) {
+	return recordingForkPhaseReporter{tracker: tracker}, nil
+}
+
+type recordingForkPhaseReporter struct {
+	tracker *recordingForkTracker
+}
+
+func (reporter recordingForkPhaseReporter) Report(phase Phase) {
+	reporter.tracker.phases = append(reporter.tracker.phases, phase)
+}
+
+func (reporter recordingForkPhaseReporter) Close() error {
+	reporter.tracker.closed++
+	return nil
 }
 
 func (presenter recordingForkPresenter) Introduction() {
 	recordTestEvent(presenter.events, "intro")
 }
 
-func (presenter recordingForkPresenter) Resolved(repository Repository) {
-	recordTestEvent(presenter.events, "resolved:"+repository.Host+"/"+repository.Owner+"/"+repository.Name)
-}
-
-func (presenter recordingForkPresenter) DefaultBranchStarted() {
-	recordTestEvent(presenter.events, "branch-start")
-}
-
-func (presenter recordingForkPresenter) DefaultBranchResolved(ref string) {
-	recordTestEvent(presenter.events, "branch:"+ref)
-}
-
-func (presenter recordingForkPresenter) DefaultBranchFailed(error) {
-	recordTestEvent(presenter.events, "branch-failed")
-}
-
-func (presenter recordingForkPresenter) ArchiveStarted() {
-	recordTestEvent(presenter.events, "archive-start")
-}
-
-func (presenter recordingForkPresenter) ArchiveSucceeded() {
-	recordTestEvent(presenter.events, "archive-succeeded")
-}
-
-func (presenter recordingForkPresenter) ArchiveFailed(error) {
-	recordTestEvent(presenter.events, "archive-failed")
-}
-
-func (presenter recordingForkPresenter) CloneStarted() {
-	recordTestEvent(presenter.events, "clone-start")
-}
-
-func (presenter recordingForkPresenter) CloneSucceeded() {
-	recordTestEvent(presenter.events, "clone-succeeded")
-}
-
 func (presenter recordingForkPresenter) Cancelled() {
 	recordTestEvent(presenter.events, "cancelled")
 }
 
-func (presenter recordingForkPresenter) Completed(destination string) {
-	recordTestEvent(presenter.events, "completed:"+destination)
+func (presenter recordingForkPresenter) Outcome(result Result) {
+	recordTestEvent(presenter.events, "outcome:"+result.Destination)
 }

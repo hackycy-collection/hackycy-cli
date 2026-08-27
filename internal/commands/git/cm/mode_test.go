@@ -113,6 +113,31 @@ func TestResolveExecutionModeTreatsEmptyOptionalValuesAsAbsent(t *testing.T) {
 	}
 }
 
+func TestRequiresInteractionMatchesTheEstablishedPromptPaths(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		input Input
+		want  bool
+	}{
+		{name: "generation only", input: Input{}, want: false},
+		{name: "dry run", input: Input{DryRun: true}, want: false},
+		{name: "stage all dry run", input: Input{StageAll: true, DryRun: true}, want: false},
+		{name: "file selection", input: Input{Stage: true}, want: true},
+		{name: "commit confirmation", input: Input{Staged: true}, want: true},
+		{name: "stage all confirmation", input: Input{StageAll: true}, want: true},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := RequiresInteraction(testCase.input)
+			if err != nil || got != testCase.want {
+				t.Fatalf("RequiresInteraction(%#v) = (%t, %v), want (%t, nil)", testCase.input, got, err, testCase.want)
+			}
+		})
+	}
+	if _, err := RequiresInteraction(Input{Stage: true, StageAll: true}); err == nil {
+		t.Fatal("RequiresInteraction() accepted an invalid flag combination")
+	}
+}
+
 func modeString(value string) *string {
 	return &value
 }

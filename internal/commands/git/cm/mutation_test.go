@@ -2,6 +2,7 @@ package cm
 
 import (
 	"context"
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -156,6 +157,23 @@ func TestStageSelectedChangesReportsNoChangesWithoutPromptOrMutation(t *testing.
 	)
 }
 
+func TestStageSelectedChangesPropagatesPromptErrorBeforeMutation(t *testing.T) {
+	root := t.TempDir()
+	runner := newStageRunner(root, " M changed.go\x00")
+	promptErr := errors.New("terminal unavailable")
+	prompter := stagePrompter{err: promptErr}
+
+	result, err := StageSelectedChanges(context.Background(), runner, diskSnapshotFileSystem{}, &prompter)
+	if !errors.Is(err, promptErr) || result != (StageResult{RepositoryRoot: root}) {
+		t.Fatalf("StageSelectedChanges() = (%#v, %v)", result, err)
+	}
+	runner.requireCalls(t,
+		[]string{"rev-parse", "--show-toplevel"},
+		[]string{"-C", root, "status", "--porcelain=v1", "-z", "--untracked-files=all"},
+		[]string{"-C", root, "ls-files", "--stage", "-z"},
+	)
+}
+
 func TestStageAllChangesUsesGitAddAll(t *testing.T) {
 	root := t.TempDir()
 	runner := &scriptedGitRunner{responses: map[string]GitOutput{
@@ -179,17 +197,21 @@ type stagePrompter struct {
 	prompt           StagePrompt
 	selected         []string
 	cancelled        bool
+	err              error
 	useInitialValues bool
 	called           bool
 }
 
-func (prompter *stagePrompter) SelectFiles(prompt StagePrompt) ([]string, bool) {
+func (prompter *stagePrompter) SelectFiles(prompt StagePrompt) ([]string, bool, error) {
 	prompter.called = true
 	prompter.prompt = prompt
-	if prompter.useInitialValues {
-		return append([]string(nil), prompt.InitialValues...), prompter.cancelled
+	if prompter.err != nil {
+		return nil, false, prompter.err
 	}
-	return append([]string(nil), prompter.selected...), prompter.cancelled
+	if prompter.useInitialValues {
+		return append([]string(nil), prompt.InitialValues...), prompter.cancelled, nil
+	}
+	return append([]string(nil), prompter.selected...), prompter.cancelled, nil
 }
 
 func newStageRunner(root, status string) *scriptedGitRunner {

@@ -21,7 +21,7 @@ type CommitPrompt struct {
 
 // CommitPrompter owns the default-yes commit confirmation boundary.
 type CommitPrompter interface {
-	ConfirmCommit(CommitPrompt) (confirmed bool, cancelled bool)
+	ConfirmCommit(CommitPrompt) (confirmed bool, cancelled bool, err error)
 }
 
 // Dependencies are Git CM's command-owned collaboration points.
@@ -32,6 +32,7 @@ type Dependencies struct {
 	Committer CommitPrompter
 	Resolver  ProfileResolver
 	Transport ProviderTransport
+	Tracker   Tracker
 }
 
 // Module owns Git CM generation before confirmation, commit, and push handling.
@@ -42,6 +43,7 @@ type Module struct {
 	committer CommitPrompter
 	resolver  ProfileResolver
 	transport ProviderTransport
+	tracker   Tracker
 }
 
 // New constructs an unregistered Git CM module.
@@ -64,6 +66,9 @@ func New(dependencies Dependencies) (*Module, error) {
 	if dependencies.Transport == nil {
 		return nil, errors.New("Git CM provider transport is required")
 	}
+	if dependencies.Tracker == nil {
+		return nil, errors.New("Git CM tracker is required")
+	}
 	return &Module{
 		git:       dependencies.Git,
 		files:     dependencies.Files,
@@ -71,6 +76,7 @@ func New(dependencies Dependencies) (*Module, error) {
 		committer: dependencies.Committer,
 		resolver:  dependencies.Resolver,
 		transport: dependencies.Transport,
+		tracker:   dependencies.Tracker,
 	}, nil
 }
 
@@ -82,43 +88,113 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 	}
 	result := Result{Scope: mode.Scope}
 	if mode.PromptStage {
-		staged, err := StageSelectedChanges(ctx, module.git, module.files, module.prompter)
+		plan, err := prepareStage(ctx, module.git)
 		if err != nil {
 			return Result{}, err
 		}
-		result.RepositoryRoot = staged.RepositoryRoot
-		if staged.Cancelled {
-			result.Cancelled = true
-			return result, nil
-		}
-		if staged.NothingSelected {
-			result.NothingSelected = true
-			return result, nil
-		}
-		if staged.NoChanges {
+		result.RepositoryRoot = plan.state.Root
+		if len(plan.state.Files) == 0 {
 			result.NoChanges = true
 			result.NoChangeScope = ScopeAllUncommitted
 			return result, nil
 		}
-	}
-	if mode.StageAll {
-		root, err := StageAllChanges(ctx, module.git)
+		selected, cancelled, err := module.prompter.SelectFiles(plan.prompt)
 		if err != nil {
-			return Result{}, err
+			return result, err
 		}
-		result.RepositoryRoot = root
+		if cancelled {
+			result.Cancelled = true
+			return result, nil
+		}
+		if len(selected) == 0 {
+			result.NothingSelected = true
+			return result, nil
+		}
+		result, err = module.track(ctx, func(report func(Phase)) (Result, error) {
+			report(Phase{Kind: PhaseStage, State: PhaseActive, FileCount: len(selected)})
+			if _, err := applyStagePlan(ctx, module.git, module.files, plan, selected); err != nil {
+				return Result{}, err
+			}
+			report(Phase{Kind: PhaseStage, State: PhaseCompleted, FileCount: len(selected)})
+			return module.generate(ctx, input, mode, result, report)
+		})
+		if err != nil {
+			return result, err
+		}
+	} else {
+		result, err = module.track(ctx, func(report func(Phase)) (Result, error) {
+			if mode.StageAll {
+				report(Phase{Kind: PhaseStage, State: PhaseActive})
+				root, err := StageAllChanges(ctx, module.git)
+				if err != nil {
+					return Result{}, err
+				}
+				result.RepositoryRoot = root
+				report(Phase{Kind: PhaseStage, State: PhaseCompleted})
+			}
+			return module.generate(ctx, input, mode, result, report)
+		})
+		if err != nil {
+			return result, err
+		}
 	}
+	if result.Generated == nil || !mode.CreateCommit {
+		return result, nil
+	}
+	generated := *result.Generated
+	result.PromptedCommit = true
+	confirmed, cancelled, err := module.committer.ConfirmCommit(CommitPrompt{
+		Message:   "Create this commit?",
+		Generated: generated,
+		Profile:   result.Profile,
+	})
+	if err != nil {
+		return result, err
+	}
+	if cancelled || !confirmed {
+		result.Cancelled = true
+		return result, nil
+	}
+	return module.track(ctx, func(report func(Phase)) (Result, error) {
+		report(Phase{Kind: PhaseCommit, State: PhaseActive})
+		if err := CommitSnapshot(ctx, module.git, module.files, CommitRequest{
+			RepositoryRoot: result.RepositoryRoot,
+			Scope:          result.Scope,
+			SnapshotID:     generated.SnapshotID,
+			Message:        generated.Message,
+		}); err != nil {
+			return result, err
+		}
+		result.Committed = true
+		report(Phase{Kind: PhaseCommit, State: PhaseCompleted})
+		if !mode.Push {
+			return result, nil
+		}
+		report(Phase{Kind: PhasePush, State: PhaseActive, Remote: mode.PushRemote})
+		if err := PushCommit(ctx, module.git, result.RepositoryRoot, mode.PushRemote); err != nil {
+			return result, err
+		}
+		result.Pushed = true
+		result.PushRemote = mode.PushRemote
+		report(Phase{Kind: PhasePush, State: PhaseCompleted, Remote: mode.PushRemote})
+		return result, nil
+	})
+}
 
+func (module *Module) generate(ctx context.Context, input Input, mode executionMode, result Result, report func(Phase)) (Result, error) {
+	report(Phase{Kind: PhaseCollect, State: PhaseActive})
 	snapshot, err := CaptureSnapshot(ctx, module.git, module.files, mode.Scope)
 	if err != nil {
 		return Result{}, err
 	}
 	result.RepositoryRoot = snapshot.RepositoryRoot
 	if len(snapshot.Files) == 0 {
+		report(Phase{Kind: PhaseCollect, State: PhaseCompleted})
 		result.NoChanges = true
 		result.NoChangeScope = mode.Scope
 		return result, nil
 	}
+	report(Phase{Kind: PhaseCollect, State: PhaseCompleted, FileCount: len(snapshot.Files)})
 	profile, err := module.resolver.ResolveCMProfile(appconfig.CMResolveOptions{
 		ProfileName:       input.Profile,
 		TimeoutOverrideMS: input.TimeoutMS,
@@ -135,6 +211,7 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	report(Phase{Kind: PhaseGenerate, State: PhaseActive, FileCount: len(snapshot.Files)})
 	generated, err := GenerateCommitMessage(ctx, model, GenerationInput{
 		Snapshot:    snapshot,
 		Language:    language,
@@ -144,36 +221,7 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 		return result, err
 	}
 	result.Generated = &generated
-	if !mode.CreateCommit {
-		return result, nil
-	}
-	result.PromptedCommit = true
-	confirmed, cancelled := module.committer.ConfirmCommit(CommitPrompt{
-		Message:   "Create this commit?",
-		Generated: generated,
-		Profile:   result.Profile,
-	})
-	if cancelled || !confirmed {
-		result.Cancelled = true
-		return result, nil
-	}
-	if err := CommitSnapshot(ctx, module.git, module.files, CommitRequest{
-		RepositoryRoot: result.RepositoryRoot,
-		Scope:          result.Scope,
-		SnapshotID:     generated.SnapshotID,
-		Message:        generated.Message,
-	}); err != nil {
-		return result, err
-	}
-	result.Committed = true
-	if !mode.Push {
-		return result, nil
-	}
-	if err := PushCommit(ctx, module.git, result.RepositoryRoot, mode.PushRemote); err != nil {
-		return result, err
-	}
-	result.Pushed = true
-	result.PushRemote = mode.PushRemote
+	report(Phase{Kind: PhaseGenerate, State: PhaseCompleted, FileCount: len(snapshot.Files)})
 	return result, nil
 }
 

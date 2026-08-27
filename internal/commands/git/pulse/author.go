@@ -23,28 +23,31 @@ type AuthorPrompt struct {
 
 // AuthorPrompter owns author selection without exposing terminal implementation details.
 type AuthorPrompter interface {
-	SelectAuthors(AuthorPrompt) (selected []string, cancelled bool)
+	SelectAuthors(AuthorPrompt) (selected []string, cancelled bool, err error)
 }
 
 // SelectAuthors keeps all commits for zero or one author and otherwise filters by a prompt selection.
-func SelectAuthors(commits []Commit, prompter AuthorPrompter) ([]Commit, bool) {
+func SelectAuthors(commits []Commit, prompter AuthorPrompter) ([]Commit, bool, error) {
 	authors := pulseAuthors(commits)
 	if len(authors) <= 1 {
-		return commits, false
+		return commits, false, nil
 	}
 
 	initialValues := []string(nil)
 	if len(authors) <= 3 {
 		initialValues = append([]string(nil), authors...)
 	}
-	selected, cancelled := prompter.SelectAuthors(AuthorPrompt{
+	selected, cancelled, err := prompter.SelectAuthors(AuthorPrompt{
 		Message:       "Filter by authors:",
 		Options:       authorChoices(authors),
 		InitialValues: initialValues,
 		Required:      true,
 	})
+	if err != nil {
+		return nil, false, err
+	}
 	if cancelled {
-		return nil, true
+		return nil, true, nil
 	}
 
 	selectedAuthors := make(map[string]struct{}, len(selected))
@@ -57,7 +60,7 @@ func SelectAuthors(commits []Commit, prompter AuthorPrompter) ([]Commit, bool) {
 			filtered = append(filtered, commit)
 		}
 	}
-	return filtered, false
+	return filtered, false, nil
 }
 
 func pulseAuthors(commits []Commit) []string {

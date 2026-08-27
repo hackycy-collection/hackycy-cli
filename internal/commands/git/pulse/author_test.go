@@ -6,15 +6,15 @@ import (
 )
 
 func TestSelectAuthorsSkipsThePromptForZeroOrOneAuthor(t *testing.T) {
-	noCommits, cancelled := SelectAuthors(nil, panicPulseAuthorPrompter{})
-	if cancelled || len(noCommits) != 0 {
-		t.Fatalf("zero-author selection = (%#v, %t)", noCommits, cancelled)
+	noCommits, cancelled, err := SelectAuthors(nil, panicPulseAuthorPrompter{})
+	if err != nil || cancelled || len(noCommits) != 0 {
+		t.Fatalf("zero-author selection = (%#v, %t, %v)", noCommits, cancelled, err)
 	}
 
 	commits := []Commit{{Author: "Ada", Subject: "one"}, {Author: "Ada", Subject: "two"}}
-	selected, cancelled := SelectAuthors(commits, panicPulseAuthorPrompter{})
-	if cancelled || !reflect.DeepEqual(selected, commits) {
-		t.Fatalf("one-author selection = (%#v, %t), want %#v, false", selected, cancelled, commits)
+	selected, cancelled, err := SelectAuthors(commits, panicPulseAuthorPrompter{})
+	if err != nil || cancelled || !reflect.DeepEqual(selected, commits) {
+		t.Fatalf("one-author selection = (%#v, %t, %v), want %#v, false, nil", selected, cancelled, err, commits)
 	}
 }
 
@@ -51,8 +51,8 @@ func TestSelectAuthorsUsesLegacyDefaultsAndFiltersSelection(t *testing.T) {
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
 			prompter := &scriptedPulseAuthorPrompter{selected: testCase.selected}
-			got, cancelled := SelectAuthors(testCase.commits, prompter)
-			if cancelled {
+			got, cancelled, err := SelectAuthors(testCase.commits, prompter)
+			if err != nil || cancelled {
 				t.Fatal("SelectAuthors() unexpectedly cancelled")
 			}
 			if !reflect.DeepEqual(got, testCase.wantFiltered) {
@@ -72,9 +72,9 @@ func TestSelectAuthorsUsesLegacyDefaultsAndFiltersSelection(t *testing.T) {
 }
 
 func TestSelectAuthorsReturnsCancellationWithoutFiltering(t *testing.T) {
-	selected, cancelled := SelectAuthors([]Commit{{Author: "Ada"}, {Author: "Ben"}}, &scriptedPulseAuthorPrompter{cancelled: true})
-	if !cancelled || selected != nil {
-		t.Fatalf("SelectAuthors() = (%#v, %t), want nil, true", selected, cancelled)
+	selected, cancelled, err := SelectAuthors([]Commit{{Author: "Ada"}, {Author: "Ben"}}, &scriptedPulseAuthorPrompter{cancelled: true})
+	if err != nil || !cancelled || selected != nil {
+		t.Fatalf("SelectAuthors() = (%#v, %t, %v), want nil, true, nil", selected, cancelled, err)
 	}
 }
 
@@ -84,13 +84,13 @@ type scriptedPulseAuthorPrompter struct {
 	cancelled bool
 }
 
-func (prompter *scriptedPulseAuthorPrompter) SelectAuthors(prompt AuthorPrompt) ([]string, bool) {
+func (prompter *scriptedPulseAuthorPrompter) SelectAuthors(prompt AuthorPrompt) ([]string, bool, error) {
 	prompter.prompt = prompt
-	return prompter.selected, prompter.cancelled
+	return prompter.selected, prompter.cancelled, nil
 }
 
 type panicPulseAuthorPrompter struct{}
 
-func (panicPulseAuthorPrompter) SelectAuthors(AuthorPrompt) ([]string, bool) {
+func (panicPulseAuthorPrompter) SelectAuthors(AuthorPrompt) ([]string, bool, error) {
 	panic("author prompt must not be called")
 }

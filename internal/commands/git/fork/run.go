@@ -26,7 +26,7 @@ type OverwritePrompt struct {
 
 // OverwritePrompter obtains the legacy default-yes replacement decision.
 type OverwritePrompter interface {
-	ConfirmOverwrite(OverwritePrompt) (confirmed bool, cancelled bool)
+	ConfirmOverwrite(OverwritePrompt) (confirmed bool, cancelled bool, err error)
 }
 
 // Provider resolves a default branch and downloads a provider archive.
@@ -38,17 +38,8 @@ type Provider interface {
 // Presenter owns the observable terminal milestones of a Git Fork operation.
 type Presenter interface {
 	Introduction()
-	Resolved(Repository)
-	DefaultBranchStarted()
-	DefaultBranchResolved(string)
-	DefaultBranchFailed(error)
-	ArchiveStarted()
-	ArchiveSucceeded()
-	ArchiveFailed(error)
-	CloneStarted()
-	CloneSucceeded()
 	Cancelled()
-	Completed(string)
+	Outcome(Result)
 }
 
 // Acquisition identifies the successful source of the working tree.
@@ -82,6 +73,7 @@ type Dependencies struct {
 	CloneRunner      CloneRunner
 	Remover          DirectoryRemover
 	Presenter        Presenter
+	Tracker          Tracker
 }
 
 // Module owns Git Fork's destination mutation and archive-or-clone behavior.
@@ -95,6 +87,7 @@ type Module struct {
 	cloneRunner      CloneRunner
 	remover          DirectoryRemover
 	presenter        Presenter
+	tracker          Tracker
 }
 
 // New constructs an unregistered Git Fork module.
@@ -126,6 +119,9 @@ func New(dependencies Dependencies) (*Module, error) {
 	if dependencies.Presenter == nil {
 		return nil, errors.New("git fork presenter is required")
 	}
+	if dependencies.Tracker == nil {
+		return nil, errors.New("git fork tracker is required")
+	}
 	return &Module{
 		config:           dependencies.Config,
 		workingDirectory: dependencies.WorkingDirectory,
@@ -136,6 +132,7 @@ func New(dependencies Dependencies) (*Module, error) {
 		cloneRunner:      dependencies.CloneRunner,
 		remover:          dependencies.Remover,
 		presenter:        dependencies.Presenter,
+		tracker:          dependencies.Tracker,
 	}, nil
 }
 
@@ -146,7 +143,6 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	module.presenter.Resolved(repository)
 	workingDirectory, err := module.workingDirectory()
 	if err != nil {
 		return Result{}, err
@@ -159,10 +155,13 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 	result := Result{Repository: repository, Destination: destination, DestinationPath: destinationPath, Ref: repository.Ref}
 
 	if entries, err := module.directories.ReadDir(destinationPath); err == nil && len(entries) > 0 {
-		confirmed, cancelled := module.prompter.ConfirmOverwrite(OverwritePrompt{
+		confirmed, cancelled, err := module.prompter.ConfirmOverwrite(OverwritePrompt{
 			Destination: destination,
 			Message:     "Directory \"" + destination + "\" is not empty. Overwrite?",
 		})
+		if err != nil {
+			return Result{}, err
+		}
 		if cancelled || !confirmed {
 			result.Cancelled = true
 			module.presenter.Cancelled()
@@ -173,37 +172,49 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 		}
 	}
 
-	if result.Ref == "" {
-		module.presenter.DefaultBranchStarted()
-		result.Ref, result.DefaultBranchError = module.provider.DefaultBranch(ctx, repository)
-		if result.DefaultBranchError != nil {
-			module.presenter.DefaultBranchFailed(result.DefaultBranchError)
-		} else {
-			module.presenter.DefaultBranchResolved(result.Ref)
+	result, err = module.track(ctx, result, func(report func(Phase)) (Result, error) {
+		phase := func(kind PhaseKind, state PhaseState) Phase {
+			return Phase{Kind: kind, State: state, Repository: repository.Owner + "/" + repository.Name, Ref: result.Ref, Destination: destination}
 		}
-	}
-	if result.Ref != "" {
-		module.presenter.ArchiveStarted()
-		archive, archiveErr := module.provider.DownloadArchive(ctx, repository, result.Ref)
-		if archiveErr == nil {
-			archiveErr = module.extractor.Extract(destinationPath, archive)
+		report(phase(PhaseResolve, PhaseActive))
+		report(phase(PhaseResolve, PhaseCompleted))
+		if result.Ref == "" {
+			report(phase(PhaseDefaultBranch, PhaseActive))
+			result.Ref, result.DefaultBranchError = module.provider.DefaultBranch(ctx, repository)
+			if result.DefaultBranchError != nil {
+				report(phase(PhaseDefaultBranch, PhaseFailed))
+			} else {
+				report(phase(PhaseDefaultBranch, PhaseCompleted))
+			}
 		}
-		if archiveErr == nil {
-			result.Acquisition = acquisitionArchive
-			module.presenter.ArchiveSucceeded()
-			module.presenter.Completed(destination)
-			return result, nil
+		if result.Ref != "" {
+			report(phase(PhaseArchive, PhaseActive))
+			archive, archiveErr := module.provider.DownloadArchive(ctx, repository, result.Ref)
+			if archiveErr == nil {
+				archiveErr = module.extractor.Extract(destinationPath, archive)
+			}
+			if archiveErr == nil {
+				result.Acquisition = acquisitionArchive
+				report(phase(PhaseArchive, PhaseCompleted))
+				report(phase(PhaseReady, PhaseCompleted))
+				return result, nil
+			}
+			result.ArchiveError = archiveErr
+			report(phase(PhaseArchive, PhaseFailed))
 		}
-		result.ArchiveError = archiveErr
-		module.presenter.ArchiveFailed(archiveErr)
+		report(phase(PhaseClone, PhaseActive))
+		if err := CloneFallback(ctx, module.cloneRunner, module.remover, repositoryWithRef(repository, result.Ref), destinationPath); err != nil {
+			return Result{}, err
+		}
+		result.Acquisition = acquisitionClone
+		report(phase(PhaseClone, PhaseCompleted))
+		report(phase(PhaseReady, PhaseCompleted))
+		return result, nil
+	})
+	if err != nil {
+		return result, err
 	}
-	module.presenter.CloneStarted()
-	if err := CloneFallback(ctx, module.cloneRunner, module.remover, repositoryWithRef(repository, result.Ref), destinationPath); err != nil {
-		return Result{}, err
-	}
-	result.Acquisition = acquisitionClone
-	module.presenter.CloneSucceeded()
-	module.presenter.Completed(destination)
+	module.presenter.Outcome(result)
 	return result, nil
 }
 

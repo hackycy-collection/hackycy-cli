@@ -11,12 +11,8 @@ var errPulseGitUnavailable = errors.New("Git is not installed or not available i
 // Presenter owns git pulse's semantic terminal events.
 type Presenter interface {
 	Introduction(string)
-	ScanStarted()
-	RepositoryFound(root, repository string, count int)
 	RepositoriesFound(int)
 	NoRepositories()
-	FetchStarted(int)
-	FetchProgress(root, repository string, done, total int)
 	NoCommits()
 	Cancelled()
 	Present(Report)
@@ -31,6 +27,7 @@ type Dependencies struct {
 	Git              GitRunner
 	Prompter         Prompter
 	Presenter        Presenter
+	Tracker          Tracker
 	Now              func() time.Time
 }
 
@@ -49,6 +46,7 @@ type Module struct {
 	git              GitRunner
 	prompter         Prompter
 	presenter        Presenter
+	tracker          Tracker
 	now              func() time.Time
 }
 
@@ -75,6 +73,9 @@ func New(dependencies Dependencies) (*Module, error) {
 	if dependencies.Presenter == nil {
 		return nil, errors.New("git pulse presenter is required")
 	}
+	if dependencies.Tracker == nil {
+		return nil, errors.New("git pulse tracker is required")
+	}
 	if dependencies.Now == nil {
 		return nil, errors.New("git pulse clock is required")
 	}
@@ -86,6 +87,7 @@ func New(dependencies Dependencies) (*Module, error) {
 		git:              dependencies.Git,
 		prompter:         dependencies.Prompter,
 		presenter:        dependencies.Presenter,
+		tracker:          dependencies.Tracker,
 		now:              dependencies.Now,
 	}, nil
 }
@@ -111,12 +113,16 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 	}
 
 	module.presenter.Introduction(root)
-	module.presenter.ScanStarted()
 	found := 0
-	repositories, err := ScanRepositories(ctx, root, module.reader, func(repository string) {
-		found++
-		module.presenter.RepositoryFound(root, repository, found)
-	}, module.yield)
+	var repositories []string
+	err = module.track(ctx, Phase{Kind: PhaseScan, State: PhaseActive, Root: root}, func(report func(Phase)) error {
+		var scanErr error
+		repositories, scanErr = ScanRepositories(ctx, root, module.reader, func(repository string) {
+			found++
+			report(Phase{Kind: PhaseScan, State: PhaseActive, Root: root, Repository: repository, Completed: found})
+		}, module.yield)
+		return scanErr
+	})
 	if err != nil {
 		return Result{}, err
 	}
@@ -132,7 +138,10 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	days, cancelled := selectDays(input, module.prompter)
+	days, cancelled, err := selectDays(input, module.prompter)
+	if err != nil {
+		return Result{}, err
+	}
 	if cancelled {
 		module.presenter.Cancelled()
 		return Result{}, nil
@@ -141,9 +150,13 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 		return Result{}, err
 	}
 
-	module.presenter.FetchStarted(len(repositories))
-	fetched, err := FetchCommits(ctx, module.git, repositories, SinceBoundary(module.now(), days), func(repository string, done int) {
-		module.presenter.FetchProgress(root, repository, done, len(repositories))
+	var fetched FetchResult
+	err = module.track(ctx, Phase{Kind: PhaseFetch, State: PhaseActive, Root: root, Total: len(repositories)}, func(report func(Phase)) error {
+		var fetchErr error
+		fetched, fetchErr = FetchCommits(ctx, module.git, repositories, SinceBoundary(module.now(), days), func(repository string, done int) {
+			report(Phase{Kind: PhaseFetch, State: PhaseActive, Root: root, Repository: repository, Completed: done, Total: len(repositories)})
+		})
+		return fetchErr
 	})
 	if err != nil {
 		return Result{}, err
@@ -156,7 +169,10 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 	if err := ctx.Err(); err != nil {
 		return Result{}, err
 	}
-	commits, cancelled := SelectAuthors(fetched.Commits, module.prompter)
+	commits, cancelled, err := SelectAuthors(fetched.Commits, module.prompter)
+	if err != nil {
+		return Result{}, err
+	}
 	if cancelled {
 		module.presenter.Cancelled()
 		return Result{FailedRepositories: fetched.FailedRepositories}, nil
