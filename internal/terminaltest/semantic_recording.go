@@ -1,0 +1,95 @@
+package terminaltest
+
+import (
+	"context"
+	"io"
+	"sync"
+
+	"github.com/hackycy/hackycy-cli/internal/terminal"
+)
+
+// SemanticAnswer is a scripted response for a terminal InteractionRequest.
+type SemanticAnswer struct {
+	Value terminal.InteractionAnswer
+	Err   error
+}
+
+// RecordingExperience records calls made through terminal's semantic seam.
+type RecordingExperience struct {
+	Run         *RecordingSemanticRun
+	diagnostics io.Writer
+}
+
+// NewRecordingExperience creates a recording Experience with scripted answers.
+func NewRecordingExperience(answers ...SemanticAnswer) *RecordingExperience {
+	return &RecordingExperience{
+		Run:         NewRecordingSemanticRun(answers...),
+		diagnostics: io.Discard,
+	}
+}
+
+// Open returns the recording run. The context is intentionally not interpreted.
+func (experience *RecordingExperience) Open(_ context.Context) terminal.ExperienceRun {
+	return experience.Run
+}
+
+// DiagnosticWriter returns a discard sink for semantic tests.
+func (experience *RecordingExperience) DiagnosticWriter() io.Writer {
+	return experience.diagnostics
+}
+
+// RecordingSemanticRun records typed terminal operations.
+type RecordingSemanticRun struct {
+	mu         sync.Mutex
+	answers    []SemanticAnswer
+	operations []Operation
+}
+
+// NewRecordingSemanticRun creates a typed semantic recorder.
+func NewRecordingSemanticRun(answers ...SemanticAnswer) *RecordingSemanticRun {
+	return &RecordingSemanticRun{answers: append([]SemanticAnswer(nil), answers...)}
+}
+
+// Ask records an interaction request and returns the next scripted response.
+func (run *RecordingSemanticRun) Ask(request terminal.InteractionRequest) (terminal.InteractionAnswer, error) {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	run.operations = append(run.operations, Operation{Kind: AskOperation, Value: request})
+	if len(run.answers) == 0 {
+		return terminal.InteractionAnswer{}, nil
+	}
+	answer := run.answers[0]
+	run.answers = run.answers[1:]
+	return answer.Value, answer.Err
+}
+
+// Present records a durable presentation document.
+func (run *RecordingSemanticRun) Present(document terminal.PresentationDocument) error {
+	run.record(PresentOperation, document)
+	return nil
+}
+
+// Track records a tracked operation.
+func (run *RecordingSemanticRun) Track(operation terminal.TrackedOperation) error {
+	run.record(TrackOperation, operation)
+	return nil
+}
+
+// Close records terminal cleanup.
+func (run *RecordingSemanticRun) Close() error {
+	run.record(CloseOperation, nil)
+	return nil
+}
+
+// Operations returns a snapshot of typed semantic calls.
+func (run *RecordingSemanticRun) Operations() []Operation {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	return append([]Operation(nil), run.operations...)
+}
+
+func (run *RecordingSemanticRun) record(kind OperationKind, value any) {
+	run.mu.Lock()
+	defer run.mu.Unlock()
+	run.operations = append(run.operations, Operation{Kind: kind, Value: value})
+}
