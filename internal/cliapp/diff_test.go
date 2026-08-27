@@ -100,7 +100,7 @@ func TestDiffBindingExposesOnlyAnInjectedHandlerAndItsHelp(t *testing.T) {
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"diff"}); outcome.Code != 1 || errors.String() != "error: unknown command 'diff'\n" {
+	if outcome := app.Execute(context.Background(), []string{"diff"}); outcome.Code != 1 || errors.String() != "error: unknown command 'diff'; Run 'ycy --help' for usage.\n" {
 		t.Fatalf("unregistered diff outcome = %#v, stderr = %q", outcome, errors.String())
 	}
 

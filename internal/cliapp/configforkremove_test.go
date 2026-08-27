@@ -47,7 +47,7 @@ func TestConfigForkRemoveBindingPassesTypedRequestAndExposesOnlyTheRealLeaf(t *t
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"config", "fork", "list"}); outcome.Code != 1 || errors.String() != "error: unknown command 'list'\n" {
+	if outcome := app.Execute(context.Background(), []string{"config", "fork", "list"}); outcome.Code != 1 || errors.String() != "error: unknown command 'list'; Run 'ycy config fork --help' for usage.\n" {
 		t.Fatalf("absent sibling outcome = %#v, stderr = %q", outcome, errors.String())
 	}
 }

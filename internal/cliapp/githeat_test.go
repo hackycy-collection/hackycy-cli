@@ -84,6 +84,24 @@ func TestGitHeatBindingAppliesDefaultsAndSupportsDays(t *testing.T) {
 	}
 }
 
+func TestGitHeatQueryShorthandCoexistsWithGlobalQuiet(t *testing.T) {
+	var inputs []heatcommand.Input
+	app, _, errors, runtime := newGitHeatTestApp(t, func(_ context.Context, input heatcommand.Input) (heatcommand.Result, error) {
+		inputs = append(inputs, input)
+		return heatcommand.Result{}, nil
+	})
+
+	if outcome := app.Execute(context.Background(), []string{"git", "heat", "-q", "needle"}); outcome.Code != 0 || errors.Len() != 0 || len(inputs) != 1 || inputs[0].Query != "needle" || runtime.Level() != logging.Info {
+		t.Fatalf("query shorthand outcome = %#v, inputs = %#v, stderr = %q, level = %v", outcome, inputs, errors.String(), runtime.Level())
+	}
+
+	inputs = nil
+	errors.Reset()
+	if outcome := app.Execute(context.Background(), []string{"--quiet", "git", "heat", "-q", "needle"}); outcome.Code != 0 || errors.Len() != 0 || len(inputs) != 1 || inputs[0].Query != "needle" || runtime.Level() != logging.Error {
+		t.Fatalf("long quiet outcome = %#v, inputs = %#v, stderr = %q, level = %v", outcome, inputs, errors.String(), runtime.Level())
+	}
+}
+
 func TestGitHeatBindingRejectsInvalidFlagsBeforeHandler(t *testing.T) {
 	calls := 0
 	app, output, errors, _ := newGitHeatTestApp(t, func(context.Context, heatcommand.Input) (heatcommand.Result, error) {
@@ -97,7 +115,7 @@ func TestGitHeatBindingRejectsInvalidFlagsBeforeHandler(t *testing.T) {
 		{arguments: []string{"git", "heat", "-n", "oops"}, want: "error: 'oops' is not a valid integer\n"},
 		{arguments: []string{"git", "heat", "-t", "directory"}, want: "error: 'directory' is not a valid report type. Use files or directories.\n"},
 		{arguments: []string{"git", "heat", "-s", "date"}, want: "error: 'date' is not a valid sort. Use count or path.\n"},
-		{arguments: []string{"git", "heat", "unexpected"}, want: "error: unknown command 'unexpected'\n"},
+		{arguments: []string{"git", "heat", "unexpected"}, want: "error: unknown command 'unexpected'; Run 'ycy git heat --help' for usage.\n"},
 	}
 	for _, testCase := range testCases {
 		outcome := app.Execute(context.Background(), testCase.arguments)
@@ -121,7 +139,7 @@ func TestGitHeatGroupExposesOnlyHeat(t *testing.T) {
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"git", "pulse"}); outcome.Code != 1 || errors.String() != "error: unknown command 'pulse'\n" {
+	if outcome := app.Execute(context.Background(), []string{"git", "pulse"}); outcome.Code != 1 || errors.String() != "error: unknown command 'pulse'; Run 'ycy git --help' for usage.\n" {
 		t.Fatalf("absent sibling outcome = %#v, stderr = %q", outcome, errors.String())
 	}
 }

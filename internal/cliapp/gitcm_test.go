@@ -152,7 +152,7 @@ func TestNormalizeGitCMArgumentsLeavesOtherCommandArgumentsUntouched(t *testing.
 
 func TestGitCMGroupIsAbsentWithoutTheProductionHandler(t *testing.T) {
 	app, output, errors, _ := testApp(t, nil)
-	if outcome := app.Execute(context.Background(), []string{"git", "cm"}); outcome.Code != 1 || errors.String() != "error: unknown command 'git'\n" || output.Len() != 0 {
+	if outcome := app.Execute(context.Background(), []string{"git", "cm"}); outcome.Code != 1 || errors.String() != "error: unknown command 'git'; Run 'ycy --help' for usage.\n" || output.Len() != 0 {
 		t.Fatalf("outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
 	}
 }

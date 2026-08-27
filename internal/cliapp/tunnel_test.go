@@ -193,7 +193,7 @@ func TestTunnelConnectBindingRegistersOnlyItsOwnLeafAndFlags(t *testing.T) {
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"tunnel", "connect", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "--server") || !strings.Contains(output.String(), "--token") || strings.Contains(output.String(), "--control-port") || !strings.Contains(output.String(), "Global Flags:\n      --log-level") {
+	if outcome := app.Execute(context.Background(), []string{"tunnel", "connect", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "--server") || !strings.Contains(output.String(), "--token") || strings.Contains(output.String(), "--control-port") || !strings.Contains(output.String(), "Global Flags:") || !strings.Contains(output.String(), "--log-level") || !strings.Contains(output.String(), "--log-format") || !strings.Contains(output.String(), "--quiet") || !strings.Contains(output.String(), "--verbose") {
 		t.Fatalf("connect help outcome = %#v, stdout = %q", outcome, output.String())
 	}
 }
@@ -215,12 +215,12 @@ func TestTunnelServerBindingExposesOnlyTheIntegratedServerLeaf(t *testing.T) {
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"tunnel", "server", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "--control-port") || !strings.Contains(output.String(), "--session-idle-days") || !strings.Contains(output.String(), "Global Flags:\n      --log-level") || strings.Contains(strings.Split(output.String(), "Global Flags:")[0], "--log-level") {
+	if outcome := app.Execute(context.Background(), []string{"tunnel", "server", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "--control-port") || !strings.Contains(output.String(), "--session-idle-days") || !strings.Contains(output.String(), "Global Flags:") || !strings.Contains(output.String(), "--log-level") || !strings.Contains(output.String(), "--log-format") || !strings.Contains(output.String(), "--quiet") || !strings.Contains(output.String(), "--verbose") || strings.Contains(strings.Split(output.String(), "Global Flags:")[0], "--log-level") {
 		t.Fatalf("tunnel server help outcome = %#v, stdout = %q", outcome, output.String())
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"tunnel", "connect"}); outcome.Code != 1 || errors.String() != "error: unknown command 'connect'\n" {
+	if outcome := app.Execute(context.Background(), []string{"tunnel", "connect"}); outcome.Code != 1 || errors.String() != "error: unknown command 'connect'; Run 'ycy tunnel --help' for usage.\n" {
 		t.Fatalf("unintegrated tunnel connect outcome = %#v, stderr = %q", outcome, errors.String())
 	}
 }

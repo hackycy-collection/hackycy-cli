@@ -39,7 +39,7 @@ func TestDiscoveryAndParserContractsKeepAutomationStreamsSeparated(t *testing.T)
 			name:       "unknown command",
 			arguments:  []string{"missing"},
 			wantCode:   1,
-			wantStderr: "error: unknown command 'missing'\n",
+			wantStderr: "error: unknown command 'missing'; Run 'ycy --help' for usage.\n",
 		},
 	}
 

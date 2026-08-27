@@ -47,7 +47,7 @@ func TestConfigCMListBindingPassesTypedInputAndExposesNoSibling(t *testing.T) {
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"config", "cm", "add"}); outcome.Code != 1 || errors.String() != "error: unknown command 'add'\n" {
+	if outcome := app.Execute(context.Background(), []string{"config", "cm", "add"}); outcome.Code != 1 || errors.String() != "error: unknown command 'add'; Run 'ycy config cm --help' for usage.\n" {
 		t.Fatalf("absent sibling outcome = %#v, stderr = %q", outcome, errors.String())
 	}
 }
@@ -91,7 +91,7 @@ func TestConfigCMAddBindingPassesTypedRequestAndExposesOnlyRealLeaves(t *testing
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"config", "cm", "use"}); outcome.Code != 1 || errors.String() != "error: unknown command 'use'\n" {
+	if outcome := app.Execute(context.Background(), []string{"config", "cm", "use"}); outcome.Code != 1 || errors.String() != "error: unknown command 'use'; Run 'ycy config cm --help' for usage.\n" {
 		t.Fatalf("absent sibling outcome = %#v, stderr = %q", outcome, errors.String())
 	}
 }

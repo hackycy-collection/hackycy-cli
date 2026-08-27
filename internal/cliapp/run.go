@@ -24,11 +24,11 @@ func (outcome *runChildOutcome) ExitCode() int {
 	return outcome.code
 }
 
-func (app *App) registerRun(root *cobra.Command, configureLogging func(string) error) {
-	root.AddCommand(app.runCommand(app.run, configureLogging))
+func (app *App) registerRun(root *cobra.Command, configureDiagnostics func() error) {
+	root.AddCommand(app.runCommand(app.run, configureDiagnostics))
 }
 
-func (app *App) runCommand(handler RunHandler, configureLogging func(string) error) *cobra.Command {
+func (app *App) runCommand(handler RunHandler, configureDiagnostics func() error) *cobra.Command {
 	return &cobra.Command{
 		Use:                "run [path]",
 		Short:              "Run package.json scripts",
@@ -39,11 +39,11 @@ func (app *App) runCommand(handler RunHandler, configureLogging func(string) err
 			if err != nil {
 				return err
 			}
-			if err := configureLogging(parsed.logLevel); err != nil {
-				return err
-			}
 			if parsed.help {
 				return command.Help()
+			}
+			if err := configureDiagnostics(); err != nil {
+				return err
 			}
 			result, err := handler(command.Context(), runcommand.Input{Directory: parsed.directory})
 			if err != nil {
@@ -59,7 +59,6 @@ func (app *App) runCommand(handler RunHandler, configureLogging func(string) err
 
 type parsedRunArguments struct {
 	directory string
-	logLevel  string
 	help      bool
 }
 
@@ -73,14 +72,12 @@ func parseRunArguments(arguments []string) (parsedRunArguments, error) {
 			break
 		}
 		switch {
-		case argument == "--log-level":
+		case argument == "--log-level", argument == "--log-format":
 			if index+1 == len(arguments) {
-				return parsedRunArguments{}, fmt.Errorf("flag needs an argument: --log-level")
+				return parsedRunArguments{}, fmt.Errorf("flag needs an argument: %s", argument)
 			}
 			index++
-			parsed.logLevel = arguments[index]
-		case strings.HasPrefix(argument, "--log-level="):
-			parsed.logLevel = strings.TrimPrefix(argument, "--log-level=")
+		case strings.HasPrefix(argument, "--log-level="), strings.HasPrefix(argument, "--log-format="), argument == "--verbose", strings.HasPrefix(argument, "--verbose="), argument == "--quiet", strings.HasPrefix(argument, "--quiet="), argument == "-v":
 		default:
 			operands = append(operands, argument)
 		}

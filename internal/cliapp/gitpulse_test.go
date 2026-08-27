@@ -58,7 +58,7 @@ func TestGitPulseBindingRejectsInvalidArgumentsBeforeHandler(t *testing.T) {
 	}{
 		{arguments: []string{"git", "pulse", "--days", "oops"}, want: "error: 'oops' is not a valid integer\n"},
 		{arguments: []string{"git", "pulse", "one", "two"}, want: "error: accepts at most 1 arg(s), received 2\n"},
-		{arguments: []string{"git", "pulse", "--unknown"}, want: "error: unknown flag: --unknown\n"},
+		{arguments: []string{"git", "pulse", "--unknown"}, want: "error: unknown flag: --unknown; Run 'ycy git pulse --help' for usage.\n"},
 	}
 	for _, testCase := range testCases {
 		outcome := app.Execute(context.Background(), testCase.arguments)
@@ -82,7 +82,7 @@ func TestGitPulseGroupExposesOnlyPulseWhenHeatIsAbsent(t *testing.T) {
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"git", "heat"}); outcome.Code != 1 || errors.String() != "error: unknown command 'heat'\n" {
+	if outcome := app.Execute(context.Background(), []string{"git", "heat"}); outcome.Code != 1 || errors.String() != "error: unknown command 'heat'; Run 'ycy git --help' for usage.\n" {
 		t.Fatalf("absent sibling outcome = %#v, stderr = %q", outcome, errors.String())
 	}
 }

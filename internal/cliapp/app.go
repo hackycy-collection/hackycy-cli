@@ -25,6 +25,7 @@ type Dependencies struct {
 	Environment       func(string) string
 	EnvironmentLookup func(string) (string, bool)
 	Logging           *logging.Runtime
+	Discovery         DiscoveryPresenter
 	ExportEnv         ExportEnvHandler
 	ConfigForkList    ConfigForkListHandler
 	ConfigForkAdd     ConfigForkAddHandler
@@ -63,6 +64,7 @@ type App struct {
 	environment       func(string) string
 	environmentLookup func(string) (string, bool)
 	logging           *logging.Runtime
+	discovery         DiscoveryPresenter
 	exportEnv         ExportEnvHandler
 	configForkList    ConfigForkListHandler
 	configForkAdd     ConfigForkAddHandler
@@ -122,6 +124,7 @@ func New(build BuildInfo, dependencies Dependencies) (*App, error) {
 		environment:       dependencies.Environment,
 		environmentLookup: dependencies.EnvironmentLookup,
 		logging:           dependencies.Logging,
+		discovery:         dependencies.Discovery,
 		exportEnv:         dependencies.ExportEnv,
 		configForkList:    dependencies.ConfigForkList,
 		configForkAdd:     dependencies.ConfigForkAdd,
@@ -149,13 +152,15 @@ func New(build BuildInfo, dependencies Dependencies) (*App, error) {
 
 // Execute builds a fresh Cobra tree for every invocation and never exits the process itself.
 func (app *App) Execute(context context.Context, arguments []string) Outcome {
+	arguments = normalizeDiagnosticAliases(arguments)
+	controls := collectDiagnosticControls(arguments)
+	root := app.rootCommandWithDiagnosticControls(controls)
 	return app.execute(func() error {
-		root := app.rootCommand()
 		if app.gitCM != nil {
 			arguments = normalizeGitCMArguments(arguments)
 		}
 		root.SetArgs(arguments)
-		return root.ExecuteContext(context)
+		return normalizeCobraError(root, arguments, root.ExecuteContext(context))
 	})
 }
 
@@ -176,7 +181,6 @@ func (app *App) execute(invoke func() error) (outcome Outcome) {
 		if errors.Is(err, errHelpRequested) {
 			return Outcome{Code: 1, Err: err}
 		}
-		err = normalizeCobraError(err)
 		app.reportError(err)
 		return Outcome{Code: 1, Err: err}
 	}
@@ -189,8 +193,18 @@ type exitCodedError interface {
 }
 
 func (app *App) rootCommand() *cobra.Command {
+	return app.rootCommandWithDiagnosticControls(diagnosticControls{})
+}
+
+func (app *App) rootCommandWithDiagnosticControls(controls diagnosticControls) *cobra.Command {
 	var logLevel string
+	var logFormat string
+	var verbose bool
+	var quiet bool
 	var showVersion bool
+	configureDiagnostics := func() error {
+		return app.configureDiagnosticLogging(controls)
+	}
 	root := &cobra.Command{
 		Use:           "ycy",
 		Short:         "Ycy command line interface",
@@ -202,9 +216,6 @@ func (app *App) rootCommand() *cobra.Command {
 				_, _ = fmt.Fprintln(app.out, app.build.Version)
 				return nil
 			}
-			if err := app.configureLogging(logLevel); err != nil {
-				return err
-			}
 			if err := command.Help(); err != nil {
 				return err
 			}
@@ -214,72 +225,61 @@ func (app *App) rootCommand() *cobra.Command {
 	root.SetOut(app.out)
 	root.SetErr(app.err)
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, or error")
+	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable debug diagnostics")
+	root.PersistentFlags().BoolVar(&quiet, "quiet", false, "Only emit error diagnostics (short form: -q)")
+	root.PersistentFlags().StringVar(&logFormat, "log-format", "", "Diagnostic format: text or json")
 	root.Flags().BoolVarP(&showVersion, "version", "V", false, "Print version")
 	if app.exportEnv != nil {
-		app.registerExportEnv(root, func() error {
-			return app.configureLogging(logLevel)
-		})
+		app.registerExportEnv(root, configureDiagnostics)
 	}
 	if app.configForkList != nil || app.configForkAdd != nil || app.configForkRemove != nil || app.configCMList != nil || app.configCMAdd != nil || app.configCMUse != nil || app.configCMSet != nil || app.configCMRemove != nil || app.configCMTest != nil {
-		app.registerConfig(root, func() error {
-			return app.configureLogging(logLevel)
-		})
+		app.registerConfig(root, configureDiagnostics)
 	}
 	if app.rm != nil {
-		app.registerRM(root, func() error {
-			return app.configureLogging(logLevel)
-		})
+		app.registerRM(root, configureDiagnostics)
 	}
 	if app.run != nil {
-		app.registerRun(root, func(override string) error {
-			if override != "" {
-				return app.configureLogging(override)
-			}
-			return app.configureLogging(logLevel)
-		})
+		app.registerRun(root, configureDiagnostics)
 	}
 	if app.gitHeat != nil || app.gitPulse != nil || app.gitFork != nil || app.gitCM != nil {
-		app.registerGit(root, func() error {
-			return app.configureLogging(logLevel)
-		})
+		app.registerGit(root, configureDiagnostics)
 	}
 	if app.zip != nil {
-		app.registerZIP(root, func() error {
-			return app.configureLogging(logLevel)
-		})
+		app.registerZIP(root, configureDiagnostics)
 	}
 	if app.diff != nil {
-		app.registerDiff(root, func() error {
-			return app.configureLogging(logLevel)
-		})
+		app.registerDiff(root, configureDiagnostics)
 	}
 	if app.fs != nil {
-		app.registerFS(root, func() error {
-			return app.configureLogging(logLevel)
-		})
+		app.registerFS(root, configureDiagnostics)
 	}
 	if app.tunnelServer != nil || app.tunnelConnect != nil {
-		app.registerTunnel(root, func() error {
-			return app.configureLogging(logLevel)
-		})
+		app.registerTunnel(root, configureDiagnostics)
 	}
 	if app.upgrade != nil {
-		app.registerUpgrade(root, func() error {
-			return app.configureLogging(logLevel)
+		app.registerUpgrade(root, configureDiagnostics)
+	}
+	if app.discovery != nil {
+		root.SetHelpFunc(func(command *cobra.Command, _ []string) {
+			app.discovery.PresentDiscovery(command.Context(), newDiscoveryDocument(command))
 		})
 	}
 	return root
 }
 
-func (app *App) configureLogging(value string) error {
-	if value == "" {
-		value = app.environment("YCY_LOG_LEVEL")
-	}
-	level, err := logging.ParseLevel(value)
+func (app *App) configureDiagnosticLogging(controls diagnosticControls) error {
+	configuration, err := logging.ParseConfiguration(logging.ConfigurationInput{
+		LogLevels:    controls.logLevels,
+		LogFormats:   controls.logFormats,
+		VerboseCount: controls.verboseCount,
+		QuietCount:   controls.quietCount,
+		LookupEnv:    app.environmentLookup,
+	})
 	if err != nil {
 		return err
 	}
-	app.logging.SetLevel(level)
+	app.logging.SetLevel(configuration.Level)
+	app.logging.SetFormat(configuration.Format)
 	return nil
 }
 
@@ -297,19 +297,6 @@ func (app *App) reportRuntimeError(err error) {
 
 func (app *App) debugEnabled() bool {
 	return app.environment("DEBUG") != "" || strings.EqualFold(app.environment("NODE_ENV"), "development")
-}
-
-func normalizeCobraError(err error) error {
-	message := err.Error()
-	if strings.HasPrefix(message, "unknown command ") {
-		if start := strings.Index(message, `"`); start >= 0 {
-			rest := message[start+1:]
-			if end := strings.Index(rest, `"`); end >= 0 {
-				return fmt.Errorf("unknown command '%s'", rest[:end])
-			}
-		}
-	}
-	return err
 }
 
 var errHelpRequested = errors.New("help requested")

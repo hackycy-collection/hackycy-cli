@@ -87,6 +87,28 @@ func TestRunBinderAcceptsTheGlobalLogLevelAfterTheLeaf(t *testing.T) {
 	}
 }
 
+func TestRunBinderValidatesDiagnosticControlsBeforeTheHandler(t *testing.T) {
+	for _, testCase := range []struct {
+		arguments []string
+		want      string
+	}{
+		{arguments: []string{"run", "project", "--log-level", "invalid"}, want: `error: invalid log level "invalid" (expected debug, info, warn, or error)` + "\n"},
+		{arguments: []string{"run", "project", "--verbose", "--quiet"}, want: "error: --log-level, --verbose, and --quiet are mutually exclusive\n"},
+	} {
+		t.Run(strings.Join(testCase.arguments, " "), func(t *testing.T) {
+			called := false
+			app, output, errors, _ := testApp(t, nil)
+			outcome := executeRunBinder(app, testCase.arguments, func(context.Context, runcommand.Input) (runcommand.Result, error) {
+				called = true
+				return runcommand.Result{}, nil
+			}, output, errors)
+			if outcome.Code != 1 || errors.String() != testCase.want || output.Len() != 0 || called {
+				t.Fatalf("outcome = %#v, stdout = %q, stderr = %q, called = %t", outcome, output.String(), errors.String(), called)
+			}
+		})
+	}
+}
+
 func TestRunBinderRetainsTheFrozenPassthroughRejectionMatrix(t *testing.T) {
 	testCases := [][]string{
 		{"run", ".", "--flag"},
@@ -153,10 +175,10 @@ func TestRunRegistrationExposesTheRealLeaf(t *testing.T) {
 }
 
 func executeRunBinder(app *App, arguments []string, handler RunHandler, output, errors *bytes.Buffer) Outcome {
-	root := app.rootCommand()
-	root.AddCommand(app.runCommand(handler, func(override string) error {
-		return app.configureLogging(override)
-	}))
+	arguments = normalizeDiagnosticAliases(arguments)
+	controls := collectDiagnosticControls(arguments)
+	root := app.rootCommandWithDiagnosticControls(controls)
+	root.AddCommand(app.runCommand(handler, func() error { return app.configureDiagnosticLogging(controls) }))
 	return app.execute(func() error {
 		root.SetArgs(arguments)
 		return root.ExecuteContext(context.Background())

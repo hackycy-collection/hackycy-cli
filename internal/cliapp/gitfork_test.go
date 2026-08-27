@@ -83,7 +83,7 @@ func TestGitForkGroupExposesOnlyForkWhenOtherGitLeavesAreAbsent(t *testing.T) {
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"git", "heat"}); outcome.Code != 1 || errors.String() != "error: unknown command 'heat'\n" {
+	if outcome := app.Execute(context.Background(), []string{"git", "heat"}); outcome.Code != 1 || errors.String() != "error: unknown command 'heat'; Run 'ycy git --help' for usage.\n" {
 		t.Fatalf("absent sibling outcome = %#v, stderr = %q", outcome, errors.String())
 	}
 }
