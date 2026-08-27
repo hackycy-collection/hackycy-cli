@@ -9,16 +9,16 @@ import (
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 )
 
-type terminalDiscoveryPresenter struct {
+type terminalDiscoveryAdapter struct {
 	experience terminalexperience.Experience
 }
 
-func newTerminalDiscoveryPresenter(experience terminalexperience.Experience) cliapp.DiscoveryPresenter {
-	return terminalDiscoveryPresenter{experience: experience}
+func newTerminalDiscoveryAdapter(experience terminalexperience.Experience) cliapp.DiscoveryPresenter {
+	return terminalDiscoveryAdapter{experience: experience}
 }
 
-func (presenter terminalDiscoveryPresenter) PresentDiscovery(ctx context.Context, document cliapp.DiscoveryDocument) {
-	run := presenter.experience.Open(ctx)
+func (adapter terminalDiscoveryAdapter) PresentDiscovery(ctx context.Context, document cliapp.DiscoveryDocument) {
+	run := adapter.experience.Open(ctx)
 	defer run.Close()
 	_ = run.Present(terminalDiscoveryDocument(document))
 }

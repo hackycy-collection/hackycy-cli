@@ -49,7 +49,7 @@ func main() {
 	runtime := newRootLoggingRuntime(terminalRoot)
 	var discovery cliapp.DiscoveryPresenter
 	if terminalRoot.experience.Session().Kind == terminalexperience.RichInteractive {
-		discovery = newTerminalDiscoveryPresenter(terminalRoot.experience)
+		discovery = newTerminalDiscoveryAdapter(terminalRoot.experience)
 	}
 	diffHandler, err := newDiffHandler(terminalRoot.experience)
 	if err != nil {

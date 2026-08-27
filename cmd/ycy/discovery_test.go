@@ -12,7 +12,7 @@ import (
 
 func TestTerminalDiscoveryPresenterTranslatesAndClosesOneExperienceRun(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience()
-	presenter := newTerminalDiscoveryPresenter(experience)
+	presenter := newTerminalDiscoveryAdapter(experience)
 	presenter.PresentDiscovery(context.Background(), cliapp.DiscoveryDocument{
 		CommandPath: "ycy config",
 		Summary:     "Manage ycy configuration",
