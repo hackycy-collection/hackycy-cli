@@ -2,27 +2,26 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net"
 	"net/netip"
 	"reflect"
+	"strings"
 	"testing"
 
 	diffcommand "github.com/hackycy/hackycy-cli/internal/commands/diff"
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
-func TestTerminalDiffPresenterWritesLegacyStartupURLs(t *testing.T) {
-	output := &bytes.Buffer{}
-	presenter := terminalDiffPresenter{output: output}
-	err := presenter.Present(diffcommand.Startup{
+func TestTerminalDiffPresentationPreservesPlainAndAutomationReadiness(t *testing.T) {
+	startup := diffcommand.Startup{
 		LocalURL:          "http://localhost:43123",
 		NetworkURLs:       []string{"http://192.168.1.50:43123", "http://10.0.0.8:43123"},
 		BaselineDirectory: "/workspace/baseline",
 		TargetDirectory:   "/workspace/target",
 		Port:              43123,
-	})
-	if err != nil {
-		t.Fatalf("Present() error = %v", err)
 	}
 	want := "Directory diff: http://localhost:43123\n" +
 		"MCP endpoint:   http://localhost:43123/mcp\n" +
@@ -32,8 +31,71 @@ func TestTerminalDiffPresenterWritesLegacyStartupURLs(t *testing.T) {
 		"Network MCP: http://10.0.0.8:43123/mcp\n" +
 		"Baseline: /workspace/baseline\n" +
 		"Target:   /workspace/target\n"
-	if output.String() != want {
-		t.Fatalf("presentation = %q, want %q", output.String(), want)
+	for _, session := range []terminalexperience.Session{
+		{Kind: terminalexperience.PlainInteractive},
+		{Kind: terminalexperience.Automation},
+	} {
+		var output, diagnostics bytes.Buffer
+		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Session: session, Output: &output, Diagnostics: &diagnostics})
+		run := experience.Open(context.Background())
+		if err := run.Present(terminalDiffStartupDocument(session, startup)); err != nil {
+			t.Fatalf("%v Present() error = %v", session.Kind, err)
+		}
+		if err := run.Close(); err != nil {
+			t.Fatalf("%v Close() error = %v", session.Kind, err)
+		}
+		if output.String() != want {
+			t.Fatalf("%v presentation = %q, want %q", session.Kind, output.String(), want)
+		}
+		if terminaltest.ContainsTerminalControl(output.Bytes()) {
+			t.Fatalf("%v readiness contains terminal control: %q", session.Kind, output.String())
+		}
+		if diagnostics.Len() != 0 {
+			t.Fatalf("%v readiness wrote stderr: %q", session.Kind, diagnostics.String())
+		}
+	}
+}
+
+func TestTerminalDiffPresentationUsesRichSemanticRoles(t *testing.T) {
+	startup := diffcommand.Startup{
+		LocalURL:          "http://localhost:43123",
+		NetworkURLs:       []string{"http://192.168.1.50:43123"},
+		BaselineDirectory: "/workspace/baseline",
+		TargetDirectory:   "/workspace/target",
+	}
+	for _, session := range []terminalexperience.Session{
+		{Kind: terminalexperience.RichInteractive, Color: true},
+		{Kind: terminalexperience.RichInteractive},
+	} {
+		document := terminalDiffStartupDocument(session, startup)
+		want := []terminalexperience.VisualRole{
+			terminalexperience.VisualRoleActive,
+			terminalexperience.VisualRoleMuted,
+			terminalexperience.VisualRoleActive,
+			terminalexperience.VisualRoleMuted,
+			terminalexperience.VisualRoleMuted,
+			terminalexperience.VisualRoleMuted,
+		}
+		if document.ClearBefore || len(document.Blocks) != len(want) {
+			t.Fatalf("Rich document = %#v", document)
+		}
+		for index, role := range want {
+			if document.Blocks[index].Role != role {
+				t.Fatalf("Rich block %d role = %v, want %v", index, document.Blocks[index].Role, role)
+			}
+		}
+		var output bytes.Buffer
+		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Session: session, Output: &output})
+		run := experience.Open(context.Background())
+		if err := run.Present(document); err != nil {
+			t.Fatalf("Present() error = %v", err)
+		}
+		if err := run.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+		if !session.Color && strings.Contains(output.String(), "\x1b[") {
+			t.Fatalf("NO_COLOR Rich output contains style bytes: %q", output.String())
+		}
 	}
 }
 

@@ -11,13 +11,12 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
 )
 
-func TestCMTestModuleResolvesRunsAndPresentsTheProviderResponse(t *testing.T) {
+func TestCMTestModuleResolvesAndRunsTheProvider(t *testing.T) {
 	resolver := &recordingCMTestResolver{profile: cmTestProfile()}
-	presenter := &recordingCMTestPresenter{}
 	transport := cmTestTransportFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"ok"}}]}`))}, nil
 	})
-	module := newCMTestModule(t, resolver, transport, presenter)
+	module := newCMTestModule(t, resolver, transport)
 
 	result, err := module.Run(context.Background(), TestRequest{Profile: "work"})
 	if err != nil {
@@ -26,65 +25,60 @@ func TestCMTestModuleResolvesRunsAndPresentsTheProviderResponse(t *testing.T) {
 	if resolver.options != (appconfig.CMResolveOptions{ProfileName: "work"}) {
 		t.Fatalf("resolver options = %#v", resolver.options)
 	}
-	if result != (TestResult{Content: "ok"}) || presenter.response != "ok" || presenter.failure != (TestDiagnostic{}) {
-		t.Fatalf("Run() = (%#v, presenter=%#v)", result, presenter)
+	if result != (TestResult{Content: "ok"}) {
+		t.Fatalf("Run() = %#v", result)
 	}
 }
 
-func TestCMTestModulePresentsOnlySafeFailureDiagnostics(t *testing.T) {
+func TestCMTestModuleReturnsOnlySafeFailureDiagnostics(t *testing.T) {
 	profile := cmTestProfile()
-	presenter := &recordingCMTestPresenter{}
 	failure := errors.New("provider rejected test-api-key")
 	transport := cmTestTransportFunc(func(*http.Request) (*http.Response, error) {
 		return nil, failure
 	})
-	module := newCMTestModule(t, &recordingCMTestResolver{profile: profile}, transport, presenter)
+	module := newCMTestModule(t, &recordingCMTestResolver{profile: profile}, transport)
 
 	result, err := module.Run(context.Background(), TestRequest{})
-	if !errors.Is(err, failure) || strings.Contains(err.Error(), profile.APIKey) || result != (TestResult{}) {
+	if !errors.Is(err, failure) || strings.Contains(err.Error(), profile.APIKey) || result.Diagnostic == nil {
 		t.Fatalf("Run() = (%#v, %v), want redacted provider failure", result, err)
 	}
-	if presenter.failure != (TestDiagnostic{Provider: profile.Name, BaseURL: profile.BaseURL, Model: profile.Model}) || presenter.response != "" {
-		t.Fatalf("presenter = %#v", presenter)
+	if got, want := *result.Diagnostic, (TestDiagnostic{Provider: profile.Name, BaseURL: profile.BaseURL, Model: profile.Model}); got != want || result.Content != "" {
+		t.Fatalf("Run() = %#v, want safe diagnostic %#v", result, want)
 	}
 }
 
-func TestCMTestModuleDoesNotPresentAResolverFailure(t *testing.T) {
+func TestCMTestModuleDoesNotReturnAResultForResolverFailure(t *testing.T) {
 	failure := errors.New("No usable CM profile found")
-	presenter := &recordingCMTestPresenter{}
 	module := newCMTestModule(t, &recordingCMTestResolver{err: failure}, cmTestTransportFunc(func(*http.Request) (*http.Response, error) {
 		t.Fatal("transport was called after a resolution failure")
 		return nil, nil
-	}), presenter)
+	}))
 
 	result, err := module.Run(context.Background(), TestRequest{})
-	if !errors.Is(err, failure) || result != (TestResult{}) || presenter.response != "" || presenter.failure != (TestDiagnostic{}) {
-		t.Fatalf("Run() = (%#v, %v, %#v)", result, err, presenter)
+	if !errors.Is(err, failure) || result != (TestResult{}) {
+		t.Fatalf("Run() = (%#v, %v)", result, err)
 	}
 }
 
 func TestCMTestModuleRedactsTheProfileAPIKeyFromSuccessfulProviderContent(t *testing.T) {
 	profile := cmTestProfile()
-	presenter := &recordingCMTestPresenter{}
 	transport := cmTestTransportFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"choices":[{"message":{"content":"received test-api-key"}}]}`))}, nil
 	})
-	module := newCMTestModule(t, &recordingCMTestResolver{profile: profile}, transport, presenter)
+	module := newCMTestModule(t, &recordingCMTestResolver{profile: profile}, transport)
 
 	result, err := module.Run(context.Background(), TestRequest{})
-	if err != nil || strings.Contains(result.Content, profile.APIKey) || strings.Contains(presenter.response, profile.APIKey) || result.Content != "received [REDACTED]" {
-		t.Fatalf("Run() = (%#v, %v, %#v)", result, err, presenter)
+	if err != nil || strings.Contains(result.Content, profile.APIKey) || result.Content != "received [REDACTED]" {
+		t.Fatalf("Run() = (%#v, %v)", result, err)
 	}
 }
 
 func TestNewCMTestModuleRequiresEachCommandOwnedAdapter(t *testing.T) {
 	resolver := &recordingCMTestResolver{profile: cmTestProfile()}
 	transport := cmTestTransportFunc(func(*http.Request) (*http.Response, error) { return nil, nil })
-	presenter := &recordingCMTestPresenter{}
 	for _, dependencies := range []TestDependencies{
-		{Transport: transport, Presenter: presenter},
-		{Resolver: resolver, Presenter: presenter},
-		{Resolver: resolver, Transport: transport},
+		{Transport: transport},
+		{Resolver: resolver},
 	} {
 		if _, err := NewTest(dependencies); err == nil {
 			t.Fatalf("NewTest(%#v) returned nil error", dependencies)
@@ -92,9 +86,9 @@ func TestNewCMTestModuleRequiresEachCommandOwnedAdapter(t *testing.T) {
 	}
 }
 
-func newCMTestModule(t *testing.T, resolver TestProfileResolver, transport cmTestProviderTransport, presenter TestPresenter) *TestModule {
+func newCMTestModule(t *testing.T, resolver TestProfileResolver, transport cmTestProviderTransport) *TestModule {
 	t.Helper()
-	module, err := NewTest(TestDependencies{Resolver: resolver, Transport: transport, Presenter: presenter})
+	module, err := NewTest(TestDependencies{Resolver: resolver, Transport: transport})
 	if err != nil {
 		t.Fatalf("NewTest() returned an error: %v", err)
 	}
@@ -110,17 +104,4 @@ type recordingCMTestResolver struct {
 func (resolver *recordingCMTestResolver) ResolveCMProfile(options appconfig.CMResolveOptions) (appconfig.ResolvedCMProfile, error) {
 	resolver.options = options
 	return resolver.profile, resolver.err
-}
-
-type recordingCMTestPresenter struct {
-	response string
-	failure  TestDiagnostic
-}
-
-func (presenter *recordingCMTestPresenter) Response(content string) {
-	presenter.response = content
-}
-
-func (presenter *recordingCMTestPresenter) Failure(diagnostic TestDiagnostic) {
-	presenter.failure = diagnostic
 }

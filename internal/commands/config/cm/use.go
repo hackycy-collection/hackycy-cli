@@ -6,7 +6,9 @@ type UseRequest struct {
 }
 
 // UseResult records a successful config cm use outcome.
-type UseResult struct{}
+type UseResult struct {
+	Profile string
+}
 
 // UseWriter is the command-facing appconfig semantic selection boundary.
 type UseWriter interface {

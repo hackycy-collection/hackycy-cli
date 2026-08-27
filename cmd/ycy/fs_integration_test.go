@@ -94,6 +94,9 @@ func TestFSStandaloneBinaryPreservesCLIHTTPAndSignalLifecycle(t *testing.T) {
 	if process.command.ProcessState == nil || !process.command.ProcessState.Success() || !strings.Contains(readFSProcessOutput(process), "File Browser stopped.") {
 		t.Fatalf("SIGINT state = %#v, stdout/stderr = %q / %q", process.command.ProcessState, readFSProcessOutput(process), process.stderr.String())
 	}
+	if process.stderr.Len() != 0 {
+		t.Fatalf("FS lifecycle wrote stderr: %q", process.stderr.String())
+	}
 }
 
 func TestFSStandaloneBinaryProtectsDataWithFreshGoAuthentication(t *testing.T) {

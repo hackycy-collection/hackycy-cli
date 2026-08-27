@@ -11,8 +11,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
 func TestRunUpgradeSchedulesOnlyVerifiedCandidate(t *testing.T) {
@@ -35,7 +33,6 @@ func TestRunUpgradeSchedulesOnlyVerifiedCandidate(t *testing.T) {
 	}
 	var spawnedPath string
 	var spawnedArgs []string
-	output := &strings.Builder{}
 	result, err := RunUpgrade(context.Background(), UpgradeOptions{
 		Resolver: ReleaseResolverOptions{LatestURL: server.URL + "/latest", DownloadBaseURL: server.URL + "/download", CurrentVersion: "1.0.0", GOOS: "linux", GOARCH: "amd64"},
 		Candidate: CandidateOptions{
@@ -44,7 +41,6 @@ func TestRunUpgradeSchedulesOnlyVerifiedCandidate(t *testing.T) {
 				return ProcessResult{Stdout: []byte("2.0.0\n")}, nil
 			},
 		},
-		Output:     output,
 		Executable: func() (string, error) { return target, nil },
 		Copy: func(source, destination string) error {
 			return os.WriteFile(destination, []byte("updater"), 0o700)
@@ -57,7 +53,7 @@ func TestRunUpgradeSchedulesOnlyVerifiedCandidate(t *testing.T) {
 		PID:           func() int { return 123 },
 		Now:           func() time.Time { return time.Unix(1, 0) },
 	})
-	if err != nil || !result.Scheduled {
+	if err != nil || !result.Scheduled || result.ScheduledVersion != "2.0.0" {
 		t.Fatalf("run = %#v, %v", result, err)
 	}
 	if spawnedPath != expectedUpdaterPath(directory, "tx") || len(spawnedArgs) == 0 || FindInternalMarker(spawnedArgs) != 0 {
@@ -70,9 +66,6 @@ func TestRunUpgradeSchedulesOnlyVerifiedCandidate(t *testing.T) {
 	assertPrivateUpgradePath(t, result.State.StagedPath, 0o755)
 	assertPrivateUpgradePath(t, spawnedPath, 0o755)
 	assertPrivateUpgradePath(t, state.StatePath, 0o600)
-	if !strings.Contains(output.String(), "scheduled") {
-		t.Fatalf("output = %q", output.String())
-	}
 }
 
 func TestRunUpgradeAlreadyCurrentAndFailureCleanup(t *testing.T) {
@@ -80,14 +73,12 @@ func TestRunUpgradeAlreadyCurrentAndFailureCleanup(t *testing.T) {
 		_, _ = io.WriteString(writer, `{"tag_name":"v1.0.0"}`)
 	}))
 	defer server.Close()
-	output := &strings.Builder{}
 	result, err := RunUpgrade(context.Background(), UpgradeOptions{
 		Resolver:   ReleaseResolverOptions{LatestURL: server.URL, CurrentVersion: "1.0.0", GOOS: "linux", GOARCH: "amd64"},
-		Output:     output,
 		Executable: func() (string, error) { return filepath.Join(t.TempDir(), "ycy"), nil },
 	})
-	if err != nil || !result.AlreadyCurrent || !strings.Contains(output.String(), "No update needed") {
-		t.Fatalf("already current = %#v, %v, output %q", result, err, output.String())
+	if err != nil || !result.AlreadyCurrent || result.CurrentVersion != "1.0.0" {
+		t.Fatalf("already current = %#v, %v", result, err)
 	}
 
 	content := []byte("new")
@@ -126,7 +117,7 @@ func TestRunUpgradeAlreadyCurrentAndFailureCleanup(t *testing.T) {
 	}
 }
 
-func TestClassifyUpgradeErrorPreservesTheDeliberateMixedStreamContract(t *testing.T) {
+func TestClassifyUpgradeErrorPreservesTheDeliberateExitContract(t *testing.T) {
 	testCases := []struct {
 		name     string
 		err      error
@@ -146,33 +137,43 @@ func TestClassifyUpgradeErrorPreservesTheDeliberateMixedStreamContract(t *testin
 
 	for _, testCase := range testCases {
 		t.Run(testCase.name, func(t *testing.T) {
-			streams := terminaltest.NewRedirectedStreams("")
-			err := classifyUpgradeError(streams.Stdout, streams.Stderr, testCase.err)
+			err := classifyUpgradeError(testCase.err)
 			var exit *ExitCodeError
 			if !errors.As(err, &exit) || exit.Code != testCase.wantCode {
 				t.Fatalf("classified error = %#v, want exit code %d", err, testCase.wantCode)
-			}
-			if streams.Stdout.String() != "Update aborted.\n" {
-				t.Fatalf("stdout = %q", streams.Stdout.String())
-			}
-			if streams.Stderr.String() != "error: "+testCase.err.Error()+"\n" {
-				t.Fatalf("stderr = %q", streams.Stderr.String())
-			}
-			if terminaltest.ContainsTerminalControl(streams.Stdout.Bytes()) || terminaltest.ContainsTerminalControl(streams.Stderr.Bytes()) {
-				t.Fatalf("Upgrade streams contain terminal control: stdout = %q stderr = %q", streams.Stdout.String(), streams.Stderr.String())
 			}
 		})
 	}
 }
 
-func TestConsumeStartupResultDoesNotReadAdjacentState(t *testing.T) {
+func TestRunUpgradeReturnsPriorStateAndAbortForClassifiedFailure(t *testing.T) {
+	state := testState(t, StatusSucceeded)
+	if err := WriteState(state); err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusBadGateway)
+	}))
+	defer server.Close()
+
+	result, err := RunUpgrade(context.Background(), UpgradeOptions{
+		Resolver:   ReleaseResolverOptions{LatestURL: server.URL, CurrentVersion: "1.0.0", GOOS: "linux", GOARCH: "amd64"},
+		Executable: func() (string, error) { return state.TargetPath, nil },
+	})
+	var exit *ExitCodeError
+	if !result.Aborted || result.PreviousState == nil || result.PreviousState.Status != StatusSucceeded || !errors.As(err, &exit) || exit.Code != 0 {
+		t.Fatalf("classified result = %#v, %v", result, err)
+	}
+}
+
+func TestConsumeStateDoesNotReadAdjacentState(t *testing.T) {
 	directory := t.TempDir()
 	target := filepath.Join(directory, "ycy")
 	legacyPath := target + ".update-state.json"
 	if err := os.WriteFile(legacyPath, []byte("preserve"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := ConsumeStartupResult(target, io.Discard); err != nil {
+	if _, err := ConsumeState(target); err != nil {
 		t.Fatal(err)
 	}
 	contents, err := os.ReadFile(legacyPath)

@@ -1,6 +1,7 @@
 package tunnel
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"net"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hackycy/hackycy-cli/internal/logging"
 )
 
 func TestResolveServerConfigPrefersExplicitOptionsOverEnvironment(t *testing.T) {
@@ -200,9 +203,12 @@ func TestRunServerOwnsTheForegroundUntilContextCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	var diagnostics bytes.Buffer
+	logRuntime := logging.NewRuntime(logging.Options{Writer: &diagnostics})
 	finished := make(chan error, 1)
 	go func() {
 		finished <- RunServer(ctx, config, ServerRunOptions{
+			Logger: logRuntime.Logger("tunnel.server"),
 			newRuntime: func(ctx context.Context, options ServerRuntimeOptions) (*ServerRuntime, error) {
 				options.frpArtifact = &artifact
 				options.frpRuntimeDirectory = filepath.Join(t.TempDir(), "frp", FRPVersion)
@@ -241,6 +247,15 @@ func TestRunServerOwnsTheForegroundUntilContextCancellation(t *testing.T) {
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunServer() did not return after cancellation")
+	}
+	for _, expected := range []string{
+		"[tunnel.server] Tunnel control plane started",
+		"[tunnel.server] Tunnel server stopping",
+		"[tunnel.server] Tunnel server stopped",
+	} {
+		if !strings.Contains(diagnostics.String(), expected) {
+			t.Fatalf("Tunnel server diagnostics = %q, missing %q", diagnostics.String(), expected)
+		}
 	}
 
 	reopened, err := NewServerRuntime(context.Background(), ServerRuntimeOptions{

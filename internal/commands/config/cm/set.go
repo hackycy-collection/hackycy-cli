@@ -8,7 +8,9 @@ type SetRequest struct {
 }
 
 // SetResult records a successful config cm set outcome.
-type SetResult struct{}
+type SetResult struct {
+	Profile string
+}
 
 // SetWriter is the command-facing appconfig semantic update boundary.
 type SetWriter interface {

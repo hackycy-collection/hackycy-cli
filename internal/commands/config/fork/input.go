@@ -3,5 +3,7 @@ package fork
 // Input is the typed input for config fork list.
 type Input struct{}
 
-// Result records a successful config fork list outcome.
-type Result struct{}
+// Result is the safe Fork projection returned by config fork list.
+type Result struct {
+	Instances []Instance
+}

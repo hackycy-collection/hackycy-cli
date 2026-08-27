@@ -5,21 +5,14 @@ import (
 	"errors"
 )
 
-// Presenter renders the one startup presentation after the server binds.
-type Presenter interface {
-	Present(Startup) error
-}
-
-// Dependencies are the external facts and terminal Adapter required by Diff.
+// Dependencies are the external host facts required by Diff.
 type Dependencies struct {
 	NetworkInterfaces func() ([]NetworkInterface, error)
-	Presenter         Presenter
 }
 
 // Module owns Diff command lifecycle behind its typed command interface.
 type Module struct {
 	networkInterfaces func() ([]NetworkInterface, error)
-	presenter         Presenter
 }
 
 // New constructs an unregistered Diff command module.
@@ -27,42 +20,58 @@ func New(dependencies Dependencies) (*Module, error) {
 	if dependencies.NetworkInterfaces == nil {
 		return nil, errors.New("diff network interface provider is required")
 	}
-	if dependencies.Presenter == nil {
-		return nil, errors.New("diff presenter is required")
-	}
 	return &Module{
 		networkInterfaces: dependencies.NetworkInterfaces,
-		presenter:         dependencies.Presenter,
 	}, nil
 }
 
-// Run starts a fixed comparison, presents its usable URLs, and waits for the
-// owning process context without assigning an exit code itself.
-func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
+// Operation holds a started comparison open until its caller waits or closes it.
+type Operation struct {
+	Startup Startup
+	session *comparisonSession
+}
+
+// Start binds a fixed comparison and returns its safe startup facts without
+// assigning terminal presentation or process exit behavior.
+func (module *Module) Start(ctx context.Context, input Input) (*Operation, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	if ctx.Err() != nil {
-		return Result{}, nil
+		return nil, nil
 	}
 	session, err := startComparison(input)
 	if err != nil {
-		return Result{}, err
+		return nil, err
 	}
 	interfaces, err := module.networkInterfaces()
 	if err != nil {
 		_ = session.server.Close()
-		return Result{}, err
+		return nil, err
 	}
+	operation := &Operation{session: session, Startup: session.startupPresentation(interfaces)}
 	if ctx.Err() != nil {
-		return Result{}, session.wait(ctx)
+		if err := operation.Wait(ctx); err != nil {
+			return nil, err
+		}
+		return nil, nil
 	}
-	if err := module.presenter.Present(session.startupPresentation(interfaces)); err != nil {
-		_ = session.server.Close()
-		return Result{}, err
+	return operation, nil
+}
+
+// Wait keeps the foreground server alive until its context ends or the server
+// stops on its own.
+func (operation *Operation) Wait(ctx context.Context) error {
+	if operation == nil {
+		return nil
 	}
-	if err := session.wait(ctx); err != nil {
-		return Result{}, err
+	return operation.session.wait(ctx)
+}
+
+// Close stops the foreground server when presentation cannot continue.
+func (operation *Operation) Close() error {
+	if operation == nil {
+		return nil
 	}
-	return Result{}, nil
+	return operation.session.server.Close()
 }

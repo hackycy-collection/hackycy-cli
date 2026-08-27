@@ -114,6 +114,9 @@ func TestDiffStandaloneBinaryPreservesCLIValidationAndLifecycle(t *testing.T) {
 	if err := waitForDiffProcess(t, process); err != nil {
 		t.Fatalf("diff exit after SIGINT: %v\nstderr:\n%s", err, process.stderr.String())
 	}
+	if process.stderr.Len() != 0 {
+		t.Fatalf("diff lifecycle wrote stderr: %q", process.stderr.String())
+	}
 }
 
 func buildDiffStandaloneBinary(t *testing.T) string {

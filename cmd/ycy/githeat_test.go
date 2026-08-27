@@ -2,20 +2,107 @@ package main
 
 import (
 	"bytes"
-	"errors"
+	"context"
+	"strings"
 	"testing"
 	"time"
 
 	heatcommand "github.com/hackycy/hackycy-cli/internal/commands/git/heat"
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
-func TestTerminalGitHeatPresenterWritesTitleForReportsAndNotEmptyResults(t *testing.T) {
-	output := &bytes.Buffer{}
-	presenter := terminalGitHeatPresenter{output: output}
-	report := heatcommand.Report{
+func TestTerminalGitHeatPresentationPreservesPlainAndAutomationResults(t *testing.T) {
+	report := terminalGitHeatTestReport()
+	for _, testCase := range []struct {
+		name   string
+		result heatcommand.Result
+		want   string
+	}{
+		{
+			name:   "report",
+			result: heatcommand.Result{Report: report},
+			want:   "HACKYCY CLI\n\nrepo | last 1 commits | 1 file\n\n#\tChanged at\tM A D R C\tFile\n1\t2024-01-01 00:00:00\t- - - - -\tfile.txt\nLegend: latest, earliest, M modified, A added, D deleted, R renamed, C copied\n",
+		},
+		{
+			name:   "empty",
+			result: heatcommand.Result{Report: heatcommand.Report{Target: heatcommand.TargetFiles}},
+			want:   "No changed files found in the selected range.\n",
+		},
+	} {
+		for _, session := range []terminalexperience.Session{
+			{Kind: terminalexperience.PlainInteractive},
+			{Kind: terminalexperience.Automation},
+		} {
+			var output bytes.Buffer
+			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Session: session, Output: &output})
+			run := experience.Open(context.Background())
+			if err := run.Present(terminalGitHeatDocument(session, testCase.result)); err != nil {
+				t.Fatalf("%s Present() error = %v", testCase.name, err)
+			}
+			if err := run.Close(); err != nil {
+				t.Fatalf("%s Close() error = %v", testCase.name, err)
+			}
+			if got := output.String(); got != testCase.want {
+				t.Fatalf("%s %v output = %q, want %q", testCase.name, session.Kind, got, testCase.want)
+			}
+			if terminaltest.ContainsTerminalControl(output.Bytes()) {
+				t.Fatalf("%s %v output contains terminal control: %q", testCase.name, session.Kind, output.String())
+			}
+		}
+	}
+}
+
+func TestTerminalGitHeatPresentationUsesRichSemanticRoles(t *testing.T) {
+	result := heatcommand.Result{Report: terminalGitHeatTestReport(), Now: time.Time{}}
+	for _, session := range []terminalexperience.Session{
+		{Kind: terminalexperience.RichInteractive, Color: true},
+		{Kind: terminalexperience.RichInteractive},
+	} {
+		document := terminalGitHeatDocument(session, result)
+		if !document.ClearBefore {
+			t.Fatal("Rich report did not retain its title clear")
+		}
+		want := []terminalexperience.VisualRole{
+			terminalexperience.VisualRoleTitle,
+			terminalexperience.VisualRoleActive,
+			terminalexperience.VisualRoleMuted,
+			terminalexperience.VisualRoleActive,
+			terminalexperience.VisualRoleMuted,
+		}
+		if len(document.Blocks) != len(want) {
+			t.Fatalf("Rich blocks = %#v", document.Blocks)
+		}
+		for index, role := range want {
+			if document.Blocks[index].Role != role {
+				t.Fatalf("Rich block %d role = %v, want %v", index, document.Blocks[index].Role, role)
+			}
+		}
+		var output bytes.Buffer
+		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Session: session, Output: &output})
+		run := experience.Open(context.Background())
+		if err := run.Present(document); err != nil {
+			t.Fatalf("Present() error = %v", err)
+		}
+		if err := run.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+		const clear = "\x1b[2J\x1b[H"
+		if !strings.HasPrefix(output.String(), clear) {
+			t.Fatalf("Rich output omitted title clear: %q", output.String())
+		}
+		if !session.Color && strings.Contains(output.String()[len(clear):], "\x1b[") {
+			t.Fatalf("NO_COLOR Rich output contains style bytes: %q", output.String())
+		}
+	}
+}
+
+func terminalGitHeatTestReport() heatcommand.Report {
+	return heatcommand.Report{
 		RepositoryName: "repo",
 		RangeLabel:     "last 1 commits",
 		Target:         heatcommand.TargetFiles,
+		Query:          "file",
 		CommitCount:    1,
 		Files: []heatcommand.PathHeat{{
 			Path:      "file.txt",
@@ -23,35 +110,4 @@ func TestTerminalGitHeatPresenterWritesTitleForReportsAndNotEmptyResults(t *test
 			ChangedAt: "2024-01-01 00:00:00",
 		}},
 	}
-	if err := presenter.Present(report, time.Time{}); err != nil {
-		t.Fatalf("Present() error = %v", err)
-	}
-	if got, want := output.String(), "HACKYCY CLI\n\nrepo | last 1 commits | 1 file\n\n#\tChanged at\tM A D R C\tFile\n1\t2024-01-01 00:00:00\t- - - - -\tfile.txt\nLegend: latest, earliest, M modified, A added, D deleted, R renamed, C copied\n"; got != want {
-		t.Fatalf("output = %q, want %q", got, want)
-	}
-
-	output.Reset()
-	if err := presenter.Present(heatcommand.Report{Target: heatcommand.TargetFiles}, time.Time{}); err != nil {
-		t.Fatalf("empty Present() error = %v", err)
-	}
-	if got, want := output.String(), "No changed files found in the selected range.\n"; got != want {
-		t.Fatalf("empty output = %q, want %q", got, want)
-	}
-}
-
-func TestTerminalGitHeatPresenterPropagatesWriterFailures(t *testing.T) {
-	failure := errors.New("writer failed")
-	presenter := terminalGitHeatPresenter{output: errorWriter{err: failure}}
-	err := presenter.Present(heatcommand.Report{Target: heatcommand.TargetFiles}, time.Time{})
-	if !errors.Is(err, failure) {
-		t.Fatalf("Present() error = %v, want %v", err, failure)
-	}
-}
-
-type errorWriter struct {
-	err error
-}
-
-func (writer errorWriter) Write([]byte) (int, error) {
-	return 0, writer.err
 }

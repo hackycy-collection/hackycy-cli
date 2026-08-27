@@ -3,5 +3,7 @@ package cm
 // Input is the typed input for config cm list.
 type Input struct{}
 
-// Result records a successful config cm list outcome.
-type Result struct{}
+// Result is the safe CM profile projection returned by config cm list.
+type Result struct {
+	Profiles []Profile
+}

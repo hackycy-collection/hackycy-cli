@@ -32,21 +32,21 @@ func main() {
 		}
 		return
 	}
-	if err := consumeUpgradeStartup(arguments, os.Stdout, os.Stderr); err != nil {
-		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
+	terminalRoot := newRootTerminal(os.Stdin, os.Stdout, os.Stderr, os.LookupEnv, terminal)
+	normalDiagnostics := terminalRoot.experience.DiagnosticWriter()
+	if err := consumeUpgradeStartup(arguments, terminalRoot.experience); err != nil {
+		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
 		os.Exit(1)
 	}
 
 	if err := webassets.Validate(); err != nil {
-		_, _ = fmt.Fprintln(os.Stdout)
-		_, _ = fmt.Fprintf(os.Stderr, "error: %s\n", err)
+		_, _ = fmt.Fprintln(terminalRoot.output)
+		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
 		os.Exit(1)
 	}
 
 	ctx, stop := newYcySignalContext(context.Background())
 	defer stop()
-	terminalRoot := newRootTerminal(os.Stdin, os.Stdout, os.Stderr, os.LookupEnv, terminal)
-	normalDiagnostics := terminalRoot.experience.DiagnosticWriter()
 	runtime := newRootLoggingRuntime(terminalRoot)
 	var discovery cliapp.DiscoveryPresenter
 	if terminalRoot.experience.Session().Kind == terminalexperience.RichInteractive {
@@ -76,19 +76,19 @@ func main() {
 		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
 		os.Exit(1)
 	}
-	diffModule, err := newDiffModule(terminalRoot.output)
+	diffHandler, err := newDiffHandler(terminalRoot.experience)
 	if err != nil {
 		_, _ = fmt.Fprintln(terminalRoot.output)
 		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
 		os.Exit(1)
 	}
-	fsModule, err := newFSModule(terminalRoot.output)
+	fsHandler, err := newFSHandler(terminalRoot.experience)
 	if err != nil {
 		_, _ = fmt.Fprintln(terminalRoot.output)
 		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
 		os.Exit(1)
 	}
-	gitHeatModule, err := newGitHeatModule(terminalRoot.output, terminal(terminalRoot.output) && os.Getenv("NO_COLOR") == "")
+	gitHeat, err := newGitHeatHandler(terminalRoot.experience)
 	if err != nil {
 		_, _ = fmt.Fprintln(terminalRoot.output)
 		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
@@ -106,26 +106,26 @@ func main() {
 		Logging:          runtime,
 		Discovery:        discovery,
 		ExportEnv:        exportEnv.Run,
-		ConfigForkList:   newConfigForkListHandler(terminalRoot.output),
+		ConfigForkList:   newConfigForkListHandler(terminalRoot.experience),
 		ConfigForkAdd:    newConfigForkAddHandler(terminalRoot.input, terminalRoot.output),
 		ConfigForkRemove: newConfigForkRemoveHandler(terminalRoot.input, terminalRoot.output),
-		ConfigCMList:     newConfigCMListHandler(terminalRoot.output),
+		ConfigCMList:     newConfigCMListHandler(terminalRoot.experience),
 		ConfigCMAdd:      newConfigCMAddHandler(terminalRoot.input, terminalRoot.output),
-		ConfigCMUse:      newConfigCMUseHandler(terminalRoot.output),
-		ConfigCMSet:      newConfigCMSetHandler(terminalRoot.output),
+		ConfigCMUse:      newConfigCMUseHandler(terminalRoot.experience),
+		ConfigCMSet:      newConfigCMSetHandler(terminalRoot.experience),
 		ConfigCMRemove:   newConfigCMRemoveHandler(terminalRoot.input, terminalRoot.output),
-		ConfigCMTest:     newConfigCMTestHandler(terminalRoot.output),
+		ConfigCMTest:     newConfigCMTestHandler(terminalRoot.experience),
 		RM:               rmModule.Run,
 		ZIP: func(_ context.Context, input zipcommand.Input) (zipcommand.Result, error) {
 			return zipModule.Run(input)
 		},
 		Run:           runModule.Run,
-		Diff:          diffModule.Run,
-		FS:            fsModule.Run,
+		Diff:          diffHandler,
+		FS:            fsHandler,
 		TunnelServer:  newTunnelServerHandler(runtime.Logger("tunnel.server")),
 		TunnelConnect: newTunnelConnectHandler(terminalRoot.input, terminalRoot.output, runtime.Logger("tunnel.client"), version),
-		Upgrade:       newUpgradeHandler(terminalRoot.output, normalDiagnostics, version),
-		GitHeat:       gitHeatModule.Run,
+		Upgrade:       newUpgradeHandler(terminalRoot.experience, version),
+		GitHeat:       gitHeat,
 		GitPulse:      gitPulseModule.Run,
 		GitFork:       newGitForkHandler(terminalRoot.input, terminalRoot.output),
 		GitCM:         newGitCMHandler(terminalRoot.input, terminalRoot.output),
