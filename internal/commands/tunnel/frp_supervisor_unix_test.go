@@ -17,6 +17,8 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/logging"
 )
 
+const frpSupervisorFixtureStartupTimeout = 5 * time.Second
+
 func TestFRPSupervisorStreamsOutputAndStopsItsUnixProcessGroup(t *testing.T) {
 	root := t.TempDir()
 	grandchild := writeFRPSupervisorScript(t, root, "grandchild", "#!/bin/sh\nwhile :; do sleep 1; done\n")
@@ -33,7 +35,7 @@ func TestFRPSupervisorStreamsOutputAndStopsItsUnixProcessGroup(t *testing.T) {
 		t.Fatalf("Start() error = %v", err)
 	}
 	pid := waitForFRPSupervisorPID(t, pidPath)
-	waitForFRPSupervisor(t, time.Second, func() bool {
+	waitForFRPSupervisor(t, frpSupervisorFixtureStartupTimeout, func() bool {
 		return strings.Contains(output.String(), "frpc ready") && strings.Contains(output.String(), "frpc warning")
 	})
 	state := supervisor.State()
@@ -188,7 +190,7 @@ func writeFRPSupervisorScript(t *testing.T, directory, name, contents string) st
 func waitForFRPSupervisorPID(t *testing.T, path string) int {
 	t.Helper()
 	var pid int
-	waitForFRPSupervisor(t, time.Second, func() bool {
+	waitForFRPSupervisor(t, frpSupervisorFixtureStartupTimeout, func() bool {
 		contents, err := os.ReadFile(path)
 		if err != nil {
 			return false

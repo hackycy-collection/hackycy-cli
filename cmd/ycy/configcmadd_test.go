@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	configcm "github.com/hackycy/hackycy-cli/internal/commands/config/cm"
+	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
 func TestTerminalCMAddPrompterValidatesTextWithoutTrimmingAcceptedInput(t *testing.T) {
@@ -38,16 +39,19 @@ func TestTerminalCMAddPrompterValidatesTextWithoutTrimmingAcceptedInput(t *testi
 }
 
 func TestTerminalCMAddPrompterReadsPipedPasswordWithoutWritingIt(t *testing.T) {
-	output := &bytes.Buffer{}
-	prompter := newTerminalCMAddPrompter(strings.NewReader("secret-api-key\n"), output)
+	streams := terminaltest.NewRedirectedStreams("secret-api-key\n")
+	prompter := newTerminalCMAddPrompter(streams.Stdin, streams.Stdout)
 
 	value, cancelled := prompter.Password(configcm.AddTextPrompt{Message: "API key", Validate: func(string) error { return nil }})
 
 	if cancelled || value != "secret-api-key" {
 		t.Fatalf("Password() = (%q, %t)", value, cancelled)
 	}
-	if strings.Contains(output.String(), "secret-api-key") {
-		t.Fatalf("password prompt exposed input: %q", output.String())
+	if strings.Contains(streams.Stdout.String(), "secret-api-key") || streams.Stderr.Len() != 0 {
+		t.Fatalf("password streams = %q / %q", streams.Stdout.String(), streams.Stderr.String())
+	}
+	if terminaltest.ContainsTerminalControl(streams.Stdout.Bytes()) || terminaltest.ContainsTerminalControl(streams.Stderr.Bytes()) {
+		t.Fatalf("password streams contain terminal control: stdout = %q stderr = %q", streams.Stdout.String(), streams.Stderr.String())
 	}
 }
 

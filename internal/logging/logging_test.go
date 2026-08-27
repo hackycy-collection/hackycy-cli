@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
 func TestParseLevelNormalizesInput(t *testing.T) {
@@ -39,6 +41,28 @@ func TestRuntimeFiltersAndRedacts(t *testing.T) {
 		if !strings.Contains(line, expected) {
 			t.Fatalf("output %q does not contain %q", line, expected)
 		}
+	}
+}
+
+func TestRuntimeRoutesRedactedDiagnosticsOnlyToInjectedStderr(t *testing.T) {
+	streams := terminaltest.NewRedirectedStreams("")
+	runtime := NewRuntime(Options{
+		Writer: streams.Stderr,
+		Now:    func() time.Time { return time.Date(2026, 8, 27, 0, 0, 0, 0, time.UTC) },
+	})
+	runtime.Logger("tunnel.server").Info("Bearer service-token", map[string]any{
+		"authorization": "hidden-value",
+		"port":          7000,
+	})
+
+	if streams.Stdout.Len() != 0 {
+		t.Fatalf("stdout = %q, want empty", streams.Stdout.String())
+	}
+	if output := streams.Stderr.String(); strings.Contains(output, "service-token") || strings.Contains(output, "hidden-value") || !strings.Contains(output, "Bearer [REDACTED]") || !strings.Contains(output, `"authorization":"[REDACTED]"`) {
+		t.Fatalf("stderr = %q", output)
+	}
+	if terminaltest.ContainsTerminalControl(streams.Stdout.Bytes()) || terminaltest.ContainsTerminalControl(streams.Stderr.Bytes()) {
+		t.Fatalf("diagnostic streams contain terminal control: stdout = %q stderr = %q", streams.Stdout.String(), streams.Stderr.String())
 	}
 }
 

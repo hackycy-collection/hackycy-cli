@@ -6,6 +6,7 @@ toolchain go1.26.7
 
 require (
 	github.com/bmatcuk/doublestar/v4 v4.10.0
+	github.com/creack/pty v1.1.24
 	github.com/gen2brain/gav1d v0.2.5
 	github.com/gen2brain/vpx v0.2.1
 	github.com/go-git/go-git/v5 v5.19.2

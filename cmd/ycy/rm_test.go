@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -10,6 +11,7 @@ import (
 	"testing"
 
 	rmcommand "github.com/hackycy/hackycy-cli/internal/commands/rm"
+	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
 func TestTerminalRMPrompterUsesLegacyDefaultsAndSelections(t *testing.T) {
@@ -65,6 +67,37 @@ func TestTerminalRMPresenterWritesMappedMessages(t *testing.T) {
 	want := "HACKYCY CLI\n\nRemove\n\n  /tmp/one\n  /tmp/two\n\n  not found, skipping: /tmp/missing\nScanning...\nFound 1 target\nCancelled.\nDone!\n"
 	if output.String() != want {
 		t.Fatalf("terminal rm output = %q, want %q", output.String(), want)
+	}
+}
+
+func TestRMRedirectedCancellationPreventsDeletionAndTerminalControl(t *testing.T) {
+	root := t.TempDir()
+	target := writeStandaloneRMFile(t, root, "target.txt")
+	streams := terminaltest.NewRedirectedStreams("")
+	module, err := rmcommand.New(rmcommand.Dependencies{
+		WorkingDirectory: func() (string, error) { return root, nil },
+		Prompter:         newTerminalRMPrompter(streams.Stdin, streams.Stdout),
+		Remover:          osRMRemover{},
+		Presenter:        terminalRMPresenter{output: streams.Stdout},
+	})
+	if err != nil {
+		t.Fatalf("new rm module: %v", err)
+	}
+
+	if _, err := module.Run(context.Background(), rmcommand.Input{Paths: []string{"target.txt"}}); err != nil {
+		t.Fatalf("redirected cancellation: %v", err)
+	}
+	if _, err := os.Stat(target); err != nil {
+		t.Fatalf("redirected cancellation changed target: %v", err)
+	}
+	if !strings.Contains(streams.Stdout.String(), "Delete 1 item? [y/N]:") || !strings.Contains(streams.Stdout.String(), "Cancelled.") {
+		t.Fatalf("stdout = %q", streams.Stdout.String())
+	}
+	if streams.Stderr.Len() != 0 {
+		t.Fatalf("stderr = %q, want empty", streams.Stderr.String())
+	}
+	if terminaltest.ContainsTerminalControl(streams.Stdout.Bytes()) || terminaltest.ContainsTerminalControl(streams.Stderr.Bytes()) {
+		t.Fatalf("redirected streams contain terminal control: stdout = %q stderr = %q", streams.Stdout.String(), streams.Stderr.String())
 	}
 }
 

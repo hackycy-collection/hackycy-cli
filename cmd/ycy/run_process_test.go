@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	runcommand "github.com/hackycy/hackycy-cli/internal/commands/run"
+	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
 func TestOSRunChildRunnerUsesArgvCWDAndInheritedStreams(t *testing.T) {
@@ -35,9 +36,8 @@ func TestOSRunChildRunnerUsesArgvCWDAndInheritedStreams(t *testing.T) {
 		t.Fatalf("write child fixture: %v", err)
 	}
 
-	output := &bytes.Buffer{}
-	errorOutput := &bytes.Buffer{}
-	runner := newOSRunChildRunner(strings.NewReader("stdin payload"), output, errorOutput)
+	streams := terminaltest.NewRedirectedStreams("stdin payload")
+	runner := newOSRunChildRunner(streams.Stdin, streams.Stdout, streams.Stderr)
 	result, err := runner.Run(context.Background(), runcommand.ChildRequest{
 		Executable: script,
 		Arguments:  []string{"run", "check"},
@@ -50,8 +50,11 @@ func TestOSRunChildRunnerUsesArgvCWDAndInheritedStreams(t *testing.T) {
 	assertRunProcessFile(t, argumentsPath, "run\ncheck\n")
 	assertRunProcessFile(t, workingDirectoryPath, directory+"\n")
 	assertRunProcessFile(t, inputPath, "stdin payload")
-	if output.String() != "child stdout" || errorOutput.String() != "child stderr" {
-		t.Fatalf("streams = (%q, %q)", output.String(), errorOutput.String())
+	if streams.Stdout.String() != "child stdout" || streams.Stderr.String() != "child stderr" {
+		t.Fatalf("streams = (%q, %q)", streams.Stdout.String(), streams.Stderr.String())
+	}
+	if terminaltest.ContainsTerminalControl(streams.Stdout.Bytes()) || terminaltest.ContainsTerminalControl(streams.Stderr.Bytes()) {
+		t.Fatalf("raw child streams contain unexpected terminal control: stdout = %q stderr = %q", streams.Stdout.String(), streams.Stderr.String())
 	}
 }
 

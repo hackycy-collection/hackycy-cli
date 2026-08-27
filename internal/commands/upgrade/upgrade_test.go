@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
 func TestRunUpgradeSchedulesOnlyVerifiedCandidate(t *testing.T) {
@@ -121,6 +123,45 @@ func TestRunUpgradeAlreadyCurrentAndFailureCleanup(t *testing.T) {
 	}
 	if fileExists(StatePath(target)) || fileExists(expectedTransactionPath(target, ".new.", "fail")) || fileExists(updater) {
 		t.Fatal("failed scheduling left transaction files")
+	}
+}
+
+func TestClassifyUpgradeErrorPreservesTheDeliberateMixedStreamContract(t *testing.T) {
+	testCases := []struct {
+		name     string
+		err      error
+		wantCode int
+	}{
+		{
+			name:     "ordinary failure",
+			err:      errors.New("release metadata is invalid"),
+			wantCode: 1,
+		},
+		{
+			name:     "HTTP failure remains a successful abort",
+			err:      &HTTPStatusError{URL: "https://releases.example/latest", Status: http.StatusBadGateway},
+			wantCode: 0,
+		},
+	}
+
+	for _, testCase := range testCases {
+		t.Run(testCase.name, func(t *testing.T) {
+			streams := terminaltest.NewRedirectedStreams("")
+			err := classifyUpgradeError(streams.Stdout, streams.Stderr, testCase.err)
+			var exit *ExitCodeError
+			if !errors.As(err, &exit) || exit.Code != testCase.wantCode {
+				t.Fatalf("classified error = %#v, want exit code %d", err, testCase.wantCode)
+			}
+			if streams.Stdout.String() != "Update aborted.\n" {
+				t.Fatalf("stdout = %q", streams.Stdout.String())
+			}
+			if streams.Stderr.String() != "error: "+testCase.err.Error()+"\n" {
+				t.Fatalf("stderr = %q", streams.Stderr.String())
+			}
+			if terminaltest.ContainsTerminalControl(streams.Stdout.Bytes()) || terminaltest.ContainsTerminalControl(streams.Stderr.Bytes()) {
+				t.Fatalf("Upgrade streams contain terminal control: stdout = %q stderr = %q", streams.Stdout.String(), streams.Stderr.String())
+			}
+		})
 	}
 }
 
