@@ -94,7 +94,7 @@ func TestFSBindingExposesOnlyAnInjectedHandlerAndItsHelp(t *testing.T) {
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"fs"}); outcome.Code != 1 || errors.String() != "error: unknown command 'fs'; Run 'ycy --help' for usage.\n" {
+	if outcome := app.Execute(context.Background(), []string{"fs"}); outcome.Code != 1 || errors.String() != "error: unknown command 'fs'; did you mean 'rm'? Run 'ycy rm --help' for usage.\n" {
 		t.Fatalf("unregistered fs outcome = %#v, stderr = %q", outcome, errors.String())
 	}
 

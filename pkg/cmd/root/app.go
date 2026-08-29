@@ -10,6 +10,10 @@ import (
 
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/hackycy/hackycy-cli/internal/terminal"
+	exportcommand "github.com/hackycy/hackycy-cli/pkg/cmd/export"
+	rmcommand "github.com/hackycy/hackycy-cli/pkg/cmd/rm"
+	runcommand "github.com/hackycy/hackycy-cli/pkg/cmd/run"
+	zipcommand "github.com/hackycy/hackycy-cli/pkg/cmd/zip"
 	"github.com/hackycy/hackycy-cli/pkg/cmdutil"
 	"github.com/spf13/cobra"
 )
@@ -17,7 +21,6 @@ import (
 // Dependencies are the temporary unmigrated command handlers supplied by the
 // composition root. Process facts belong exclusively to cmdutil.Factory.
 type Dependencies struct {
-	ExportEnv        ExportEnvHandler
 	ConfigForkList   ConfigForkListHandler
 	ConfigForkAdd    ConfigForkAddHandler
 	ConfigForkRemove ConfigForkRemoveHandler
@@ -27,13 +30,10 @@ type Dependencies struct {
 	ConfigCMSet      ConfigCMSetHandler
 	ConfigCMRemove   ConfigCMRemoveHandler
 	ConfigCMTest     ConfigCMTestHandler
-	RM               RmHandler
-	Run              RunHandler
 	GitHeat          GitHeatHandler
 	GitPulse         GitPulseHandler
 	GitFork          GitForkHandler
 	GitCM            GitCMHandler
-	ZIP              ZipHandler
 	Diff             DiffHandler
 	FS               FSHandler
 	TunnelServer     TunnelServerHandler
@@ -50,7 +50,6 @@ type Outcome struct {
 // App owns Cobra, global options, diagnostics, and fresh root-tree construction.
 type App struct {
 	factory          *cmdutil.Factory
-	exportEnv        ExportEnvHandler
 	configForkList   ConfigForkListHandler
 	configForkAdd    ConfigForkAddHandler
 	configForkRemove ConfigForkRemoveHandler
@@ -60,13 +59,10 @@ type App struct {
 	configCMSet      ConfigCMSetHandler
 	configCMRemove   ConfigCMRemoveHandler
 	configCMTest     ConfigCMTestHandler
-	rm               RmHandler
-	run              RunHandler
 	gitHeat          GitHeatHandler
 	gitPulse         GitPulseHandler
 	gitFork          GitForkHandler
 	gitCM            GitCMHandler
-	zip              ZipHandler
 	diff             DiffHandler
 	fs               FSHandler
 	tunnelServer     TunnelServerHandler
@@ -87,7 +83,6 @@ func New(factory *cmdutil.Factory, dependencies Dependencies) (*App, error) {
 	}
 	return &App{
 		factory:          factory,
-		exportEnv:        dependencies.ExportEnv,
 		configForkList:   dependencies.ConfigForkList,
 		configForkAdd:    dependencies.ConfigForkAdd,
 		configForkRemove: dependencies.ConfigForkRemove,
@@ -97,13 +92,10 @@ func New(factory *cmdutil.Factory, dependencies Dependencies) (*App, error) {
 		configCMSet:      dependencies.ConfigCMSet,
 		configCMRemove:   dependencies.ConfigCMRemove,
 		configCMTest:     dependencies.ConfigCMTest,
-		rm:               dependencies.RM,
-		run:              dependencies.Run,
 		gitHeat:          dependencies.GitHeat,
 		gitPulse:         dependencies.GitPulse,
 		gitFork:          dependencies.GitFork,
 		gitCM:            dependencies.GitCM,
-		zip:              dependencies.ZIP,
 		diff:             dependencies.Diff,
 		fs:               dependencies.FS,
 		tunnelServer:     dependencies.TunnelServer,
@@ -194,28 +186,27 @@ func (app *App) rootCommandWithDiagnosticControls(controls diagnosticControls) *
 	}
 	root.SetOut(app.output())
 	root.SetErr(app.diagnostics())
+	root.PersistentPreRunE = func(command *cobra.Command, _ []string) error {
+		switch command.CommandPath() {
+		case "ycy rm", "ycy export env", "ycy run", "ycy zip":
+			return configureDiagnostics()
+		}
+		return nil
+	}
 	root.PersistentFlags().StringVar(&logLevel, "log-level", "", "Log level: debug, info, warn, or error")
 	root.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "Enable debug diagnostics")
 	root.PersistentFlags().BoolVar(&quiet, "quiet", false, "Only emit error diagnostics (short form: -q)")
 	root.PersistentFlags().StringVar(&logFormat, "log-format", "", "Diagnostic format: text or json")
 	root.Flags().BoolVarP(&showVersion, "version", "V", false, "Print version")
-	if app.exportEnv != nil {
-		app.registerExportEnv(root, configureDiagnostics)
-	}
+	root.AddCommand(exportcommand.NewCmdExport(app.factory))
 	if app.configForkList != nil || app.configForkAdd != nil || app.configForkRemove != nil || app.configCMList != nil || app.configCMAdd != nil || app.configCMUse != nil || app.configCMSet != nil || app.configCMRemove != nil || app.configCMTest != nil {
 		app.registerConfig(root, configureDiagnostics)
 	}
-	if app.rm != nil {
-		app.registerRM(root, configureDiagnostics)
-	}
-	if app.run != nil {
-		app.registerRun(root, configureDiagnostics)
-	}
+	root.AddCommand(rmcommand.NewCmdRM(app.factory, nil))
+	root.AddCommand(runcommand.NewCmdRun(app.factory, nil))
+	root.AddCommand(zipcommand.NewCmdZIP(app.factory, nil))
 	if app.gitHeat != nil || app.gitPulse != nil || app.gitFork != nil || app.gitCM != nil {
 		app.registerGit(root, configureDiagnostics)
-	}
-	if app.zip != nil {
-		app.registerZIP(root, configureDiagnostics)
 	}
 	if app.diff != nil {
 		app.registerDiff(root, configureDiagnostics)

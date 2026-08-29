@@ -15,7 +15,6 @@ type rootTestDependencies struct {
 	Environment       func(string) string
 	EnvironmentLookup func(string) (string, bool)
 	Logging           *logging.Runtime
-	ExportEnv         rootcommand.ExportEnvHandler
 	ConfigForkList    rootcommand.ConfigForkListHandler
 	ConfigForkAdd     rootcommand.ConfigForkAddHandler
 	ConfigForkRemove  rootcommand.ConfigForkRemoveHandler
@@ -25,13 +24,10 @@ type rootTestDependencies struct {
 	ConfigCMSet       rootcommand.ConfigCMSetHandler
 	ConfigCMRemove    rootcommand.ConfigCMRemoveHandler
 	ConfigCMTest      rootcommand.ConfigCMTestHandler
-	RM                rootcommand.RmHandler
-	Run               rootcommand.RunHandler
 	GitHeat           rootcommand.GitHeatHandler
 	GitPulse          rootcommand.GitPulseHandler
 	GitFork           rootcommand.GitForkHandler
 	GitCM             rootcommand.GitCMHandler
-	ZIP               rootcommand.ZipHandler
 	Diff              rootcommand.DiffHandler
 	FS                rootcommand.FSHandler
 	TunnelServer      rootcommand.TunnelServerHandler
@@ -53,7 +49,6 @@ func newRootCommandForTest(version string, dependencies rootTestDependencies) (*
 		factory.Logging = dependencies.Logging
 	}
 	return rootcommand.New(factory, rootcommand.Dependencies{
-		ExportEnv:        dependencies.ExportEnv,
 		ConfigForkList:   dependencies.ConfigForkList,
 		ConfigForkAdd:    dependencies.ConfigForkAdd,
 		ConfigForkRemove: dependencies.ConfigForkRemove,
@@ -63,13 +58,10 @@ func newRootCommandForTest(version string, dependencies rootTestDependencies) (*
 		ConfigCMSet:      dependencies.ConfigCMSet,
 		ConfigCMRemove:   dependencies.ConfigCMRemove,
 		ConfigCMTest:     dependencies.ConfigCMTest,
-		RM:               dependencies.RM,
-		Run:              dependencies.Run,
 		GitHeat:          dependencies.GitHeat,
 		GitPulse:         dependencies.GitPulse,
 		GitFork:          dependencies.GitFork,
 		GitCM:            dependencies.GitCM,
-		ZIP:              dependencies.ZIP,
 		Diff:             dependencies.Diff,
 		FS:               dependencies.FS,
 		TunnelServer:     dependencies.TunnelServer,

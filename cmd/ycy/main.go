@@ -79,7 +79,6 @@ func main() {
 		os.Exit(1)
 	}
 	app, err := rootcommand.New(commandFactory, rootcommand.Dependencies{
-		ExportEnv:        newExportEnvHandler(terminalRoot.experience),
 		ConfigForkList:   newConfigForkListHandler(terminalRoot.experience),
 		ConfigForkAdd:    newConfigForkAddHandler(terminalRoot.experience),
 		ConfigForkRemove: newConfigForkRemoveHandler(terminalRoot.experience),
@@ -89,9 +88,6 @@ func main() {
 		ConfigCMSet:      newConfigCMSetHandler(terminalRoot.experience),
 		ConfigCMRemove:   newConfigCMRemoveHandler(terminalRoot.experience),
 		ConfigCMTest:     newConfigCMTestHandler(terminalRoot.experience),
-		RM:               newRMHandler(terminalRoot.experience),
-		ZIP:              newZipHandler(terminalRoot.experience),
-		Run:              newRunHandler(terminalRoot.experience, terminalRoot.input, terminalRoot.output, terminalRoot.diagnostics),
 		Diff:             diffHandler,
 		FS:               fsHandler,
 		TunnelServer:     newTunnelServerHandler(runtime.Logger("tunnel.server")),

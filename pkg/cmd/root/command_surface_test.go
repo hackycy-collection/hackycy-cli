@@ -17,16 +17,12 @@ import (
 	configcm "github.com/hackycy/hackycy-cli/internal/commands/config/cm"
 	configfork "github.com/hackycy/hackycy-cli/internal/commands/config/fork"
 	diffcommand "github.com/hackycy/hackycy-cli/internal/commands/diff"
-	exportcommand "github.com/hackycy/hackycy-cli/internal/commands/exportenv"
 	fscommand "github.com/hackycy/hackycy-cli/internal/commands/fs"
 	gitcm "github.com/hackycy/hackycy-cli/internal/commands/git/cm"
 	gitfork "github.com/hackycy/hackycy-cli/internal/commands/git/fork"
 	githeat "github.com/hackycy/hackycy-cli/internal/commands/git/heat"
 	gitpulse "github.com/hackycy/hackycy-cli/internal/commands/git/pulse"
-	rmcommand "github.com/hackycy/hackycy-cli/internal/commands/rm"
-	runcommand "github.com/hackycy/hackycy-cli/internal/commands/run"
 	tunnelcommand "github.com/hackycy/hackycy-cli/internal/commands/tunnel"
-	zipcommand "github.com/hackycy/hackycy-cli/internal/commands/zip"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -320,9 +316,6 @@ func newSurfaceApp() (*App, error) {
 }
 
 func newSurfaceAppWithOutput(output, errOutput io.Writer) (*App, error) {
-	noExport := func(context.Context, exportcommand.Input) (exportcommand.Result, error) {
-		return exportcommand.Result{}, nil
-	}
 	noForkList := func(context.Context, configfork.Input) (configfork.Result, error) {
 		return configfork.Result{}, nil
 	}
@@ -350,12 +343,6 @@ func newSurfaceAppWithOutput(output, errOutput io.Writer) (*App, error) {
 	noCMTest := func(context.Context, configcm.TestRequest) (configcm.TestResult, error) {
 		return configcm.TestResult{}, nil
 	}
-	noRM := func(context.Context, rmcommand.Input) (rmcommand.Result, error) {
-		return rmcommand.Result{}, nil
-	}
-	noRun := func(context.Context, runcommand.Input) (runcommand.Result, error) {
-		return runcommand.Result{}, nil
-	}
 	noHeat := func(context.Context, githeat.Input) (githeat.Result, error) {
 		return githeat.Result{}, nil
 	}
@@ -367,9 +354,6 @@ func newSurfaceAppWithOutput(output, errOutput io.Writer) (*App, error) {
 	}
 	noCM := func(context.Context, gitcm.Input) (gitcm.Result, error) {
 		return gitcm.Result{}, nil
-	}
-	noZip := func(context.Context, zipcommand.Input) (zipcommand.Result, error) {
-		return zipcommand.Result{}, nil
 	}
 	noDiff := func(context.Context, diffcommand.Input) (diffcommand.Result, error) {
 		return diffcommand.Result{}, nil
@@ -387,7 +371,6 @@ func newSurfaceAppWithOutput(output, errOutput io.Writer) (*App, error) {
 		Environment:       func(string) string { return "" },
 		EnvironmentLookup: func(string) (string, bool) { return "", false },
 		Logging:           logging.NewRuntime(logging.Options{Writer: errOutput}),
-		ExportEnv:         noExport,
 		ConfigForkList:    noForkList,
 		ConfigForkAdd:     noForkAdd,
 		ConfigForkRemove:  noForkRemove,
@@ -397,13 +380,10 @@ func newSurfaceAppWithOutput(output, errOutput io.Writer) (*App, error) {
 		ConfigCMSet:       noCMSet,
 		ConfigCMRemove:    noCMRemove,
 		ConfigCMTest:      noCMTest,
-		RM:                noRM,
-		Run:               noRun,
 		GitHeat:           noHeat,
 		GitPulse:          noPulse,
 		GitFork:           noFork,
 		GitCM:             noCM,
-		ZIP:               noZip,
 		Diff:              noDiff,
 		FS:                noFS,
 		TunnelServer:      noTunnelServer,

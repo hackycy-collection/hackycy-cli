@@ -21,7 +21,6 @@ type testDependencies struct {
 	EnvironmentLookup func(string) (string, bool)
 	Logging           *logging.Runtime
 	Session           terminal.Session
-	ExportEnv         ExportEnvHandler
 	ConfigForkList    ConfigForkListHandler
 	ConfigForkAdd     ConfigForkAddHandler
 	ConfigForkRemove  ConfigForkRemoveHandler
@@ -31,13 +30,10 @@ type testDependencies struct {
 	ConfigCMSet       ConfigCMSetHandler
 	ConfigCMRemove    ConfigCMRemoveHandler
 	ConfigCMTest      ConfigCMTestHandler
-	RM                RmHandler
-	Run               RunHandler
 	GitHeat           GitHeatHandler
 	GitPulse          GitPulseHandler
 	GitFork           GitForkHandler
 	GitCM             GitCMHandler
-	ZIP               ZipHandler
 	Diff              DiffHandler
 	FS                FSHandler
 	TunnelServer      TunnelServerHandler
@@ -60,7 +56,6 @@ func newTestApp(build BuildInfo, dependencies testDependencies) (*App, error) {
 		factory.Logging = dependencies.Logging
 	}
 	return New(factory, Dependencies{
-		ExportEnv:        dependencies.ExportEnv,
 		ConfigForkList:   dependencies.ConfigForkList,
 		ConfigForkAdd:    dependencies.ConfigForkAdd,
 		ConfigForkRemove: dependencies.ConfigForkRemove,
@@ -70,13 +65,10 @@ func newTestApp(build BuildInfo, dependencies testDependencies) (*App, error) {
 		ConfigCMSet:      dependencies.ConfigCMSet,
 		ConfigCMRemove:   dependencies.ConfigCMRemove,
 		ConfigCMTest:     dependencies.ConfigCMTest,
-		RM:               dependencies.RM,
-		Run:              dependencies.Run,
 		GitHeat:          dependencies.GitHeat,
 		GitPulse:         dependencies.GitPulse,
 		GitFork:          dependencies.GitFork,
 		GitCM:            dependencies.GitCM,
-		ZIP:              dependencies.ZIP,
 		Diff:             dependencies.Diff,
 		FS:               dependencies.FS,
 		TunnelServer:     dependencies.TunnelServer,

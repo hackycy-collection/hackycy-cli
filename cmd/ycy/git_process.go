@@ -17,6 +17,10 @@ type gitProcessOutput struct {
 	exitCode int
 }
 
+type signalCause interface {
+	Signal() os.Signal
+}
+
 // runGitProcess contains the external-Git invariants shared by the heat and pulse adapters.
 func runGitProcess(ctx context.Context, executable string, arguments []string) (gitProcessOutput, error) {
 	return runGitProcessInput(ctx, executable, arguments, nil)

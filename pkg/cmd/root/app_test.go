@@ -9,7 +9,6 @@ import (
 	"testing"
 
 	configfork "github.com/hackycy/hackycy-cli/internal/commands/config/fork"
-	"github.com/hackycy/hackycy-cli/internal/commands/exportenv"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/hackycy/hackycy-cli/internal/terminal"
 )
@@ -72,7 +71,7 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 		{
 			name:        "environment config applies to executing command",
 			environment: map[string]string{"YCY_LOG_LEVEL": "warn", "YCY_LOG_FORMAT": "json"},
-			arguments:   []string{"export", "env", "project"},
+			arguments:   []string{"config", "fork", "list"},
 			wantLevel:   logging.Warn,
 			wantFormat:  logging.JSONFormat,
 			wantCall:    true,
@@ -80,35 +79,35 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 		{
 			name:        "explicit level wins over environment",
 			environment: map[string]string{"YCY_LOG_LEVEL": "warn", "YCY_LOG_FORMAT": "json"},
-			arguments:   []string{"--log-level", "debug", "export", "env", "project"},
+			arguments:   []string{"--log-level", "debug", "config", "fork", "list"},
 			wantLevel:   logging.Debug,
 			wantFormat:  logging.JSONFormat,
 			wantCall:    true,
 		},
 		{
 			name:       "explicit format reaches runtime",
-			arguments:  []string{"--log-format", "json", "export", "env", "project"},
+			arguments:  []string{"--log-format", "json", "config", "fork", "list"},
 			wantLevel:  logging.Info,
 			wantFormat: logging.JSONFormat,
 			wantCall:   true,
 		},
 		{
 			name:       "verbose selects debug",
-			arguments:  []string{"--verbose", "export", "env", "project"},
+			arguments:  []string{"--verbose", "config", "fork", "list"},
 			wantLevel:  logging.Debug,
 			wantFormat: logging.TextFormat,
 			wantCall:   true,
 		},
 		{
 			name:       "quiet selects error",
-			arguments:  []string{"-q", "export", "env", "project"},
+			arguments:  []string{"-q", "config", "fork", "list"},
 			wantLevel:  logging.Error,
 			wantFormat: logging.TextFormat,
 			wantCall:   true,
 		},
 		{
 			name:       "conflicting controls stop before effect",
-			arguments:  []string{"--log-level", "info", "--quiet", "export", "env", "project"},
+			arguments:  []string{"--log-level", "info", "--quiet", "config", "fork", "list"},
 			wantCode:   1,
 			wantLevel:  logging.Info,
 			wantFormat: logging.TextFormat,
@@ -116,7 +115,7 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 		},
 		{
 			name:       "invalid format stops before effect",
-			arguments:  []string{"--log-format", "yaml", "export", "env", "project"},
+			arguments:  []string{"--log-format", "yaml", "config", "fork", "list"},
 			wantCode:   1,
 			wantLevel:  logging.Info,
 			wantFormat: logging.TextFormat,
@@ -134,9 +133,9 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 				Err:         errors,
 				Environment: func(key string) string { return test.environment[key] },
 				Logging:     runtime,
-				ExportEnv: func(context.Context, exportenv.Input) (exportenv.Result, error) {
+				ConfigForkList: func(context.Context, configfork.Input) (configfork.Result, error) {
 					called = true
-					return exportenv.Result{}, nil
+					return configfork.Result{}, nil
 				},
 			})
 			if err != nil {
@@ -161,10 +160,6 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 			Out:         output,
 			Err:         errors,
 			Environment: func(string) string { return "invalid" },
-			ExportEnv: func(context.Context, exportenv.Input) (exportenv.Result, error) {
-				t.Fatal("discovery invoked a command handler")
-				return exportenv.Result{}, nil
-			},
 		})
 		if err != nil {
 			t.Fatalf("New returned an error: %v", err)
@@ -183,9 +178,6 @@ func TestRichTerminalDiscoveryPreservesVersionAndRawCompletion(t *testing.T) {
 		Err:     errors,
 		Session: terminal.Session{Kind: terminal.RichInteractive},
 		Logging: logging.NewRuntime(logging.Options{Writer: errors}),
-		ExportEnv: func(context.Context, exportenv.Input) (exportenv.Result, error) {
-			return exportenv.Result{}, nil
-		},
 	})
 	if err != nil {
 		t.Fatalf("New returned an error: %v", err)
@@ -213,10 +205,6 @@ func TestParserRecoveryUsesOneActionableErrorLine(t *testing.T) {
 		Out:     output,
 		Err:     errors,
 		Logging: logging.NewRuntime(logging.Options{Writer: errors}),
-		ExportEnv: func(context.Context, exportenv.Input) (exportenv.Result, error) {
-			called = true
-			return exportenv.Result{}, nil
-		},
 		ConfigForkList: func(context.Context, configfork.Input) (configfork.Result, error) {
 			called = true
 			return configfork.Result{}, nil
@@ -271,15 +259,15 @@ func TestParserRecoveryLeavesCommandErrorsUntouched(t *testing.T) {
 		Out:     output,
 		Err:     errors,
 		Logging: logging.NewRuntime(logging.Options{Writer: errors}),
-		ExportEnv: func(context.Context, exportenv.Input) (exportenv.Result, error) {
-			return exportenv.Result{}, stderrors.New("command validation failed")
+		ConfigForkList: func(context.Context, configfork.Input) (configfork.Result, error) {
+			return configfork.Result{}, stderrors.New("command validation failed")
 		},
 	})
 	if err != nil {
 		t.Fatalf("New returned an error: %v", err)
 	}
 
-	outcome := app.Execute(context.Background(), []string{"export", "env"})
+	outcome := app.Execute(context.Background(), []string{"config", "fork", "list"})
 	if outcome.Code != 1 || errors.String() != "error: command validation failed\n" || output.Len() != 0 {
 		t.Fatalf("outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
 	}
@@ -306,7 +294,7 @@ func TestFSFoundationDoesNotExposeACommand(t *testing.T) {
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"fs"}); outcome.Code != 1 || errors.String() != "error: unknown command 'fs'; Run 'ycy --help' for usage.\n" {
+	if outcome := app.Execute(context.Background(), []string{"fs"}); outcome.Code != 1 || errors.String() != "error: unknown command 'fs'; did you mean 'rm'? Run 'ycy rm --help' for usage.\n" {
 		t.Fatalf("fs outcome = %#v, stderr = %q", outcome, errors.String())
 	}
 }
@@ -331,49 +319,6 @@ func TestPanicMappingRedactsAndAddsDebugStack(t *testing.T) {
 	})
 	if outcome.Code != 1 || output.String() != "\n" || strings.Contains(errors.String(), "not-for-output") || !strings.Contains(errors.String(), "token=[REDACTED]") || !strings.Contains(errors.String(), "goroutine") {
 		t.Fatalf("panic outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
-	}
-}
-
-func TestExportEnvBindingPassesTypedInputAndGlobalLogLevel(t *testing.T) {
-	output := &bytes.Buffer{}
-	errors := &bytes.Buffer{}
-	runtime := logging.NewRuntime(logging.Options{Writer: errors})
-	var inputs []exportenv.Input
-	app, err := newTestApp(BuildInfo{Version: "0.0.0-dev"}, testDependencies{
-		Out:     output,
-		Err:     errors,
-		Logging: runtime,
-		ExportEnv: func(_ context.Context, input exportenv.Input) (exportenv.Result, error) {
-			inputs = append(inputs, input)
-			return exportenv.Result{}, nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("New returned an error: %v", err)
-	}
-
-	outcome := app.Execute(context.Background(), []string{
-		"--log-level", "warn",
-		"export", "env", "project",
-		"-e", "production",
-		"--merge",
-		"-o", "output.json",
-	})
-
-	if outcome.Code != 0 || outcome.Err != nil {
-		t.Fatalf("outcome = %#v, stderr = %q", outcome, errors.String())
-	}
-	want := []exportenv.Input{{
-		Directory:   "project",
-		Environment: "production",
-		Merge:       true,
-		Output:      "output.json",
-	}}
-	if !reflect.DeepEqual(inputs, want) {
-		t.Fatalf("inputs = %#v, want %#v", inputs, want)
-	}
-	if runtime.Level() != logging.Warn {
-		t.Fatalf("log level = %v, want %v", runtime.Level(), logging.Warn)
 	}
 }
 
