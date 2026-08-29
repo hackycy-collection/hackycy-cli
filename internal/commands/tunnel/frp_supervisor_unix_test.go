@@ -100,7 +100,8 @@ func TestFRPSupervisorRejectsAnActivationExitAndKeepsConfigurationFailuresStoppe
 	if err := configured.Start(filepath.Join(root, "frpc.toml")); err != nil {
 		t.Fatalf("configuration-failure Start() error = %v", err)
 	}
-	waitForFRPSupervisor(t, time.Second, func() bool { return readFRPSupervisorCounter(counterPath) == 1 })
+	// Start confirms liveness, not that the fixture has completed its first write.
+	waitForFRPSupervisor(t, frpSupervisorFixtureStartupTimeout, func() bool { return readFRPSupervisorCounter(counterPath) == 1 })
 	if err := configured.ConfigurationFailed(StructuredRuntimeError{Code: "INVALID_CONFIG", Message: "candidate rejected"}); err != nil {
 		t.Fatalf("ConfigurationFailed() error = %v", err)
 	}
