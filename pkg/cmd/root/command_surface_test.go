@@ -14,8 +14,6 @@ import (
 	"strings"
 	"testing"
 
-	configcm "github.com/hackycy/hackycy-cli/internal/commands/config/cm"
-	configfork "github.com/hackycy/hackycy-cli/internal/commands/config/fork"
 	diffcommand "github.com/hackycy/hackycy-cli/internal/commands/diff"
 	fscommand "github.com/hackycy/hackycy-cli/internal/commands/fs"
 	gitcm "github.com/hackycy/hackycy-cli/internal/commands/git/cm"
@@ -316,33 +314,6 @@ func newSurfaceApp() (*App, error) {
 }
 
 func newSurfaceAppWithOutput(output, errOutput io.Writer) (*App, error) {
-	noForkList := func(context.Context, configfork.Input) (configfork.Result, error) {
-		return configfork.Result{}, nil
-	}
-	noForkAdd := func(context.Context, configfork.AddRequest) (configfork.AddResult, error) {
-		return configfork.AddResult{}, nil
-	}
-	noForkRemove := func(context.Context, configfork.RemoveRequest) (configfork.RemoveResult, error) {
-		return configfork.RemoveResult{}, nil
-	}
-	noCMList := func(context.Context, configcm.Input) (configcm.Result, error) {
-		return configcm.Result{}, nil
-	}
-	noCMAdd := func(context.Context, configcm.AddRequest) (configcm.AddResult, error) {
-		return configcm.AddResult{}, nil
-	}
-	noCMUse := func(context.Context, configcm.UseRequest) (configcm.UseResult, error) {
-		return configcm.UseResult{}, nil
-	}
-	noCMSet := func(context.Context, configcm.SetRequest) (configcm.SetResult, error) {
-		return configcm.SetResult{}, nil
-	}
-	noCMRemove := func(context.Context, configcm.RemoveRequest) (configcm.RemoveResult, error) {
-		return configcm.RemoveResult{}, nil
-	}
-	noCMTest := func(context.Context, configcm.TestRequest) (configcm.TestResult, error) {
-		return configcm.TestResult{}, nil
-	}
 	noHeat := func(context.Context, githeat.Input) (githeat.Result, error) {
 		return githeat.Result{}, nil
 	}
@@ -371,15 +342,6 @@ func newSurfaceAppWithOutput(output, errOutput io.Writer) (*App, error) {
 		Environment:       func(string) string { return "" },
 		EnvironmentLookup: func(string) (string, bool) { return "", false },
 		Logging:           logging.NewRuntime(logging.Options{Writer: errOutput}),
-		ConfigForkList:    noForkList,
-		ConfigForkAdd:     noForkAdd,
-		ConfigForkRemove:  noForkRemove,
-		ConfigCMList:      noCMList,
-		ConfigCMAdd:       noCMAdd,
-		ConfigCMUse:       noCMUse,
-		ConfigCMSet:       noCMSet,
-		ConfigCMRemove:    noCMRemove,
-		ConfigCMTest:      noCMTest,
 		GitHeat:           noHeat,
 		GitPulse:          noPulse,
 		GitFork:           noFork,

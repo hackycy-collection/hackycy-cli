@@ -79,24 +79,15 @@ func main() {
 		os.Exit(1)
 	}
 	app, err := rootcommand.New(commandFactory, rootcommand.Dependencies{
-		ConfigForkList:   newConfigForkListHandler(terminalRoot.experience),
-		ConfigForkAdd:    newConfigForkAddHandler(terminalRoot.experience),
-		ConfigForkRemove: newConfigForkRemoveHandler(terminalRoot.experience),
-		ConfigCMList:     newConfigCMListHandler(terminalRoot.experience),
-		ConfigCMAdd:      newConfigCMAddHandler(terminalRoot.experience),
-		ConfigCMUse:      newConfigCMUseHandler(terminalRoot.experience),
-		ConfigCMSet:      newConfigCMSetHandler(terminalRoot.experience),
-		ConfigCMRemove:   newConfigCMRemoveHandler(terminalRoot.experience),
-		ConfigCMTest:     newConfigCMTestHandler(terminalRoot.experience),
-		Diff:             diffHandler,
-		FS:               fsHandler,
-		TunnelServer:     newTunnelServerHandler(runtime.Logger("tunnel.server")),
-		TunnelConnect:    newTunnelConnectHandler(terminalRoot.experience, runtime.Logger("tunnel.client"), version),
-		Upgrade:          newUpgradeHandler(terminalRoot.experience, version),
-		GitHeat:          gitHeat,
-		GitPulse:         newGitPulseHandler(terminalRoot.experience),
-		GitFork:          newGitForkHandler(terminalRoot.experience),
-		GitCM:            newGitCMHandler(terminalRoot.experience),
+		Diff:          diffHandler,
+		FS:            fsHandler,
+		TunnelServer:  newTunnelServerHandler(runtime.Logger("tunnel.server")),
+		TunnelConnect: newTunnelConnectHandler(terminalRoot.experience, runtime.Logger("tunnel.client"), version),
+		Upgrade:       newUpgradeHandler(terminalRoot.experience, version),
+		GitHeat:       gitHeat,
+		GitPulse:      newGitPulseHandler(terminalRoot.experience),
+		GitFork:       newGitForkHandler(terminalRoot.experience),
+		GitCM:         newGitCMHandler(terminalRoot.experience),
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(terminalRoot.output)

@@ -10,6 +10,7 @@ import (
 
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/hackycy/hackycy-cli/internal/terminal"
+	configcommand "github.com/hackycy/hackycy-cli/pkg/cmd/config"
 	exportcommand "github.com/hackycy/hackycy-cli/pkg/cmd/export"
 	rmcommand "github.com/hackycy/hackycy-cli/pkg/cmd/rm"
 	runcommand "github.com/hackycy/hackycy-cli/pkg/cmd/run"
@@ -21,24 +22,15 @@ import (
 // Dependencies are the temporary unmigrated command handlers supplied by the
 // composition root. Process facts belong exclusively to cmdutil.Factory.
 type Dependencies struct {
-	ConfigForkList   ConfigForkListHandler
-	ConfigForkAdd    ConfigForkAddHandler
-	ConfigForkRemove ConfigForkRemoveHandler
-	ConfigCMList     ConfigCMListHandler
-	ConfigCMAdd      ConfigCMAddHandler
-	ConfigCMUse      ConfigCMUseHandler
-	ConfigCMSet      ConfigCMSetHandler
-	ConfigCMRemove   ConfigCMRemoveHandler
-	ConfigCMTest     ConfigCMTestHandler
-	GitHeat          GitHeatHandler
-	GitPulse         GitPulseHandler
-	GitFork          GitForkHandler
-	GitCM            GitCMHandler
-	Diff             DiffHandler
-	FS               FSHandler
-	TunnelServer     TunnelServerHandler
-	TunnelConnect    TunnelConnectHandler
-	Upgrade          UpgradeHandler
+	GitHeat       GitHeatHandler
+	GitPulse      GitPulseHandler
+	GitFork       GitForkHandler
+	GitCM         GitCMHandler
+	Diff          DiffHandler
+	FS            FSHandler
+	TunnelServer  TunnelServerHandler
+	TunnelConnect TunnelConnectHandler
+	Upgrade       UpgradeHandler
 }
 
 // Outcome leaves process exit ownership with cmd/ycy.
@@ -49,25 +41,16 @@ type Outcome struct {
 
 // App owns Cobra, global options, diagnostics, and fresh root-tree construction.
 type App struct {
-	factory          *cmdutil.Factory
-	configForkList   ConfigForkListHandler
-	configForkAdd    ConfigForkAddHandler
-	configForkRemove ConfigForkRemoveHandler
-	configCMList     ConfigCMListHandler
-	configCMAdd      ConfigCMAddHandler
-	configCMUse      ConfigCMUseHandler
-	configCMSet      ConfigCMSetHandler
-	configCMRemove   ConfigCMRemoveHandler
-	configCMTest     ConfigCMTestHandler
-	gitHeat          GitHeatHandler
-	gitPulse         GitPulseHandler
-	gitFork          GitForkHandler
-	gitCM            GitCMHandler
-	diff             DiffHandler
-	fs               FSHandler
-	tunnelServer     TunnelServerHandler
-	tunnelConnect    TunnelConnectHandler
-	upgrade          UpgradeHandler
+	factory       *cmdutil.Factory
+	gitHeat       GitHeatHandler
+	gitPulse      GitPulseHandler
+	gitFork       GitForkHandler
+	gitCM         GitCMHandler
+	diff          DiffHandler
+	fs            FSHandler
+	tunnelServer  TunnelServerHandler
+	tunnelConnect TunnelConnectHandler
+	upgrade       UpgradeHandler
 }
 
 // New creates the lifted root with the bounded Factory and current temporary handlers.
@@ -82,25 +65,16 @@ func New(factory *cmdutil.Factory, dependencies Dependencies) (*App, error) {
 		return nil, errors.New("command Factory is incomplete")
 	}
 	return &App{
-		factory:          factory,
-		configForkList:   dependencies.ConfigForkList,
-		configForkAdd:    dependencies.ConfigForkAdd,
-		configForkRemove: dependencies.ConfigForkRemove,
-		configCMList:     dependencies.ConfigCMList,
-		configCMAdd:      dependencies.ConfigCMAdd,
-		configCMUse:      dependencies.ConfigCMUse,
-		configCMSet:      dependencies.ConfigCMSet,
-		configCMRemove:   dependencies.ConfigCMRemove,
-		configCMTest:     dependencies.ConfigCMTest,
-		gitHeat:          dependencies.GitHeat,
-		gitPulse:         dependencies.GitPulse,
-		gitFork:          dependencies.GitFork,
-		gitCM:            dependencies.GitCM,
-		diff:             dependencies.Diff,
-		fs:               dependencies.FS,
-		tunnelServer:     dependencies.TunnelServer,
-		tunnelConnect:    dependencies.TunnelConnect,
-		upgrade:          dependencies.Upgrade,
+		factory:       factory,
+		gitHeat:       dependencies.GitHeat,
+		gitPulse:      dependencies.GitPulse,
+		gitFork:       dependencies.GitFork,
+		gitCM:         dependencies.GitCM,
+		diff:          dependencies.Diff,
+		fs:            dependencies.FS,
+		tunnelServer:  dependencies.TunnelServer,
+		tunnelConnect: dependencies.TunnelConnect,
+		upgrade:       dependencies.Upgrade,
 	}, nil
 }
 
@@ -188,7 +162,10 @@ func (app *App) rootCommandWithDiagnosticControls(controls diagnosticControls) *
 	root.SetErr(app.diagnostics())
 	root.PersistentPreRunE = func(command *cobra.Command, _ []string) error {
 		switch command.CommandPath() {
-		case "ycy rm", "ycy export env", "ycy run", "ycy zip":
+		case "ycy rm", "ycy export env", "ycy run", "ycy zip",
+			"ycy config fork list", "ycy config fork add", "ycy config fork remove",
+			"ycy config cm list", "ycy config cm add", "ycy config cm use",
+			"ycy config cm set", "ycy config cm remove", "ycy config cm test":
 			return configureDiagnostics()
 		}
 		return nil
@@ -199,9 +176,8 @@ func (app *App) rootCommandWithDiagnosticControls(controls diagnosticControls) *
 	root.PersistentFlags().StringVar(&logFormat, "log-format", "", "Diagnostic format: text or json")
 	root.Flags().BoolVarP(&showVersion, "version", "V", false, "Print version")
 	root.AddCommand(exportcommand.NewCmdExport(app.factory))
-	if app.configForkList != nil || app.configForkAdd != nil || app.configForkRemove != nil || app.configCMList != nil || app.configCMAdd != nil || app.configCMUse != nil || app.configCMSet != nil || app.configCMRemove != nil || app.configCMTest != nil {
-		app.registerConfig(root, configureDiagnostics)
-	}
+	configCommand := configcommand.NewCmdConfig(app.factory)
+	root.AddCommand(configCommand)
 	root.AddCommand(rmcommand.NewCmdRM(app.factory, nil))
 	root.AddCommand(runcommand.NewCmdRun(app.factory, nil))
 	root.AddCommand(zipcommand.NewCmdZIP(app.factory, nil))

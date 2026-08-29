@@ -15,15 +15,6 @@ type rootTestDependencies struct {
 	Environment       func(string) string
 	EnvironmentLookup func(string) (string, bool)
 	Logging           *logging.Runtime
-	ConfigForkList    rootcommand.ConfigForkListHandler
-	ConfigForkAdd     rootcommand.ConfigForkAddHandler
-	ConfigForkRemove  rootcommand.ConfigForkRemoveHandler
-	ConfigCMList      rootcommand.ConfigCMListHandler
-	ConfigCMAdd       rootcommand.ConfigCMAddHandler
-	ConfigCMUse       rootcommand.ConfigCMUseHandler
-	ConfigCMSet       rootcommand.ConfigCMSetHandler
-	ConfigCMRemove    rootcommand.ConfigCMRemoveHandler
-	ConfigCMTest      rootcommand.ConfigCMTestHandler
 	GitHeat           rootcommand.GitHeatHandler
 	GitPulse          rootcommand.GitPulseHandler
 	GitFork           rootcommand.GitForkHandler
@@ -49,23 +40,14 @@ func newRootCommandForTest(version string, dependencies rootTestDependencies) (*
 		factory.Logging = dependencies.Logging
 	}
 	return rootcommand.New(factory, rootcommand.Dependencies{
-		ConfigForkList:   dependencies.ConfigForkList,
-		ConfigForkAdd:    dependencies.ConfigForkAdd,
-		ConfigForkRemove: dependencies.ConfigForkRemove,
-		ConfigCMList:     dependencies.ConfigCMList,
-		ConfigCMAdd:      dependencies.ConfigCMAdd,
-		ConfigCMUse:      dependencies.ConfigCMUse,
-		ConfigCMSet:      dependencies.ConfigCMSet,
-		ConfigCMRemove:   dependencies.ConfigCMRemove,
-		ConfigCMTest:     dependencies.ConfigCMTest,
-		GitHeat:          dependencies.GitHeat,
-		GitPulse:         dependencies.GitPulse,
-		GitFork:          dependencies.GitFork,
-		GitCM:            dependencies.GitCM,
-		Diff:             dependencies.Diff,
-		FS:               dependencies.FS,
-		TunnelServer:     dependencies.TunnelServer,
-		TunnelConnect:    dependencies.TunnelConnect,
-		Upgrade:          dependencies.Upgrade,
+		GitHeat:       dependencies.GitHeat,
+		GitPulse:      dependencies.GitPulse,
+		GitFork:       dependencies.GitFork,
+		GitCM:         dependencies.GitCM,
+		Diff:          dependencies.Diff,
+		FS:            dependencies.FS,
+		TunnelServer:  dependencies.TunnelServer,
+		TunnelConnect: dependencies.TunnelConnect,
+		Upgrade:       dependencies.Upgrade,
 	})
 }

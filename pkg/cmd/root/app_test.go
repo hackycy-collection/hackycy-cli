@@ -4,11 +4,10 @@ import (
 	"bytes"
 	"context"
 	stderrors "errors"
-	"reflect"
 	"strings"
 	"testing"
 
-	configfork "github.com/hackycy/hackycy-cli/internal/commands/config/fork"
+	githeat "github.com/hackycy/hackycy-cli/internal/commands/git/heat"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/hackycy/hackycy-cli/internal/terminal"
 )
@@ -71,7 +70,7 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 		{
 			name:        "environment config applies to executing command",
 			environment: map[string]string{"YCY_LOG_LEVEL": "warn", "YCY_LOG_FORMAT": "json"},
-			arguments:   []string{"config", "fork", "list"},
+			arguments:   []string{"git", "heat"},
 			wantLevel:   logging.Warn,
 			wantFormat:  logging.JSONFormat,
 			wantCall:    true,
@@ -79,35 +78,35 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 		{
 			name:        "explicit level wins over environment",
 			environment: map[string]string{"YCY_LOG_LEVEL": "warn", "YCY_LOG_FORMAT": "json"},
-			arguments:   []string{"--log-level", "debug", "config", "fork", "list"},
+			arguments:   []string{"--log-level", "debug", "git", "heat"},
 			wantLevel:   logging.Debug,
 			wantFormat:  logging.JSONFormat,
 			wantCall:    true,
 		},
 		{
 			name:       "explicit format reaches runtime",
-			arguments:  []string{"--log-format", "json", "config", "fork", "list"},
+			arguments:  []string{"--log-format", "json", "git", "heat"},
 			wantLevel:  logging.Info,
 			wantFormat: logging.JSONFormat,
 			wantCall:   true,
 		},
 		{
 			name:       "verbose selects debug",
-			arguments:  []string{"--verbose", "config", "fork", "list"},
+			arguments:  []string{"--verbose", "git", "heat"},
 			wantLevel:  logging.Debug,
 			wantFormat: logging.TextFormat,
 			wantCall:   true,
 		},
 		{
 			name:       "quiet selects error",
-			arguments:  []string{"-q", "config", "fork", "list"},
+			arguments:  []string{"-q", "git", "heat"},
 			wantLevel:  logging.Error,
 			wantFormat: logging.TextFormat,
 			wantCall:   true,
 		},
 		{
 			name:       "conflicting controls stop before effect",
-			arguments:  []string{"--log-level", "info", "--quiet", "config", "fork", "list"},
+			arguments:  []string{"--log-level", "info", "--quiet", "git", "heat"},
 			wantCode:   1,
 			wantLevel:  logging.Info,
 			wantFormat: logging.TextFormat,
@@ -115,7 +114,7 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 		},
 		{
 			name:       "invalid format stops before effect",
-			arguments:  []string{"--log-format", "yaml", "config", "fork", "list"},
+			arguments:  []string{"--log-format", "yaml", "git", "heat"},
 			wantCode:   1,
 			wantLevel:  logging.Info,
 			wantFormat: logging.TextFormat,
@@ -133,9 +132,9 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 				Err:         errors,
 				Environment: func(key string) string { return test.environment[key] },
 				Logging:     runtime,
-				ConfigForkList: func(context.Context, configfork.Input) (configfork.Result, error) {
+				GitHeat: func(context.Context, githeat.Input) (githeat.Result, error) {
 					called = true
-					return configfork.Result{}, nil
+					return githeat.Result{}, nil
 				},
 			})
 			if err != nil {
@@ -205,9 +204,9 @@ func TestParserRecoveryUsesOneActionableErrorLine(t *testing.T) {
 		Out:     output,
 		Err:     errors,
 		Logging: logging.NewRuntime(logging.Options{Writer: errors}),
-		ConfigForkList: func(context.Context, configfork.Input) (configfork.Result, error) {
+		GitHeat: func(context.Context, githeat.Input) (githeat.Result, error) {
 			called = true
-			return configfork.Result{}, nil
+			return githeat.Result{}, nil
 		},
 	})
 	if err != nil {
@@ -259,30 +258,30 @@ func TestParserRecoveryLeavesCommandErrorsUntouched(t *testing.T) {
 		Out:     output,
 		Err:     errors,
 		Logging: logging.NewRuntime(logging.Options{Writer: errors}),
-		ConfigForkList: func(context.Context, configfork.Input) (configfork.Result, error) {
-			return configfork.Result{}, stderrors.New("command validation failed")
+		GitHeat: func(context.Context, githeat.Input) (githeat.Result, error) {
+			return githeat.Result{}, stderrors.New("command validation failed")
 		},
 	})
 	if err != nil {
 		t.Fatalf("New returned an error: %v", err)
 	}
 
-	outcome := app.Execute(context.Background(), []string{"config", "fork", "list"})
+	outcome := app.Execute(context.Background(), []string{"git", "heat"})
 	if outcome.Code != 1 || errors.String() != "error: command validation failed\n" || output.Len() != 0 {
 		t.Fatalf("outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
 	}
 }
 
-func TestAppconfigFoundationDoesNotExposeACommand(t *testing.T) {
+func TestConfigParentExposesMigratedForkGroup(t *testing.T) {
 	app, output, errors, _ := testApp(t, nil)
 
-	if outcome := app.Execute(context.Background(), []string{"--help"}); outcome.Code != 0 || strings.Contains(output.String(), "config") {
-		t.Fatalf("help outcome = %#v, stdout = %q", outcome, output.String())
+	if outcome := app.Execute(context.Background(), []string{"config", "fork", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "list") || !strings.Contains(output.String(), "add") || !strings.Contains(output.String(), "remove") {
+		t.Fatalf("fork help outcome = %#v, stdout = %q", outcome, output.String())
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"config"}); outcome.Code != 1 || errors.String() != "error: unknown command 'config'; Run 'ycy --help' for usage.\n" {
-		t.Fatalf("config outcome = %#v, stderr = %q", outcome, errors.String())
+	if outcome := app.Execute(context.Background(), []string{"config", "fork", "list"}); outcome.Code != 0 || errors.Len() != 0 {
+		t.Fatalf("config fork list outcome = %#v, stderr = %q", outcome, errors.String())
 	}
 }
 
@@ -319,47 +318,6 @@ func TestPanicMappingRedactsAndAddsDebugStack(t *testing.T) {
 	})
 	if outcome.Code != 1 || output.String() != "\n" || strings.Contains(errors.String(), "not-for-output") || !strings.Contains(errors.String(), "token=[REDACTED]") || !strings.Contains(errors.String(), "goroutine") {
 		t.Fatalf("panic outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
-	}
-}
-
-func TestConfigForkListBindingPassesTypedInputAndExposesNoSibling(t *testing.T) {
-	output := &bytes.Buffer{}
-	errors := &bytes.Buffer{}
-	runtime := logging.NewRuntime(logging.Options{Writer: errors})
-	var inputs []configfork.Input
-	app, err := newTestApp(BuildInfo{Version: "0.0.0-dev"}, testDependencies{
-		Out:     output,
-		Err:     errors,
-		Logging: runtime,
-		ConfigForkList: func(_ context.Context, input configfork.Input) (configfork.Result, error) {
-			inputs = append(inputs, input)
-			return configfork.Result{}, nil
-		},
-	})
-	if err != nil {
-		t.Fatalf("New returned an error: %v", err)
-	}
-
-	outcome := app.Execute(context.Background(), []string{"--log-level", "warn", "config", "fork", "list"})
-	if outcome.Code != 0 || outcome.Err != nil {
-		t.Fatalf("list outcome = %#v, stderr = %q", outcome, errors.String())
-	}
-	if !reflect.DeepEqual(inputs, []configfork.Input{{}}) {
-		t.Fatalf("inputs = %#v", inputs)
-	}
-	if runtime.Level() != logging.Warn {
-		t.Fatalf("log level = %v, want %v", runtime.Level(), logging.Warn)
-	}
-
-	output.Reset()
-	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"config", "fork", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "list") || strings.Contains(output.String(), "add") || strings.Contains(output.String(), "remove") {
-		t.Fatalf("fork help outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
-	}
-	output.Reset()
-	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"config", "fork", "add"}); outcome.Code != 1 || errors.String() != "error: unknown command 'add'; Run 'ycy config fork --help' for usage.\n" {
-		t.Fatalf("absent sibling outcome = %#v, stderr = %q", outcome, errors.String())
 	}
 }
 

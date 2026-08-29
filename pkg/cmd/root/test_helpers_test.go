@@ -21,15 +21,6 @@ type testDependencies struct {
 	EnvironmentLookup func(string) (string, bool)
 	Logging           *logging.Runtime
 	Session           terminal.Session
-	ConfigForkList    ConfigForkListHandler
-	ConfigForkAdd     ConfigForkAddHandler
-	ConfigForkRemove  ConfigForkRemoveHandler
-	ConfigCMList      ConfigCMListHandler
-	ConfigCMAdd       ConfigCMAddHandler
-	ConfigCMUse       ConfigCMUseHandler
-	ConfigCMSet       ConfigCMSetHandler
-	ConfigCMRemove    ConfigCMRemoveHandler
-	ConfigCMTest      ConfigCMTestHandler
 	GitHeat           GitHeatHandler
 	GitPulse          GitPulseHandler
 	GitFork           GitForkHandler
@@ -56,23 +47,14 @@ func newTestApp(build BuildInfo, dependencies testDependencies) (*App, error) {
 		factory.Logging = dependencies.Logging
 	}
 	return New(factory, Dependencies{
-		ConfigForkList:   dependencies.ConfigForkList,
-		ConfigForkAdd:    dependencies.ConfigForkAdd,
-		ConfigForkRemove: dependencies.ConfigForkRemove,
-		ConfigCMList:     dependencies.ConfigCMList,
-		ConfigCMAdd:      dependencies.ConfigCMAdd,
-		ConfigCMUse:      dependencies.ConfigCMUse,
-		ConfigCMSet:      dependencies.ConfigCMSet,
-		ConfigCMRemove:   dependencies.ConfigCMRemove,
-		ConfigCMTest:     dependencies.ConfigCMTest,
-		GitHeat:          dependencies.GitHeat,
-		GitPulse:         dependencies.GitPulse,
-		GitFork:          dependencies.GitFork,
-		GitCM:            dependencies.GitCM,
-		Diff:             dependencies.Diff,
-		FS:               dependencies.FS,
-		TunnelServer:     dependencies.TunnelServer,
-		TunnelConnect:    dependencies.TunnelConnect,
-		Upgrade:          dependencies.Upgrade,
+		GitHeat:       dependencies.GitHeat,
+		GitPulse:      dependencies.GitPulse,
+		GitFork:       dependencies.GitFork,
+		GitCM:         dependencies.GitCM,
+		Diff:          dependencies.Diff,
+		FS:            dependencies.FS,
+		TunnelServer:  dependencies.TunnelServer,
+		TunnelConnect: dependencies.TunnelConnect,
+		Upgrade:       dependencies.Upgrade,
 	})
 }
