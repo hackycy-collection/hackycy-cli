@@ -10,7 +10,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -392,42 +391,6 @@ func TestGitForkHandlerFallsBackToTheLocalGitRunnerAndCleansMetadata(t *testing.
 	}
 	if !strings.Contains(diagnostics.String(), "Falling back to git clone") || terminaltest.ContainsTerminalControl(append(output.Bytes(), diagnostics.Bytes()...)) {
 		t.Fatalf("Plain clone streams = (%q, %q)", output.String(), diagnostics.String())
-	}
-}
-
-func TestGitForkStandaloneBinaryDownloadsALocalProviderArchive(t *testing.T) {
-	archive := gitForkFixtureArchive(t, map[string]string{"project-main/README.md": "standalone archive\n"})
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		switch request.URL.Path {
-		case "/api/v3/repos/group/project":
-			_, _ = io.WriteString(response, `{"default_branch":"main"}`)
-		case "/api/v3/repos/group/project/tarball/main":
-			_, _ = response.Write(archive)
-		default:
-			http.NotFound(response, request)
-		}
-	}))
-	defer server.Close()
-
-	home := t.TempDir()
-	configureGitForkFixture(t, home, server.URL)
-	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
-	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
-	build.Dir = repositoryRoot(t)
-	build.Env = environmentWith(map[string]string{"CGO_ENABLED": "0", "GOTOOLCHAIN": "go1.26.7", "GOWORK": "off"})
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build standalone binary: %v\n%s", err, output)
-	}
-	destination := filepath.Join(t.TempDir(), "destination")
-	command := exec.Command(resolveStandaloneBinary(binary), "git", "fork", "fixture:group/project", destination)
-	command.Dir = t.TempDir()
-	command.Env = environmentWith(map[string]string{"HOME": home, "USERPROFILE": ""})
-	output, err := command.CombinedOutput()
-	if err != nil || !strings.Contains(string(output), "Done! Project created at") || strings.Contains(string(output), "fixture-token") {
-		t.Fatalf("standalone git fork = (%v, %q)", err, output)
-	}
-	if contents, err := os.ReadFile(filepath.Join(destination, "README.md")); err != nil || string(contents) != "standalone archive\n" {
-		t.Fatalf("standalone archive contents = %q, %v", contents, err)
 	}
 }
 

@@ -1,0 +1,13 @@
+Add a CM profile
+
+Usage:
+  ycy config cm add [flags]
+
+Flags:
+  -h, --help   help for add
+
+Global Flags:
+      --log-format string   Diagnostic format: text or json
+      --log-level string    Log level: debug, info, warn, or error
+      --quiet               Only emit error diagnostics (short form: -q)
+  -v, --verbose             Enable debug diagnostics

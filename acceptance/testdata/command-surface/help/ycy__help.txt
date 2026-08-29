@@ -1,0 +1,14 @@
+Help provides help for any command in the application.
+Simply type ycy help [path to command] for full details.
+
+Usage:
+  ycy help [command] [flags]
+
+Flags:
+  -h, --help   help for help
+
+Global Flags:
+      --log-format string   Diagnostic format: text or json
+      --log-level string    Log level: debug, info, warn, or error
+      --quiet               Only emit error diagnostics (short form: -q)
+  -v, --verbose             Enable debug diagnostics

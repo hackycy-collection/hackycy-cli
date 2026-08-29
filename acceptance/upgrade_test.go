@@ -1,7 +1,11 @@
-package upgrade
+//go:build acceptance
+
+package acceptance
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -11,10 +15,12 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	upgrade "github.com/hackycy/hackycy-cli/internal/commands/upgrade"
 )
 
 func TestDetachedGoToGoStandaloneReplacementRollbackAndSelfCheck(t *testing.T) {
-	repository := repositoryRootForUpgradeTest(t)
+	repository := repositoryRoot(t)
 	if _, err := os.Stat(filepath.Join(repository, "web", "dist")); errors.Is(err, os.ErrNotExist) {
 		t.Skip("production Web output is required; run make build first")
 	}
@@ -30,19 +36,19 @@ func TestDetachedGoToGoStandaloneReplacementRollbackAndSelfCheck(t *testing.T) {
 	copyUpgradeFile(t, second, staged)
 	copyUpgradeFile(t, first, updater)
 	parentPID := exitedUpgradeParent(t)
-	success := UpdateTransaction{
+	success := upgrade.UpdateTransaction{
 		TransactionID: "success-success-success-success-successsuccess",
 		ParentPID:     parentPID, TargetPath: target, StagedPath: staged, BackupPath: backup,
 		ExpectedHash: mustUpgradeFileHash(t, staged), ExpectedVersion: "2.0.0",
-		StatePath: StatePath(target), UpdaterPath: updater,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: StatusPending,
+		StatePath: upgrade.StatePath(target), UpdaterPath: updater,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: upgrade.StatusPending,
 	}
-	if err := WriteState(success); err != nil {
+	if err := upgrade.WriteState(success); err != nil {
 		t.Fatal(err)
 	}
-	runUpgradeUpdater(t, updater, InternalUpdateArgs(success))
-	state, err := ReadState(success.StatePath)
-	if err != nil || state == nil || state.Status != StatusSucceeded {
+	runUpgradeUpdater(t, updater, upgrade.InternalUpdateArgs(success))
+	state, err := upgrade.ReadState(success.StatePath)
+	if err != nil || state == nil || state.Status != upgrade.StatusSucceeded {
 		t.Fatalf("success state = %#v, %v", state, err)
 	}
 	assertUpgradeVersion(t, target, "2.0.0")
@@ -57,24 +63,24 @@ func TestDetachedGoToGoStandaloneReplacementRollbackAndSelfCheck(t *testing.T) {
 	copyUpgradeFile(t, second, rollbackTarget)
 	copyUpgradeFile(t, first, rollbackStaged)
 	copyUpgradeFile(t, second, rollbackUpdater)
-	failure := UpdateTransaction{
+	failure := upgrade.UpdateTransaction{
 		TransactionID: "failure-failure-failure-failure-failurefailure",
 		ParentPID:     exitedUpgradeParent(t), TargetPath: rollbackTarget, StagedPath: rollbackStaged, BackupPath: rollbackBackup,
 		ExpectedHash: mustUpgradeFileHash(t, rollbackStaged), ExpectedVersion: "2.0.0",
-		StatePath: StatePath(rollbackTarget), UpdaterPath: rollbackUpdater,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: StatusPending,
+		StatePath: upgrade.StatePath(rollbackTarget), UpdaterPath: rollbackUpdater,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: upgrade.StatusPending,
 	}
-	if err := WriteState(failure); err != nil {
+	if err := upgrade.WriteState(failure); err != nil {
 		t.Fatal(err)
 	}
-	failedCommand := exec.Command(rollbackUpdater, InternalUpdateArgs(failure)...)
+	failedCommand := exec.Command(rollbackUpdater, upgrade.InternalUpdateArgs(failure)...)
 	if output, runErr := failedCommand.CombinedOutput(); runErr == nil {
 		t.Fatal("failed updater unexpectedly succeeded")
 	} else if len(output) > 0 {
 		t.Logf("failed updater output: %s", output)
 	}
-	state, err = ReadState(failure.StatePath)
-	if err != nil || state == nil || state.Status != StatusFailed {
+	state, err = upgrade.ReadState(failure.StatePath)
+	if err != nil || state == nil || state.Status != upgrade.StatusFailed {
 		t.Fatalf("failure state = %#v, %v", state, err)
 	}
 	assertUpgradeVersion(t, rollbackTarget, "2.0.0")
@@ -128,7 +134,7 @@ func copyUpgradeFile(t *testing.T, source, destination string) {
 	if err := output.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := protectUpgradePath(destination, 0o755, os.Chmod); err != nil {
+	if err := os.Chmod(destination, 0o755); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -169,9 +175,10 @@ func assertUpgradeVersion(t *testing.T, path, expected string) {
 
 func mustUpgradeFileHash(t *testing.T, path string) string {
 	t.Helper()
-	hash, err := hashFile(path)
+	contents, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	return hash
+	digest := sha256.Sum256(contents)
+	return hex.EncodeToString(digest[:])
 }

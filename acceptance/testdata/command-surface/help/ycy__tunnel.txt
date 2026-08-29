@@ -1,0 +1,20 @@
+Manage trusted tunnel clients and tunnel definitions
+
+Usage:
+  ycy tunnel [flags]
+  ycy tunnel [command]
+
+Available Commands:
+  connect     Connect a native trusted client to a Tunnel Control Plane
+  server      Run the Tunnel Control Plane and supervised frps process
+
+Flags:
+  -h, --help   help for tunnel
+
+Global Flags:
+      --log-format string   Diagnostic format: text or json
+      --log-level string    Log level: debug, info, warn, or error
+      --quiet               Only emit error diagnostics (short form: -q)
+  -v, --verbose             Enable debug diagnostics
+
+Use "ycy tunnel [command] --help" for more information about a command.

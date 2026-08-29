@@ -1,4 +1,6 @@
-package main
+//go:build acceptance
+
+package acceptance
 
 import (
 	"bufio"

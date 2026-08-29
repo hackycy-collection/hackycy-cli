@@ -11,6 +11,8 @@ import (
 	"time"
 )
 
+const forkGitFixtureStartupTimeout = 5 * time.Second
+
 func TestOSForkGitRunnerStopsTheChildProcessGroupWithoutAnOrphan(t *testing.T) {
 	root := t.TempDir()
 	grandchild := writeHeatGitScript(t, root, "grandchild", "#!/bin/sh\nwhile :; do\n  sleep 1\ndone\n")
@@ -28,7 +30,7 @@ func TestOSForkGitRunnerStopsTheChildProcessGroupWithoutAnOrphan(t *testing.T) {
 		results <- err
 	}()
 
-	pid := waitForHeatGitPID(t, pidPath)
+	pid := waitForHeatGitPIDWithin(t, pidPath, forkGitFixtureStartupTimeout)
 	cancel(ycySignalCause{signal: syscall.SIGTERM})
 	select {
 	case err := <-results:

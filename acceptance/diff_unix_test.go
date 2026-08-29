@@ -1,6 +1,6 @@
-//go:build !windows
+//go:build acceptance && !windows
 
-package main
+package acceptance
 
 import (
 	"path/filepath"

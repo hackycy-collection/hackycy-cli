@@ -1,0 +1,29 @@
+Ycy command line interface
+
+Usage:
+  ycy [flags]
+  ycy [command]
+
+Available Commands:
+  completion  Generate the autocompletion script for the specified shell
+  config      Manage ycy configuration
+  diff        Compare two directories in a browser
+  export      Export command output
+  fs          Browse a directory in a browser
+  git         Git utilities
+  help        Help about any command
+  rm          Remove files/dirs, or smartly clean project artifacts when no path given
+  run         Run package.json scripts
+  tunnel      Manage trusted tunnel clients and tunnel definitions
+  upgrade     Update ycy to the latest release
+  zip         Zip a directory into a zip file
+
+Flags:
+  -h, --help                help for ycy
+      --log-format string   Diagnostic format: text or json
+      --log-level string    Log level: debug, info, warn, or error
+      --quiet               Only emit error diagnostics (short form: -q)
+  -v, --verbose             Enable debug diagnostics
+  -V, --version             Print version
+
+Use "ycy [command] --help" for more information about a command.

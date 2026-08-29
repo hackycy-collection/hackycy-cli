@@ -48,8 +48,12 @@ func TestOSHeatGitRunnerStopsTheChildProcessGroupWithoutAnOrphan(t *testing.T) {
 }
 
 func waitForHeatGitPID(t *testing.T, path string) int {
+	return waitForHeatGitPIDWithin(t, path, 2*time.Second)
+}
+
+func waitForHeatGitPIDWithin(t *testing.T, path string, timeout time.Duration) int {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		contents, err := os.ReadFile(path)
 		if err == nil {

@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -200,52 +199,6 @@ func TestConfigCMRemovePlainConfirmationAndCancellationPreserveMutationBoundary(
 				t.Fatalf("confirmed removal retained work profile: %#v", document.CM)
 			}
 		})
-	}
-}
-
-func TestConfigCMRemoveStandaloneBinary(t *testing.T) {
-	root := repositoryRoot(t)
-	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
-	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
-	build.Dir = root
-	build.Env = environmentWith(map[string]string{
-		"CGO_ENABLED": "0",
-		"GOTOOLCHAIN": "go1.26.7",
-		"GOWORK":      "off",
-	})
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build standalone binary: %v\n%s", err, output)
-	}
-
-	home := t.TempDir()
-	configPath := writeCMRemoveConfig(t, home)
-	environment := environmentWith(map[string]string{"HOME": home, "USERPROFILE": ""})
-	before, err := os.ReadFile(configPath)
-	if err != nil {
-		t.Fatalf("read fixture: %v", err)
-	}
-
-	output, err := runStandaloneWithInput(binary, environment, "yes\n", "config", "cm", "remove", "work")
-	if err == nil || string(output) != "error: config cm remove requires an interactive terminal\n" {
-		t.Fatalf("valid Automation removal = (%v, %q)", err, output)
-	}
-	after, err := os.ReadFile(configPath)
-	if err != nil || !bytes.Equal(after, before) {
-		t.Fatalf("valid Automation removal changed config = (%v, %q)", err, after)
-	}
-
-	output, err = runStandaloneWithInput(binary, environment, "yes\n", "config", "cm", "remove", "missing")
-	if err == nil || string(output) != "error: CM profile not found: missing\n" {
-		t.Fatalf("missing Automation removal = (%v, %q)", err, output)
-	}
-	after, err = os.ReadFile(configPath)
-	if err != nil || !bytes.Equal(after, before) {
-		t.Fatalf("missing Automation removal changed config = (%v, %q)", err, after)
-	}
-
-	helpOutput, err := runStandalone(binary, environment, "config", "cm", "--help")
-	if err != nil || !strings.Contains(string(helpOutput), "list") || !strings.Contains(string(helpOutput), "add") || !strings.Contains(string(helpOutput), "use") || !strings.Contains(string(helpOutput), "set") || !strings.Contains(string(helpOutput), "remove") || !strings.Contains(string(helpOutput), "test") {
-		t.Fatalf("cm help = (%v, %q)", err, helpOutput)
 	}
 }
 

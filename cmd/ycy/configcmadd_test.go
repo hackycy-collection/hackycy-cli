@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -195,32 +194,6 @@ type panicCMAddReader struct{}
 
 func (panicCMAddReader) Read([]byte) (int, error) {
 	panic("config cm add attempted to read Automation input")
-}
-
-func TestConfigCMAddStandaloneBinary(t *testing.T) {
-	root := repositoryRoot(t)
-	binary := standaloneBinaryOutputPath(filepath.Join(t.TempDir(), "ycy"))
-	build := exec.Command("go", "build", "-trimpath", "-o", binary, "./cmd/ycy")
-	build.Dir = root
-	build.Env = environmentWith(map[string]string{
-		"CGO_ENABLED": "0",
-		"GOTOOLCHAIN": "go1.26.7",
-		"GOWORK":      "off",
-	})
-	if output, err := build.CombinedOutput(); err != nil {
-		t.Fatalf("build standalone binary: %v\n%s", err, output)
-	}
-
-	home := t.TempDir()
-	environment := environmentWith(map[string]string{"HOME": home, "USERPROFILE": ""})
-	const apiKey = "api-key-that-must-not-escape"
-	output, err := runStandaloneWithInput(binary, environment, "work\n https://provider.example/v1/// \n gpt-4.1-mini \n"+apiKey+"\n", "config", "cm", "add")
-	if err == nil || string(output) != "error: config cm add requires an interactive terminal\n" || strings.Contains(string(output), apiKey) {
-		t.Fatalf("Automation config cm add = (%v, %q)", err, output)
-	}
-	if _, err := os.Stat(filepath.Join(home, ".ycy-cli", "config.json")); !os.IsNotExist(err) {
-		t.Fatalf("Automation config cm add wrote configuration: %v", err)
-	}
 }
 
 type standaloneCMConfigDocument struct {
