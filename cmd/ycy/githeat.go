@@ -7,9 +7,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	heatcommand "github.com/hackycy/hackycy-cli/internal/commands/git/heat"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
 const (
@@ -17,7 +17,7 @@ const (
 	terminalGitHeatLegend       = "Legend: latest, earliest, M modified, A added, D deleted, R renamed, C copied"
 )
 
-func newGitHeatHandler(experience *terminalexperience.Runtime) (cliapp.GitHeatHandler, error) {
+func newGitHeatHandler(experience *terminalexperience.Runtime) (rootcommand.GitHeatHandler, error) {
 	module, err := heatcommand.New(heatcommand.Dependencies{
 		Git: newOSHeatGitRunner(),
 		Now: time.Now,

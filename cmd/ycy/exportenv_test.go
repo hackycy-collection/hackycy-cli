@@ -10,7 +10,6 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	"github.com/hackycy/hackycy-cli/internal/commands/exportenv"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
@@ -181,7 +180,7 @@ func TestExportEnvAutomationPreservesResolvedPathsAndRejectsAmbiguityBeforeEffec
 				Output:      stdout,
 				Diagnostics: stderr,
 			})
-			app, err := cliapp.New(cliapp.BuildInfo{Version: "0.0.0-dev"}, cliapp.Dependencies{
+			app, err := newRootCommandForTest("0.0.0-dev", rootTestDependencies{
 				Out:       stdout,
 				Err:       stderr,
 				Logging:   logging.NewRuntime(logging.Options{Writer: stderr}),
@@ -226,7 +225,7 @@ func TestExportEnvPlainCancellationDoesNotWriteOutput(t *testing.T) {
 		Output:      stdout,
 		Diagnostics: diagnostics,
 	})
-	app, err := cliapp.New(cliapp.BuildInfo{Version: "0.0.0-dev"}, cliapp.Dependencies{
+	app, err := newRootCommandForTest("0.0.0-dev", rootTestDependencies{
 		Out:       stdout,
 		Err:       diagnostics,
 		Logging:   logging.NewRuntime(logging.Options{Writer: diagnostics}),

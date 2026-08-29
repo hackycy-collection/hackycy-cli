@@ -5,14 +5,14 @@ import (
 	"errors"
 	"os"
 
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	"github.com/hackycy/hackycy-cli/internal/commands/exportenv"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
 var errExportEnvRequiresInteractive = errors.New("export env requires an interactive terminal")
 
-func newExportEnvHandler(experience *terminalexperience.Runtime) cliapp.ExportEnvHandler {
+func newExportEnvHandler(experience *terminalexperience.Runtime) rootcommand.ExportEnvHandler {
 	return func(ctx context.Context, input exportenv.Input) (exportenv.Result, error) {
 		run := experience.Open(ctx)
 		defer run.Close()

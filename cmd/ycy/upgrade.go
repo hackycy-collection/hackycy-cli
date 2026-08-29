@@ -6,13 +6,13 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	"github.com/hackycy/hackycy-cli/internal/commands/upgrade"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
-func newUpgradeHandler(experience *terminalexperience.Runtime, currentVersion string) cliapp.UpgradeHandler {
+func newUpgradeHandler(experience *terminalexperience.Runtime, currentVersion string) rootcommand.UpgradeHandler {
 	return func(ctx context.Context) error {
 		result, err := upgrade.RunUpgrade(ctx, upgrade.UpgradeOptions{
 			Resolver: upgrade.ReleaseResolverOptions{CurrentVersion: currentVersion},

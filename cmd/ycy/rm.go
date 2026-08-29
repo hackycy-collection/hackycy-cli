@@ -7,14 +7,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	rmcommand "github.com/hackycy/hackycy-cli/internal/commands/rm"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
 var errRMRequiresInteractive = errors.New("rm requires an interactive terminal")
 
-func newRMHandler(experience *terminalexperience.Runtime) cliapp.RmHandler {
+func newRMHandler(experience *terminalexperience.Runtime) rootcommand.RmHandler {
 	return func(ctx context.Context, input rmcommand.Input) (rmcommand.Result, error) {
 		run := experience.Open(ctx)
 		defer run.Close()

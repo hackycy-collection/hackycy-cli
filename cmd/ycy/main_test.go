@@ -12,6 +12,8 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/internal/terminaltest"
+	commandfactory "github.com/hackycy/hackycy-cli/pkg/cmd/factory"
+	"github.com/hackycy/hackycy-cli/pkg/cmdutil"
 )
 
 func TestNewRootTerminalConstructsOneExperienceFromInheritedFacts(t *testing.T) {
@@ -76,7 +78,9 @@ func TestRootTunnelServerDiagnosticsPreserveSessionStreamContracts(t *testing.T)
 				value, ok := testCase.environment[key]
 				return value, ok
 			}, func(*os.File) bool { return testCase.terminal })
-			runtime := newRootLoggingRuntime(root)
+			factory := newCommandFactoryForRootTerminal(root)
+			root.experience = factory.Terminal
+			runtime := factory.Logging
 			runtime.SetFormat(testCase.format)
 			runtime.Logger("tunnel.server").Info("Tunnel started Bearer server-secret", map[string]any{
 				"authorization": "authorization-secret",
@@ -132,7 +136,9 @@ func TestRootTunnelServerDiagnosticsDeferUntilRendererLeaseCloses(t *testing.T) 
 	root := newRootTerminal(input, output, diagnostics, func(key string) (string, bool) {
 		return map[string]string{"TERM": "dumb"}[key], key == "TERM"
 	}, func(*os.File) bool { return true })
-	runtime := newRootLoggingRuntime(root)
+	factory := newCommandFactoryForRootTerminal(root)
+	root.experience = factory.Terminal
+	runtime := factory.Logging
 	run := root.experience.Open(context.Background())
 	updates := make(chan terminalexperience.OperationPhase)
 	tracked := make(chan error, 1)
@@ -204,4 +210,16 @@ func readRootDiagnostic(t *testing.T, file *os.File) string {
 		t.Fatalf("read diagnostics: %v", err)
 	}
 	return string(contents)
+}
+
+func newCommandFactoryForRootTerminal(root rootTerminal) *cmdutil.Factory {
+	return commandfactory.New(commandfactory.Options{
+		Version: "0.0.0-dev",
+		IOStreams: cmdutil.IOStreams{
+			In:     root.input,
+			Out:    root.output,
+			ErrOut: root.diagnostics,
+		},
+		Session: root.experience.Session(),
+	})
 }

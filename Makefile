@@ -5,7 +5,7 @@ VERSION ?= 0.0.0-dev
 RELEASE_VERSION ?= 0.1.0
 RELEASE_DIR := release/$(RELEASE_VERSION)
 
-GO_FIND = find cmd internal tools/hookctl tools/check-no-bun tools/release-artifacts tools/web-browser-harness web -path '*/node_modules' -prune -o -type f -name '*.go'
+GO_FIND = find cmd internal pkg tools/hookctl tools/check-no-bun tools/release-artifacts tools/web-browser-harness web -path '*/node_modules' -prune -o -type f -name '*.go'
 
 .PHONY: help bootstrap hooks-install hooks-doctor hooks-uninstall fmt check check-web check-go check-locks check-no-bun acceptance command-surface command-surface-update build cross-build release-clean release-candidate release-untracked web-browser-harness ensure-web-deps ensure-web-dist prepare-7zip prepare-7zip-all
 
@@ -72,10 +72,10 @@ acceptance:
 	@GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 -tags=acceptance ./acceptance/...
 
 command-surface:
-	@GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 ./internal/cliapp -run '^TestCommandSurface$$'
+	@GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 ./pkg/cmd/root -run '^TestCommandSurface$$'
 
 command-surface-update:
-	@YCY_UPDATE_COMMAND_SURFACE=1 GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 ./internal/cliapp -run '^TestCommandSurface$$'
+	@YCY_UPDATE_COMMAND_SURFACE=1 GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 ./pkg/cmd/root -run '^TestCommandSurface$$'
 
 build: check-web prepare-7zip
 	@mkdir -p build

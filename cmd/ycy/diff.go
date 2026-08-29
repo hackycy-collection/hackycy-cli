@@ -6,12 +6,12 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	diffcommand "github.com/hackycy/hackycy-cli/internal/commands/diff"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
-func newDiffHandler(experience *terminalexperience.Runtime) (cliapp.DiffHandler, error) {
+func newDiffHandler(experience *terminalexperience.Runtime) (rootcommand.DiffHandler, error) {
 	module, err := diffcommand.New(diffcommand.Dependencies{
 		NetworkInterfaces: osDiffNetworkInterfaces,
 	})

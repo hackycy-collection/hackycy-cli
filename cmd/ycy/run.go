@@ -8,14 +8,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	runcommand "github.com/hackycy/hackycy-cli/internal/commands/run"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
 var errRunRequiresInteractive = errors.New("run requires an interactive terminal")
 
-func newRunHandler(experience *terminalexperience.Runtime, rawInput io.Reader, output, errorOutput io.Writer) cliapp.RunHandler {
+func newRunHandler(experience *terminalexperience.Runtime, rawInput io.Reader, output, errorOutput io.Writer) rootcommand.RunHandler {
 	return func(ctx context.Context, input runcommand.Input) (runcommand.Result, error) {
 		run := experience.Open(ctx)
 		closed := false

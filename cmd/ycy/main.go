@@ -5,10 +5,11 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	fscommand "github.com/hackycy/hackycy-cli/internal/commands/fs"
-	"github.com/hackycy/hackycy-cli/internal/logging"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	commandfactory "github.com/hackycy/hackycy-cli/pkg/cmd/factory"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
+	"github.com/hackycy/hackycy-cli/pkg/cmdutil"
 	"github.com/hackycy/hackycy-cli/web"
 )
 
@@ -32,7 +33,19 @@ func main() {
 		return
 	}
 	terminalRoot := newRootTerminal(os.Stdin, os.Stdout, os.Stderr, os.LookupEnv, terminal)
-	normalDiagnostics := terminalRoot.experience.DiagnosticWriter()
+	commandFactory := commandfactory.New(commandfactory.Options{
+		Version: version,
+		IOStreams: cmdutil.IOStreams{
+			In:     terminalRoot.input,
+			Out:    terminalRoot.output,
+			ErrOut: terminalRoot.diagnostics,
+		},
+		Session:           terminalRoot.experience.Session(),
+		Environment:       os.Getenv,
+		EnvironmentLookup: os.LookupEnv,
+	})
+	terminalRoot.experience = commandFactory.Terminal
+	normalDiagnostics := commandFactory.Terminal.DiagnosticWriter()
 	if err := consumeUpgradeStartup(arguments, terminalRoot.experience); err != nil {
 		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
 		os.Exit(1)
@@ -46,11 +59,7 @@ func main() {
 
 	ctx, stop := newYcySignalContext(context.Background())
 	defer stop()
-	runtime := newRootLoggingRuntime(terminalRoot)
-	var discovery cliapp.DiscoveryPresenter
-	if terminalRoot.experience.Session().Kind == terminalexperience.RichInteractive {
-		discovery = newTerminalDiscoveryAdapter(terminalRoot.experience)
-	}
+	runtime := commandFactory.Logging
 	diffHandler, err := newDiffHandler(terminalRoot.experience)
 	if err != nil {
 		_, _ = fmt.Fprintln(terminalRoot.output)
@@ -69,11 +78,7 @@ func main() {
 		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
 		os.Exit(1)
 	}
-	app, err := cliapp.New(cliapp.BuildInfo{Version: version}, cliapp.Dependencies{
-		Out:              terminalRoot.output,
-		Err:              normalDiagnostics,
-		Logging:          runtime,
-		Discovery:        discovery,
+	app, err := rootcommand.New(commandFactory, rootcommand.Dependencies{
 		ExportEnv:        newExportEnvHandler(terminalRoot.experience),
 		ConfigForkList:   newConfigForkListHandler(terminalRoot.experience),
 		ConfigForkAdd:    newConfigForkAddHandler(terminalRoot.experience),
@@ -136,12 +141,4 @@ func newRootTerminal(input, output, diagnostics *os.File, lookup terminalexperie
 		diagnostics: diagnostics,
 		experience:  experience,
 	}
-}
-
-func newRootLoggingRuntime(root rootTerminal) *logging.Runtime {
-	session := root.experience.Session()
-	return logging.NewRuntime(logging.Options{
-		Writer: root.experience.DiagnosticWriter(),
-		Color:  session.Kind == terminalexperience.RichInteractive && session.Color,
-	})
 }

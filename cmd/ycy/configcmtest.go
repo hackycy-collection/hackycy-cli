@@ -6,12 +6,12 @@ import (
 	"net/http"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	configcm "github.com/hackycy/hackycy-cli/internal/commands/config/cm"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
-func newConfigCMTestHandler(experience *terminalexperience.Runtime) cliapp.ConfigCMTestHandler {
+func newConfigCMTestHandler(experience *terminalexperience.Runtime) rootcommand.ConfigCMTestHandler {
 	return func(context context.Context, request configcm.TestRequest) (configcm.TestResult, error) {
 		store, err := appconfig.New(appconfig.Dependencies{})
 		if err != nil {

@@ -6,10 +6,13 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
+
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
 const modulePath = "github.com/hackycy/hackycy-cli"
@@ -20,13 +23,59 @@ const modulePath = "github.com/hackycy/hackycy-cli"
 // not a package-wide exemption and must never be widened to include pkg.
 var transitionAllowlist = map[string]string{
 	"cmd/ycy":           "temporary process composition root and adapters",
-	"internal/cliapp":   "pre-migration root bindings (removed by Slice 1)",
 	"internal/commands": "unmigrated command Modules (removed by their leaf slices)",
+}
+
+// rootCommandImportAllowlist records the handler Modules still owned by the
+// lifted root. Each migrated leaf removes its corresponding entry instead of
+// broadening the command-package transition.
+var rootCommandImportAllowlist = map[string]string{
+	"internal/commands/config/cm":   "unmigrated Config CM handlers",
+	"internal/commands/config/fork": "unmigrated Config Fork handlers",
+	"internal/commands/diff":        "unmigrated Diff handler",
+	"internal/commands/exportenv":   "unmigrated Export Env handler",
+	"internal/commands/fs":          "unmigrated FS handler",
+	"internal/commands/git/cm":      "unmigrated Git CM handler",
+	"internal/commands/git/fork":    "unmigrated Git Fork handler",
+	"internal/commands/git/heat":    "unmigrated Git Heat handler",
+	"internal/commands/git/pulse":   "unmigrated Git Pulse handler",
+	"internal/commands/rm":          "unmigrated RM handler",
+	"internal/commands/run":         "unmigrated Run handler",
+	"internal/commands/tunnel":      "unmigrated Tunnel handlers",
+	"internal/commands/zip":         "unmigrated ZIP handler",
+}
+
+// rootHandlerAllowlist is the complete, shrinking set of temporary handler
+// capabilities. Process facts must remain in cmdutil.Factory.
+var rootHandlerAllowlist = map[string]string{
+	"ExportEnv":        "unmigrated Export Env handler",
+	"ConfigForkList":   "unmigrated Config Fork list handler",
+	"ConfigForkAdd":    "unmigrated Config Fork add handler",
+	"ConfigForkRemove": "unmigrated Config Fork remove handler",
+	"ConfigCMList":     "unmigrated Config CM list handler",
+	"ConfigCMAdd":      "unmigrated Config CM add handler",
+	"ConfigCMUse":      "unmigrated Config CM use handler",
+	"ConfigCMSet":      "unmigrated Config CM set handler",
+	"ConfigCMRemove":   "unmigrated Config CM remove handler",
+	"ConfigCMTest":     "unmigrated Config CM test handler",
+	"RM":               "unmigrated RM handler",
+	"Run":              "unmigrated Run handler",
+	"GitHeat":          "unmigrated Git Heat handler",
+	"GitPulse":         "unmigrated Git Pulse handler",
+	"GitFork":          "unmigrated Git Fork handler",
+	"GitCM":            "unmigrated Git CM handler",
+	"ZIP":              "unmigrated ZIP handler",
+	"Diff":             "unmigrated Diff handler",
+	"FS":               "unmigrated FS handler",
+	"TunnelServer":     "unmigrated Tunnel server handler",
+	"TunnelConnect":    "unmigrated Tunnel connect handler",
+	"Upgrade":          "unmigrated Upgrade handler",
 }
 
 func TestActiveArchitecture(t *testing.T) {
 	root := repositoryRoot(t)
 	assertTransitionAllowlist(t, root)
+	assertRootHandlerAllowlist(t)
 	var violations []string
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -58,11 +107,24 @@ func TestActiveArchitecture(t *testing.T) {
 	}
 }
 
+func assertRootHandlerAllowlist(t *testing.T) {
+	t.Helper()
+	dependencies := reflect.TypeFor[rootcommand.Dependencies]()
+	if dependencies.NumField() != len(rootHandlerAllowlist) {
+		t.Fatalf("root Dependencies fields = %d, allowlist = %d", dependencies.NumField(), len(rootHandlerAllowlist))
+	}
+	for index := 0; index < dependencies.NumField(); index++ {
+		field := dependencies.Field(index)
+		if _, ok := rootHandlerAllowlist[field.Name]; !ok {
+			t.Fatalf("root Dependencies field %q is outside the transition allowlist", field.Name)
+		}
+	}
+}
+
 func assertTransitionAllowlist(t *testing.T, root string) {
 	t.Helper()
 	want := map[string]string{
 		"cmd/ycy":           "temporary process composition root and adapters",
-		"internal/cliapp":   "pre-migration root bindings (removed by Slice 1)",
 		"internal/commands": "unmigrated command Modules (removed by their leaf slices)",
 	}
 	if len(transitionAllowlist) != len(want) {
@@ -131,7 +193,7 @@ func validateInternalImport(source, filePath, imported string) []string {
 	}
 
 	if isInternalPackage(source) && strings.HasPrefix(imported, "pkg/cmd") {
-		if source != "internal/ycycmd" && source != "internal/cliapp" {
+		if source != "internal/ycycmd" {
 			violations = append(violations, filePath+": internal package imports command package "+imported)
 		}
 	}
@@ -190,8 +252,14 @@ func inspectCalls(relativeDir, path string, file *ast.File) []string {
 }
 
 func validateCommandImport(source, imported string) []string {
-	if source == "internal/cliapp" || source == "cmd/ycy" {
+	if source == "cmd/ycy" {
 		return nil
+	}
+	if source == "pkg/cmd/root" {
+		if _, ok := rootCommandImportAllowlist[imported]; ok {
+			return nil
+		}
+		return []string{source + ": root transition does not allow command module " + imported}
 	}
 	if !strings.HasPrefix(source, "internal/commands/") {
 		return []string{source + ": shared module imports a command package " + imported}
@@ -257,7 +325,7 @@ func commandOwner(path string) string {
 }
 
 func cobraOwner(path string) bool {
-	return path == "internal/cliapp" || path == "cmd/ycy" || path == "pkg/cmd/root" || strings.HasPrefix(path, "pkg/cmd/")
+	return path == "cmd/ycy" || path == "pkg/cmd/root" || strings.HasPrefix(path, "pkg/cmd/")
 }
 
 func isInternalPackage(path string) bool {
@@ -265,7 +333,7 @@ func isInternalPackage(path string) bool {
 }
 
 func allowedCurrentBinaryImport(imported string) bool {
-	if strings.HasPrefix(imported, "internal/") || imported == "web" {
+	if strings.HasPrefix(imported, "internal/") || imported == "pkg/cmd/factory" || imported == "pkg/cmd/root" || imported == "pkg/cmdutil" || imported == "web" {
 		return true
 	}
 	return false

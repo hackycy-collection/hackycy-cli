@@ -10,14 +10,14 @@ import (
 	"sync"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	cmcommand "github.com/hackycy/hackycy-cli/internal/commands/git/cm"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
 var errGitCMRequiresInteractive = errors.New("git cm requires an interactive terminal")
 
-func newGitCMHandler(experience *terminalexperience.Runtime) cliapp.GitCMHandler {
+func newGitCMHandler(experience *terminalexperience.Runtime) rootcommand.GitCMHandler {
 	return func(ctx context.Context, request cmcommand.Input) (cmcommand.Result, error) {
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()

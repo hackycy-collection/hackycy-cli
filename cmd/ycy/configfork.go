@@ -8,12 +8,12 @@ import (
 	"text/tabwriter"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	configfork "github.com/hackycy/hackycy-cli/internal/commands/config/fork"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
-func newConfigForkListHandler(experience *terminalexperience.Runtime) cliapp.ConfigForkListHandler {
+func newConfigForkListHandler(experience *terminalexperience.Runtime) rootcommand.ConfigForkListHandler {
 	return func(context context.Context, input configfork.Input) (configfork.Result, error) {
 		store, err := appconfig.New(appconfig.Dependencies{})
 		if err != nil {
@@ -96,7 +96,7 @@ func terminalForkListCount(count int) string {
 	return fmt.Sprintf("%d %s configured", count, label)
 }
 
-func newConfigForkAddHandler(experience *terminalexperience.Runtime) cliapp.ConfigForkAddHandler {
+func newConfigForkAddHandler(experience *terminalexperience.Runtime) rootcommand.ConfigForkAddHandler {
 	return func(context context.Context, request configfork.AddRequest) (configfork.AddResult, error) {
 		if experience.Session().Kind == terminalexperience.Automation {
 			return configfork.AddResult{}, errConfigForkAddRequiresInteractive
@@ -120,7 +120,7 @@ func newConfigForkAddHandler(experience *terminalexperience.Runtime) cliapp.Conf
 	}
 }
 
-func newConfigForkRemoveHandler(experience *terminalexperience.Runtime) cliapp.ConfigForkRemoveHandler {
+func newConfigForkRemoveHandler(experience *terminalexperience.Runtime) rootcommand.ConfigForkRemoveHandler {
 	return func(context context.Context, request configfork.RemoveRequest) (configfork.RemoveResult, error) {
 		store, err := appconfig.New(appconfig.Dependencies{})
 		if err != nil {

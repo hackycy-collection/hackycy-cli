@@ -17,7 +17,6 @@ import (
 	"testing"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	forkcommand "github.com/hackycy/hackycy-cli/internal/commands/git/fork"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
@@ -309,7 +308,7 @@ func TestGitForkAutomationFailsBeforeReadingOrRemovingANonemptyDestination(t *te
 		Output:      stdout,
 		Diagnostics: stderr,
 	})
-	app, err := cliapp.New(cliapp.BuildInfo{Version: "0.0.0-dev"}, cliapp.Dependencies{
+	app, err := newRootCommandForTest("0.0.0-dev", rootTestDependencies{
 		Out:     stdout,
 		Err:     stderr,
 		Logging: logging.NewRuntime(logging.Options{Writer: stderr}),

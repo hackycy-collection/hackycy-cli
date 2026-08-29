@@ -11,15 +11,15 @@ import (
 	"sync"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	forkcommand "github.com/hackycy/hackycy-cli/internal/commands/git/fork"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
 var errGitForkRequiresInteractive = errors.New("git fork requires an interactive terminal")
 
-func newGitForkHandler(experience *terminalexperience.Runtime) cliapp.GitForkHandler {
+func newGitForkHandler(experience *terminalexperience.Runtime) rootcommand.GitForkHandler {
 	return func(ctx context.Context, request forkcommand.Input) (forkcommand.Result, error) {
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()

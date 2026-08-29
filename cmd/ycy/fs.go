@@ -7,12 +7,12 @@ import (
 	"net/netip"
 	"strings"
 
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	fscommand "github.com/hackycy/hackycy-cli/internal/commands/fs"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
-func newFSHandler(experience *terminalexperience.Runtime) (cliapp.FSHandler, error) {
+func newFSHandler(experience *terminalexperience.Runtime) (rootcommand.FSHandler, error) {
 	module, err := fscommand.New(fscommand.Dependencies{
 		NetworkInterfaces: osFSNetworkInterfaces,
 	})

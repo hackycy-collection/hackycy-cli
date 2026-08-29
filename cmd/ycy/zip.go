@@ -8,14 +8,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	zipcommand "github.com/hackycy/hackycy-cli/internal/commands/zip"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
 var errZipRequiresInteractive = errors.New("zip requires an interactive terminal")
 
-func newZipHandler(experience *terminalexperience.Runtime) cliapp.ZipHandler {
+func newZipHandler(experience *terminalexperience.Runtime) rootcommand.ZipHandler {
 	return func(ctx context.Context, input zipcommand.Input) (zipcommand.Result, error) {
 		run := experience.Open(ctx)
 		defer run.Close()

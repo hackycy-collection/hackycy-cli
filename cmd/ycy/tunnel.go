@@ -10,19 +10,19 @@ import (
 	"time"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	"github.com/hackycy/hackycy-cli/internal/commands/tunnel"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
-func newTunnelServerHandler(logger logging.Logger) cliapp.TunnelServerHandler {
+func newTunnelServerHandler(logger logging.Logger) rootcommand.TunnelServerHandler {
 	return func(ctx context.Context, config tunnel.ServerConfig) error {
 		return tunnel.RunServer(ctx, config, tunnel.ServerRunOptions{Logger: logger})
 	}
 }
 
-func newTunnelConnectHandler(experience *terminalexperience.Runtime, logger logging.Logger, ycyVersion string) cliapp.TunnelConnectHandler {
+func newTunnelConnectHandler(experience *terminalexperience.Runtime, logger logging.Logger, ycyVersion string) rootcommand.TunnelConnectHandler {
 	return func(ctx context.Context, optionInput tunnel.ClientOptionInput) error {
 		store, err := appconfig.New(appconfig.Dependencies{})
 		if err != nil {

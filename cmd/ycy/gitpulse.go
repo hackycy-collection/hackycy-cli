@@ -13,14 +13,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hackycy/hackycy-cli/internal/cliapp"
 	pulsecommand "github.com/hackycy/hackycy-cli/internal/commands/git/pulse"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
 var errGitPulseRequiresInteractive = errors.New("git pulse requires an interactive terminal")
 
-func newGitPulseHandler(experience *terminalexperience.Runtime) cliapp.GitPulseHandler {
+func newGitPulseHandler(experience *terminalexperience.Runtime) rootcommand.GitPulseHandler {
 	return func(ctx context.Context, input pulsecommand.Input) (pulsecommand.Result, error) {
 		ctx, cancel := context.WithCancel(ctx)
 		defer cancel()
