@@ -1,8 +1,3 @@
-# Fixed Goal Prompt
-
-只替换 `.scratch/cli-structure-refactor`。同一 effort 的每个 Gate 使用完全相同的内容。
-
-```markdown
 推进 `.scratch/cli-structure-refactor/goal-runbook.md` 中启动本次 Goal 时唯一 `active` 的 Gate，直到该 Gate 通过或完成一次人工验收交接。开始时锁定该 Gate 的编号；该编号是本次 Goal 不可扩大的执行边界。只处理该 Gate，不得进入下一个 Gate。
 
 启动时先读取 `.scratch/cli-structure-refactor/goal-runbook.md` 的 Goal Ledger 和当前 Gate 的最后一条 Progress Log。若日志标记人工验收待确认且当前用户输入没有明确验收结果，只执行人工验收交接的终止规则，不读取代码、不运行验证、不重新实施。否则再阅读 `CLAUDE.md`、适用的 `AGENTS.md` / `CONTEXT.md`、`.scratch/cli-structure-refactor/implementation-plan.md`、`.scratch/cli-structure-refactor/goal-runbook.md`，以及当前 Gate 引用的 decision 文档和相关代码；以这些文件为唯一执行依据。
@@ -37,4 +32,3 @@
 当前 Gate 的全部 Exit conditions（包括适用的人工验收）满足后：向 Progress Log 追加逐项验收和最终验证证据，将当前 Gate 标记为 `passed`；若存在直接后继，将其从 `planned` 标记为 `active` 并记录“已激活，尚未开始实施”；若不存在后继，记录 effort 已完成。汇总本 Gate 的验证证据，使用运行时提供的 Goal/task 成功终态机制结束本次 Goal，然后结束当前普通会话。
 
 这是整个 Goal 的强制结束点，不是只结束当前回复。即使直接后继已变为 `active`，它也不属于本次 Goal；不得重新进入执行循环，不得分析、实施或验证下一个 Gate，也不得为下一个 Gate 调用工具。
-```
