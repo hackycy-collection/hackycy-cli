@@ -12,6 +12,7 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/terminal"
 	configcommand "github.com/hackycy/hackycy-cli/pkg/cmd/config"
 	exportcommand "github.com/hackycy/hackycy-cli/pkg/cmd/export"
+	gitcommand "github.com/hackycy/hackycy-cli/pkg/cmd/git"
 	rmcommand "github.com/hackycy/hackycy-cli/pkg/cmd/rm"
 	runcommand "github.com/hackycy/hackycy-cli/pkg/cmd/run"
 	zipcommand "github.com/hackycy/hackycy-cli/pkg/cmd/zip"
@@ -22,10 +23,6 @@ import (
 // Dependencies are the temporary unmigrated command handlers supplied by the
 // composition root. Process facts belong exclusively to cmdutil.Factory.
 type Dependencies struct {
-	GitHeat       GitHeatHandler
-	GitPulse      GitPulseHandler
-	GitFork       GitForkHandler
-	GitCM         GitCMHandler
 	Diff          DiffHandler
 	FS            FSHandler
 	TunnelServer  TunnelServerHandler
@@ -42,10 +39,6 @@ type Outcome struct {
 // App owns Cobra, global options, diagnostics, and fresh root-tree construction.
 type App struct {
 	factory       *cmdutil.Factory
-	gitHeat       GitHeatHandler
-	gitPulse      GitPulseHandler
-	gitFork       GitForkHandler
-	gitCM         GitCMHandler
 	diff          DiffHandler
 	fs            FSHandler
 	tunnelServer  TunnelServerHandler
@@ -66,10 +59,6 @@ func New(factory *cmdutil.Factory, dependencies Dependencies) (*App, error) {
 	}
 	return &App{
 		factory:       factory,
-		gitHeat:       dependencies.GitHeat,
-		gitPulse:      dependencies.GitPulse,
-		gitFork:       dependencies.GitFork,
-		gitCM:         dependencies.GitCM,
 		diff:          dependencies.Diff,
 		fs:            dependencies.FS,
 		tunnelServer:  dependencies.TunnelServer,
@@ -89,12 +78,10 @@ func (app *App) diagnostics() io.Writer {
 // Execute builds a fresh Cobra tree for every invocation and never exits the process itself.
 func (app *App) Execute(context context.Context, arguments []string) Outcome {
 	arguments = normalizeDiagnosticAliases(arguments)
+	arguments = gitcommand.NormalizeArguments(arguments)
 	controls := collectDiagnosticControls(arguments)
 	root := app.rootCommandWithDiagnosticControls(controls)
 	return app.execute(func() error {
-		if app.gitCM != nil {
-			arguments = normalizeGitCMArguments(arguments)
-		}
 		root.SetArgs(arguments)
 		return normalizeCobraError(root, arguments, root.ExecuteContext(context))
 	})
@@ -163,6 +150,7 @@ func (app *App) rootCommandWithDiagnosticControls(controls diagnosticControls) *
 	root.PersistentPreRunE = func(command *cobra.Command, _ []string) error {
 		switch command.CommandPath() {
 		case "ycy rm", "ycy export env", "ycy run", "ycy zip",
+			"ycy git heat", "ycy git pulse", "ycy git fork", "ycy git cm",
 			"ycy config fork list", "ycy config fork add", "ycy config fork remove",
 			"ycy config cm list", "ycy config cm add", "ycy config cm use",
 			"ycy config cm set", "ycy config cm remove", "ycy config cm test":
@@ -181,9 +169,7 @@ func (app *App) rootCommandWithDiagnosticControls(controls diagnosticControls) *
 	root.AddCommand(rmcommand.NewCmdRM(app.factory, nil))
 	root.AddCommand(runcommand.NewCmdRun(app.factory, nil))
 	root.AddCommand(zipcommand.NewCmdZIP(app.factory, nil))
-	if app.gitHeat != nil || app.gitPulse != nil || app.gitFork != nil || app.gitCM != nil {
-		app.registerGit(root, configureDiagnostics)
-	}
+	root.AddCommand(gitcommand.NewCmdGit(app.factory))
 	if app.diff != nil {
 		app.registerDiff(root, configureDiagnostics)
 	}

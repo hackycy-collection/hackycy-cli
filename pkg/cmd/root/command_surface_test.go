@@ -16,10 +16,6 @@ import (
 
 	diffcommand "github.com/hackycy/hackycy-cli/internal/commands/diff"
 	fscommand "github.com/hackycy/hackycy-cli/internal/commands/fs"
-	gitcm "github.com/hackycy/hackycy-cli/internal/commands/git/cm"
-	gitfork "github.com/hackycy/hackycy-cli/internal/commands/git/fork"
-	githeat "github.com/hackycy/hackycy-cli/internal/commands/git/heat"
-	gitpulse "github.com/hackycy/hackycy-cli/internal/commands/git/pulse"
 	tunnelcommand "github.com/hackycy/hackycy-cli/internal/commands/tunnel"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/spf13/cobra"
@@ -314,18 +310,6 @@ func newSurfaceApp() (*App, error) {
 }
 
 func newSurfaceAppWithOutput(output, errOutput io.Writer) (*App, error) {
-	noHeat := func(context.Context, githeat.Input) (githeat.Result, error) {
-		return githeat.Result{}, nil
-	}
-	noPulse := func(context.Context, gitpulse.Input) (gitpulse.Result, error) {
-		return gitpulse.Result{}, nil
-	}
-	noFork := func(context.Context, gitfork.Input) (gitfork.Result, error) {
-		return gitfork.Result{}, nil
-	}
-	noCM := func(context.Context, gitcm.Input) (gitcm.Result, error) {
-		return gitcm.Result{}, nil
-	}
 	noDiff := func(context.Context, diffcommand.Input) (diffcommand.Result, error) {
 		return diffcommand.Result{}, nil
 	}
@@ -342,10 +326,6 @@ func newSurfaceAppWithOutput(output, errOutput io.Writer) (*App, error) {
 		Environment:       func(string) string { return "" },
 		EnvironmentLookup: func(string) (string, bool) { return "", false },
 		Logging:           logging.NewRuntime(logging.Options{Writer: errOutput}),
-		GitHeat:           noHeat,
-		GitPulse:          noPulse,
-		GitFork:           noFork,
-		GitCM:             noCM,
 		Diff:              noDiff,
 		FS:                noFS,
 		TunnelServer:      noTunnelServer,

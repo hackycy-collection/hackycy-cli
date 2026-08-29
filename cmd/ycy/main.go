@@ -72,22 +72,12 @@ func main() {
 		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
 		os.Exit(1)
 	}
-	gitHeat, err := newGitHeatHandler(terminalRoot.experience)
-	if err != nil {
-		_, _ = fmt.Fprintln(terminalRoot.output)
-		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
-		os.Exit(1)
-	}
 	app, err := rootcommand.New(commandFactory, rootcommand.Dependencies{
 		Diff:          diffHandler,
 		FS:            fsHandler,
 		TunnelServer:  newTunnelServerHandler(runtime.Logger("tunnel.server")),
 		TunnelConnect: newTunnelConnectHandler(terminalRoot.experience, runtime.Logger("tunnel.client"), version),
 		Upgrade:       newUpgradeHandler(terminalRoot.experience, version),
-		GitHeat:       gitHeat,
-		GitPulse:      newGitPulseHandler(terminalRoot.experience),
-		GitFork:       newGitForkHandler(terminalRoot.experience),
-		GitCM:         newGitCMHandler(terminalRoot.experience),
 	})
 	if err != nil {
 		_, _ = fmt.Fprintln(terminalRoot.output)

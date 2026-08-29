@@ -30,27 +30,19 @@ var transitionAllowlist = map[string]string{
 // lifted root. Each migrated leaf removes its corresponding entry instead of
 // broadening the command-package transition.
 var rootCommandImportAllowlist = map[string]string{
-	"internal/commands/diff":      "unmigrated Diff handler",
-	"internal/commands/fs":        "unmigrated FS handler",
-	"internal/commands/git/cm":    "unmigrated Git CM handler",
-	"internal/commands/git/fork":  "unmigrated Git Fork handler",
-	"internal/commands/git/heat":  "unmigrated Git Heat handler",
-	"internal/commands/git/pulse": "unmigrated Git Pulse handler",
-	"internal/commands/tunnel":    "unmigrated Tunnel handlers",
+	"internal/commands/diff":   "unmigrated Diff handler",
+	"internal/commands/fs":     "unmigrated FS handler",
+	"internal/commands/tunnel": "unmigrated Tunnel handlers",
 }
 
 // rootHandlerAllowlist is the complete, shrinking set of temporary handler
 // capabilities. Process facts must remain in cmdutil.Factory.
 var rootHandlerAllowlist = map[string]string{
-	"GitHeat":        "unmigrated Git Heat handler",
-	"GitPulse":       "unmigrated Git Pulse handler",
-	"GitFork":        "unmigrated Git Fork handler",
-	"GitCM":          "unmigrated Git CM handler",
-	"Diff":           "unmigrated Diff handler",
-	"FS":             "unmigrated FS handler",
-	"TunnelServer":   "unmigrated Tunnel server handler",
-	"TunnelConnect":  "unmigrated Tunnel connect handler",
-	"Upgrade":        "unmigrated Upgrade handler",
+	"Diff":          "unmigrated Diff handler",
+	"FS":            "unmigrated FS handler",
+	"TunnelServer":  "unmigrated Tunnel server handler",
+	"TunnelConnect": "unmigrated Tunnel connect handler",
+	"Upgrade":       "unmigrated Upgrade handler",
 }
 
 func TestActiveArchitecture(t *testing.T) {

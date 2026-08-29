@@ -21,10 +21,6 @@ type testDependencies struct {
 	EnvironmentLookup func(string) (string, bool)
 	Logging           *logging.Runtime
 	Session           terminal.Session
-	GitHeat           GitHeatHandler
-	GitPulse          GitPulseHandler
-	GitFork           GitForkHandler
-	GitCM             GitCMHandler
 	Diff              DiffHandler
 	FS                FSHandler
 	TunnelServer      TunnelServerHandler
@@ -47,10 +43,6 @@ func newTestApp(build BuildInfo, dependencies testDependencies) (*App, error) {
 		factory.Logging = dependencies.Logging
 	}
 	return New(factory, Dependencies{
-		GitHeat:       dependencies.GitHeat,
-		GitPulse:      dependencies.GitPulse,
-		GitFork:       dependencies.GitFork,
-		GitCM:         dependencies.GitCM,
 		Diff:          dependencies.Diff,
 		FS:            dependencies.FS,
 		TunnelServer:  dependencies.TunnelServer,

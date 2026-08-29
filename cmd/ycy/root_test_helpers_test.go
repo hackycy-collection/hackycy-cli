@@ -15,10 +15,6 @@ type rootTestDependencies struct {
 	Environment       func(string) string
 	EnvironmentLookup func(string) (string, bool)
 	Logging           *logging.Runtime
-	GitHeat           rootcommand.GitHeatHandler
-	GitPulse          rootcommand.GitPulseHandler
-	GitFork           rootcommand.GitForkHandler
-	GitCM             rootcommand.GitCMHandler
 	Diff              rootcommand.DiffHandler
 	FS                rootcommand.FSHandler
 	TunnelServer      rootcommand.TunnelServerHandler
@@ -40,10 +36,6 @@ func newRootCommandForTest(version string, dependencies rootTestDependencies) (*
 		factory.Logging = dependencies.Logging
 	}
 	return rootcommand.New(factory, rootcommand.Dependencies{
-		GitHeat:       dependencies.GitHeat,
-		GitPulse:      dependencies.GitPulse,
-		GitFork:       dependencies.GitFork,
-		GitCM:         dependencies.GitCM,
 		Diff:          dependencies.Diff,
 		FS:            dependencies.FS,
 		TunnelServer:  dependencies.TunnelServer,

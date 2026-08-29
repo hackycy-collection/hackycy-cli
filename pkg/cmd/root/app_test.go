@@ -7,7 +7,6 @@ import (
 	"strings"
 	"testing"
 
-	githeat "github.com/hackycy/hackycy-cli/internal/commands/git/heat"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/hackycy/hackycy-cli/internal/terminal"
 )
@@ -70,7 +69,7 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 		{
 			name:        "environment config applies to executing command",
 			environment: map[string]string{"YCY_LOG_LEVEL": "warn", "YCY_LOG_FORMAT": "json"},
-			arguments:   []string{"git", "heat"},
+			arguments:   []string{"upgrade"},
 			wantLevel:   logging.Warn,
 			wantFormat:  logging.JSONFormat,
 			wantCall:    true,
@@ -78,35 +77,35 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 		{
 			name:        "explicit level wins over environment",
 			environment: map[string]string{"YCY_LOG_LEVEL": "warn", "YCY_LOG_FORMAT": "json"},
-			arguments:   []string{"--log-level", "debug", "git", "heat"},
+			arguments:   []string{"--log-level", "debug", "upgrade"},
 			wantLevel:   logging.Debug,
 			wantFormat:  logging.JSONFormat,
 			wantCall:    true,
 		},
 		{
 			name:       "explicit format reaches runtime",
-			arguments:  []string{"--log-format", "json", "git", "heat"},
+			arguments:  []string{"--log-format", "json", "upgrade"},
 			wantLevel:  logging.Info,
 			wantFormat: logging.JSONFormat,
 			wantCall:   true,
 		},
 		{
 			name:       "verbose selects debug",
-			arguments:  []string{"--verbose", "git", "heat"},
+			arguments:  []string{"--verbose", "upgrade"},
 			wantLevel:  logging.Debug,
 			wantFormat: logging.TextFormat,
 			wantCall:   true,
 		},
 		{
 			name:       "quiet selects error",
-			arguments:  []string{"-q", "git", "heat"},
+			arguments:  []string{"-q", "upgrade"},
 			wantLevel:  logging.Error,
 			wantFormat: logging.TextFormat,
 			wantCall:   true,
 		},
 		{
 			name:       "conflicting controls stop before effect",
-			arguments:  []string{"--log-level", "info", "--quiet", "git", "heat"},
+			arguments:  []string{"--log-level", "info", "--quiet", "upgrade"},
 			wantCode:   1,
 			wantLevel:  logging.Info,
 			wantFormat: logging.TextFormat,
@@ -114,7 +113,7 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 		},
 		{
 			name:       "invalid format stops before effect",
-			arguments:  []string{"--log-format", "yaml", "git", "heat"},
+			arguments:  []string{"--log-format", "yaml", "upgrade"},
 			wantCode:   1,
 			wantLevel:  logging.Info,
 			wantFormat: logging.TextFormat,
@@ -132,9 +131,9 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 				Err:         errors,
 				Environment: func(key string) string { return test.environment[key] },
 				Logging:     runtime,
-				GitHeat: func(context.Context, githeat.Input) (githeat.Result, error) {
+				Upgrade: func(context.Context) error {
 					called = true
-					return githeat.Result{}, nil
+					return nil
 				},
 			})
 			if err != nil {
@@ -204,9 +203,9 @@ func TestParserRecoveryUsesOneActionableErrorLine(t *testing.T) {
 		Out:     output,
 		Err:     errors,
 		Logging: logging.NewRuntime(logging.Options{Writer: errors}),
-		GitHeat: func(context.Context, githeat.Input) (githeat.Result, error) {
+		Upgrade: func(context.Context) error {
 			called = true
-			return githeat.Result{}, nil
+			return nil
 		},
 	})
 	if err != nil {
@@ -258,15 +257,15 @@ func TestParserRecoveryLeavesCommandErrorsUntouched(t *testing.T) {
 		Out:     output,
 		Err:     errors,
 		Logging: logging.NewRuntime(logging.Options{Writer: errors}),
-		GitHeat: func(context.Context, githeat.Input) (githeat.Result, error) {
-			return githeat.Result{}, stderrors.New("command validation failed")
+		Upgrade: func(context.Context) error {
+			return stderrors.New("command validation failed")
 		},
 	})
 	if err != nil {
 		t.Fatalf("New returned an error: %v", err)
 	}
 
-	outcome := app.Execute(context.Background(), []string{"git", "heat"})
+	outcome := app.Execute(context.Background(), []string{"upgrade"})
 	if outcome.Code != 1 || errors.String() != "error: command validation failed\n" || output.Len() != 0 {
 		t.Fatalf("outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
 	}
