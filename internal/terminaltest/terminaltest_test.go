@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"testing"
 	"time"
@@ -86,8 +87,14 @@ func TestRedirectedStreamsSeparateOutputAndRejectTerminalControl(t *testing.T) {
 }
 
 func TestControlledPTYRunsATerminalSubprocess(t *testing.T) {
-	const helperEnvironment = "YCY_TERMINALTEST_PTY_HELPER"
+	const (
+		helperEnvironment = "YCY_TERMINALTEST_PTY_HELPER"
+		readyEnvironment  = "YCY_TERMINALTEST_PTY_READY_PATH"
+	)
 	if os.Getenv(helperEnvironment) == "1" {
+		if err := os.WriteFile(os.Getenv(readyEnvironment), []byte("ready"), 0o600); err != nil {
+			t.Fatalf("write PTY readiness: %v", err)
+		}
 		fmt.Printf("tty=%t/%t/%t\n", term.IsTerminal(int(os.Stdin.Fd())), term.IsTerminal(int(os.Stdout.Fd())), term.IsTerminal(int(os.Stderr.Fd())))
 		line, err := bufio.NewReader(os.Stdin).ReadString('\n')
 		if err != nil {
@@ -98,7 +105,8 @@ func TestControlledPTYRunsATerminalSubprocess(t *testing.T) {
 	}
 
 	command := exec.Command(os.Args[0], "-test.run=^TestControlledPTYRunsATerminalSubprocess$")
-	command.Env = append(os.Environ(), helperEnvironment+"=1")
+	readyPath := filepath.Join(t.TempDir(), "ready")
+	command.Env = append(os.Environ(), helperEnvironment+"=1", readyEnvironment+"="+readyPath)
 	process, err := StartPTY(command)
 	if errors.Is(err, ErrPTYUnsupported) {
 		t.Skip(err)
@@ -114,6 +122,25 @@ func TestControlledPTYRunsATerminalSubprocess(t *testing.T) {
 		_, _ = io.Copy(&output, process.Terminal())
 		close(readDone)
 	}()
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		contents, err := os.ReadFile(readyPath)
+		if err == nil {
+			if string(contents) == "ready" {
+				break
+			}
+			if len(contents) != 0 {
+				t.Fatalf("PTY readiness = %q", contents)
+			}
+		}
+		if err != nil && !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("read PTY readiness: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("timed out waiting for PTY helper readiness")
+		}
+		time.Sleep(time.Millisecond)
+	}
 	if _, err := io.WriteString(process.Terminal(), "reply\n"); err != nil {
 		t.Fatalf("write PTY input: %v", err)
 	}
