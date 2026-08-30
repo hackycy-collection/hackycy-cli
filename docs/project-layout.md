@@ -52,6 +52,8 @@ Leaf-only dependencies stay in that leaf's `Options`.
 The named private Modules under `internal/` retain narrow ownership:
 
 - `appconfig` owns configuration persistence and locking.
+- `processprobe` owns native process-liveness probes shared by persistence and
+  updater owners; it is not a general platform abstraction.
 - `filesession` owns file-session state and platform file operations.
 - `fsthumbnail` owns the FS thumbnail worker protocol and pool.
 - `gitprocess` owns shared Git process lifecycle and signal handling.

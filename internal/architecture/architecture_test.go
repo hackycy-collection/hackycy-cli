@@ -28,6 +28,7 @@ var approvedPackageInventory = []string{
 	"internal/fsthumbnail",
 	"internal/gitprocess",
 	"internal/logging",
+	"internal/processprobe",
 	"internal/sevenzipmanifest",
 	"internal/sevenzipruntime",
 	"internal/terminal",
