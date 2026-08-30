@@ -98,11 +98,15 @@ func ensureFRPRuntimeAt(ctx context.Context, directory string, artifact FRPArtif
 }
 
 func verifyFRPReportedVersion(ctx context.Context, binary string) error {
-	probeContext, cancel := context.WithTimeout(ctx, frpVersionProbeTimeout)
+	return verifyFRPReportedVersionWithin(ctx, binary, frpVersionProbeTimeout)
+}
+
+func verifyFRPReportedVersionWithin(ctx context.Context, binary string, timeout time.Duration) error {
+	probeContext, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	output, err := exec.CommandContext(probeContext, binary, "--version").CombinedOutput()
 	if errors.Is(probeContext.Err(), context.DeadlineExceeded) {
-		return fmt.Errorf("%w: %s did not respond within %s", ErrInvalidFRPVersion, binary, frpVersionProbeTimeout)
+		return fmt.Errorf("%w: %s did not respond within %s", ErrInvalidFRPVersion, binary, timeout)
 	}
 	if err != nil || !frpVersionExpression.Match(output) {
 		return fmt.Errorf("%w: %s does not report FRP %s", ErrInvalidFRPVersion, binary, FRPVersion)

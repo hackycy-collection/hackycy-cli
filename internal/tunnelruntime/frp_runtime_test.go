@@ -14,7 +14,10 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
+
+const frpVersionFixtureTimeout = 15 * time.Second
 
 func TestEnsureFRPRuntimeAtDownloadsVerifiesAndPublishesOnePair(t *testing.T) {
 	archive, artifact := frpTarFixture(t, map[string][]byte{"frpc": []byte("frpc bytes"), "frps": []byte("frps bytes")})
@@ -100,14 +103,14 @@ func TestVerifyFRPReportedVersionUsesPinnedVersion(t *testing.T) {
 	if err := os.WriteFile(valid, []byte("#!/bin/sh\necho 'frpc version 0.70.1'\n"), 0o755); err != nil {
 		t.Fatalf("write valid version fixture: %v", err)
 	}
-	if err := verifyFRPReportedVersion(context.Background(), valid); err != nil {
+	if err := verifyFRPReportedVersionWithin(context.Background(), valid, frpVersionFixtureTimeout); err != nil {
 		t.Fatalf("verify valid version: %v", err)
 	}
 	invalid := filepath.Join(directory, "frps")
 	if err := os.WriteFile(invalid, []byte("#!/bin/sh\necho 'frps version 0.70.0'\n"), 0o755); err != nil {
 		t.Fatalf("write invalid version fixture: %v", err)
 	}
-	if err := verifyFRPReportedVersion(context.Background(), invalid); !errors.Is(err, ErrInvalidFRPVersion) {
+	if err := verifyFRPReportedVersionWithin(context.Background(), invalid, frpVersionFixtureTimeout); !errors.Is(err, ErrInvalidFRPVersion) {
 		t.Fatalf("verify invalid version error = %v", err)
 	}
 }
