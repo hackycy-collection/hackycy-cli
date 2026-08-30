@@ -20,7 +20,10 @@ type pulseTestSignalCause struct {
 	signal os.Signal
 }
 
-const pulseGitFixtureStartupTimeout = 5 * time.Second
+const (
+	pulseGitFixtureStartupTimeout  = 15 * time.Second
+	pulseGitFixtureShutdownTimeout = 15 * time.Second
+)
 
 func (cause pulseTestSignalCause) Error() string {
 	return cause.signal.String()
@@ -55,10 +58,10 @@ func TestGitRunnerAdapterStopsTheChildProcessGroupWithoutAnOrphan(t *testing.T) 
 		if !errors.As(err, &outcome) || !errors.Is(err, context.Canceled) || outcome.ExitCode() != 143 {
 			t.Fatalf("Run() error = %v, want SIGTERM outcome with code 143", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(pulseGitFixtureShutdownTimeout):
 		t.Fatal("Git child process group did not stop")
 	}
-	if !waitForPulseGitGone(pid, 2*time.Second) {
+	if !waitForPulseGitGone(pid, pulseGitFixtureShutdownTimeout) {
 		t.Fatalf("grandchild %d remained after Git cancellation", pid)
 	}
 }

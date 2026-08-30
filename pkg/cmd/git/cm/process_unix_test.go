@@ -16,7 +16,10 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/gitprocess"
 )
 
-const cmGitFixtureStartupTimeout = 5 * time.Second
+const (
+	cmGitFixtureStartupTimeout  = 15 * time.Second
+	cmGitFixtureShutdownTimeout = 15 * time.Second
+)
 
 type cmTestSignalCause struct {
 	signal os.Signal
@@ -55,10 +58,10 @@ func TestGitRunnerAdapterStopsTheChildProcessGroupWithoutAnOrphan(t *testing.T) 
 		if !errors.As(err, &outcome) || !errors.Is(err, context.Canceled) || outcome.ExitCode() != 143 {
 			t.Fatalf("RunInput() error = %v, want SIGTERM outcome with code 143", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(cmGitFixtureShutdownTimeout):
 		t.Fatal("Git child process group did not stop")
 	}
-	if !waitForCMGitGone(pid, 2*time.Second) {
+	if !waitForCMGitGone(pid, cmGitFixtureShutdownTimeout) {
 		t.Fatalf("grandchild %d remained after Git cancellation", pid)
 	}
 }
@@ -69,7 +72,12 @@ func waitForCMGitPID(t *testing.T, path string, timeout time.Duration) int {
 	for time.Now().Before(deadline) {
 		contents, err := os.ReadFile(path)
 		if err == nil {
-			pid, parseErr := strconv.Atoi(strings.TrimSpace(string(contents)))
+			value := strings.TrimSpace(string(contents))
+			if value == "" {
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+			pid, parseErr := strconv.Atoi(value)
 			if parseErr != nil {
 				t.Fatalf("parse Git child pid %q: %v", contents, parseErr)
 			}

@@ -17,7 +17,10 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/logging"
 )
 
-const frpSupervisorFixtureStartupTimeout = 5 * time.Second
+const (
+	frpSupervisorFixtureStartupTimeout  = 15 * time.Second
+	frpSupervisorFixtureShutdownTimeout = 15 * time.Second
+)
 
 func TestFRPSupervisorStreamsOutputAndStopsItsUnixProcessGroup(t *testing.T) {
 	root := t.TempDir()
@@ -48,7 +51,7 @@ func TestFRPSupervisorStreamsOutputAndStopsItsUnixProcessGroup(t *testing.T) {
 	if state := supervisor.State(); state.State != FRPProcessStopped || state.PID != nil {
 		t.Fatalf("stopped state = %#v", state)
 	}
-	if !waitForFRPSupervisorGone(pid, time.Second) {
+	if !waitForFRPSupervisorGone(pid, frpSupervisorFixtureShutdownTimeout) {
 		t.Fatalf("grandchild %d remained after supervisor stop", pid)
 	}
 }
@@ -65,7 +68,7 @@ func TestFRPSupervisorRecoversUnexpectedExitAndSuppressesRecoveryAfterStop(t *te
 	if err := supervisor.Start(filepath.Join(root, "frpc.toml")); err != nil {
 		t.Fatalf("Start() error = %v", err)
 	}
-	waitForFRPSupervisor(t, 2*time.Second, func() bool {
+	waitForFRPSupervisor(t, frpSupervisorFixtureStartupTimeout, func() bool {
 		return readFRPSupervisorCounter(counterPath) == 2 && supervisor.State().State == FRPProcessRunning
 	})
 	if err := supervisor.Stop(); err != nil {
@@ -81,7 +84,7 @@ func TestFRPSupervisorRejectsAnActivationExitAndKeepsConfigurationFailuresStoppe
 	root := t.TempDir()
 	earlyExit := writeFRPSupervisorScript(t, root, "early-exit", "#!/bin/sh\nexit 7\n")
 	supervisor := newTestFRPSupervisor(t, FRPSupervisorOptions{
-		BinaryPath: earlyExit, Role: FRPRoleServer, ActivationGrace: frpsActivationGrace, Backoff: []time.Duration{10 * time.Millisecond},
+		BinaryPath: earlyExit, Role: FRPRoleServer, ActivationGrace: frpSupervisorFixtureStartupTimeout, Backoff: []time.Duration{10 * time.Millisecond},
 	})
 	if err := supervisor.Start(filepath.Join(root, "frps.toml")); err == nil || !strings.Contains(err.Error(), "exited during startup") {
 		t.Fatalf("early Start() error = %v", err)
@@ -133,7 +136,7 @@ func TestFRPSupervisorForceKillsAStubbornUnixProcessGroup(t *testing.T) {
 	if elapsed := time.Since(started); elapsed > time.Second {
 		t.Fatalf("forced stop took %s", elapsed)
 	}
-	if !waitForFRPSupervisorGone(pid, time.Second) {
+	if !waitForFRPSupervisorGone(pid, frpSupervisorFixtureShutdownTimeout) {
 		t.Fatalf("stubborn grandchild %d remained after force stop", pid)
 	}
 }

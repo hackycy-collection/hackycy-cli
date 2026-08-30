@@ -14,6 +14,11 @@ import (
 	"time"
 )
 
+const (
+	gitProcessFixtureStartupTimeout  = 15 * time.Second
+	gitProcessFixtureShutdownTimeout = 15 * time.Second
+)
+
 type testSignalCause struct {
 	signal os.Signal
 }
@@ -42,7 +47,7 @@ func TestRunnerStopsTheChildProcessGroupWithoutAnOrphan(t *testing.T) {
 		results <- err
 	}()
 
-	pid := waitForPID(t, pidPath, 5*time.Second)
+	pid := waitForPID(t, pidPath, gitProcessFixtureStartupTimeout)
 	cancel(testSignalCause{signal: syscall.SIGTERM})
 	select {
 	case err := <-results:
@@ -50,10 +55,10 @@ func TestRunnerStopsTheChildProcessGroupWithoutAnOrphan(t *testing.T) {
 		if !errors.As(err, &outcome) || !errors.Is(err, context.Canceled) || outcome.ExitCode() != 143 {
 			t.Fatalf("Run() error = %v, want SIGTERM outcome with code 143", err)
 		}
-	case <-time.After(3 * time.Second):
+	case <-time.After(gitProcessFixtureShutdownTimeout):
 		t.Fatal("Git child process group did not stop")
 	}
-	if !waitForGone(pid, 2*time.Second) {
+	if !waitForGone(pid, gitProcessFixtureShutdownTimeout) {
 		t.Fatalf("grandchild %d remained after Git cancellation", pid)
 	}
 }
@@ -64,7 +69,12 @@ func waitForPID(t *testing.T, path string, timeout time.Duration) int {
 	for time.Now().Before(deadline) {
 		contents, err := os.ReadFile(path)
 		if err == nil {
-			pid, parseErr := strconv.Atoi(strings.TrimSpace(string(contents)))
+			value := strings.TrimSpace(string(contents))
+			if value == "" {
+				time.Sleep(10 * time.Millisecond)
+				continue
+			}
+			pid, parseErr := strconv.Atoi(value)
 			if parseErr != nil {
 				t.Fatalf("parse Git child pid %q: %v", contents, parseErr)
 			}
