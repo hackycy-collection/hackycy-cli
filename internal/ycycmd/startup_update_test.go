@@ -1,4 +1,4 @@
-package main
+package ycycmd
 
 import (
 	"bytes"
@@ -25,6 +25,16 @@ func TestHiddenUpgradeRouteIsolatedFromOrdinaryArguments(t *testing.T) {
 	handled, err := runHiddenUpgrade(arguments)
 	if !handled || err == nil {
 		t.Fatalf("hidden route = handled %v, err %v", handled, err)
+	}
+}
+
+func TestDispatchThumbnailWorkerKeepsPrivateRouteBounded(t *testing.T) {
+	if handled, err := DispatchThumbnailWorker([]string{"fs"}, bytes.NewReader(nil), &bytes.Buffer{}); handled || err != nil {
+		t.Fatalf("ordinary route = handled %v, err %v", handled, err)
+	}
+	handled, err := DispatchThumbnailWorker([]string{"--internal-thumbnail-worker"}, bytes.NewReader([]byte{0, 0, 0, 1}), &bytes.Buffer{})
+	if !handled || err == nil || !strings.Contains(err.Error(), "thumbnail worker:") {
+		t.Fatalf("worker route = handled %v, err %v", handled, err)
 	}
 }
 

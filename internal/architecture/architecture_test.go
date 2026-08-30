@@ -14,22 +14,9 @@ import (
 
 const modulePath = "github.com/hackycy/hackycy-cli"
 
-// transitionAllowlist is intentionally short and explicit. Each entry is a
-// temporary ownership root that Slice 0 permits while the migration proceeds;
-// the owning slice must delete its entry before its checkpoint passes. This is
-// not a package-wide exemption and must never be widened to include pkg.
-var transitionAllowlist = map[string]string{
-	"cmd/ycy": "temporary process composition root and adapters",
-}
-
-// rootCommandImportAllowlist records the handler Modules still owned by the
-// lifted root. Each migrated leaf removes its corresponding entry instead of
-// broadening the command-package transition.
-var rootCommandImportAllowlist = map[string]string{}
-
 func TestActiveArchitecture(t *testing.T) {
 	root := repositoryRoot(t)
-	assertTransitionAllowlist(t, root)
+	assertThinBinaryEntry(t, root)
 	assertNoRootHandlerTransition(t, root)
 	var violations []string
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
@@ -103,22 +90,64 @@ func assertNoRootHandlerTransition(t *testing.T, root string) {
 	}
 }
 
-func assertTransitionAllowlist(t *testing.T, root string) {
+func assertThinBinaryEntry(t *testing.T, root string) {
 	t.Helper()
-	want := map[string]string{
-		"cmd/ycy": "temporary process composition root and adapters",
+	directory := filepath.Join(root, "cmd", "ycy")
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatalf("read cmd/ycy: %v", err)
 	}
-	if len(transitionAllowlist) != len(want) {
-		t.Fatalf("transition allowlist has %d entries, want %d", len(transitionAllowlist), len(want))
+	if len(entries) != 1 || entries[0].Name() != "main.go" || entries[0].IsDir() {
+		t.Fatalf("cmd/ycy inventory = %#v, want only main.go", entries)
 	}
-	for path, purpose := range want {
-		if transitionAllowlist[path] != purpose {
-			t.Fatalf("transition allowlist %q = %q, want %q", path, transitionAllowlist[path], purpose)
+
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, filepath.Join(directory, "main.go"), nil, 0)
+	if err != nil {
+		t.Fatalf("parse thin binary entry: %v", err)
+	}
+	for _, imported := range file.Imports {
+		value, unquoteErr := strconv.Unquote(imported.Path.Value)
+		if unquoteErr != nil || (value != "os" && value != modulePath+"/internal/ycycmd") {
+			t.Fatalf("thin binary import = %q, want os and internal/ycycmd only", value)
 		}
-		if _, err := os.Stat(filepath.Join(root, filepath.FromSlash(path))); err != nil {
-			t.Fatalf("transition allowlist path %q: %v", path, err)
+	}
+	var mainFunction *ast.FuncDecl
+	for _, declaration := range file.Decls {
+		function, ok := declaration.(*ast.FuncDecl)
+		if ok && function.Name.Name == "main" {
+			mainFunction = function
+			break
 		}
 	}
+	if mainFunction == nil || mainFunction.Body == nil || len(mainFunction.Body.List) != 1 {
+		t.Fatal("thin binary entry must contain one main statement")
+	}
+	expression, ok := mainFunction.Body.List[0].(*ast.ExprStmt)
+	if !ok {
+		t.Fatal("thin binary entry main statement is not a call")
+	}
+	exitCall, ok := expression.X.(*ast.CallExpr)
+	if !ok || !isSelectorCall(exitCall, "os", "Exit") || len(exitCall.Args) != 1 {
+		t.Fatal("thin binary entry must call os.Exit once")
+	}
+	mainCall, ok := exitCall.Args[0].(*ast.CallExpr)
+	if !ok || !isSelectorCall(mainCall, "ycycmd", "Main") || len(mainCall.Args) != 1 {
+		t.Fatal("thin binary entry must pass version to ycycmd.Main")
+	}
+	argument, ok := mainCall.Args[0].(*ast.Ident)
+	if !ok || argument.Name != "version" {
+		t.Fatal("thin binary entry must pass the injected version")
+	}
+}
+
+func isSelectorCall(call *ast.CallExpr, packageName, functionName string) bool {
+	selector, ok := call.Fun.(*ast.SelectorExpr)
+	if !ok || selector.Sel.Name != functionName {
+		return false
+	}
+	identifier, ok := selector.X.(*ast.Ident)
+	return ok && identifier.Name == packageName
 }
 
 func inspectGoFile(root, path string) []string {
@@ -170,7 +199,7 @@ func validateImport(source, filePath, imported string) []string {
 func validateInternalImport(source, filePath, imported string) []string {
 	var violations []string
 	if strings.HasPrefix(imported, "internal/commands/") {
-		violations = append(violations, validateCommandImport(source, imported)...)
+		violations = append(violations, source+": old command package import is forbidden: "+imported)
 	}
 
 	if isInternalPackage(source) && strings.HasPrefix(imported, "pkg/cmd") {
@@ -232,25 +261,6 @@ func inspectCalls(relativeDir, path string, file *ast.File) []string {
 	return violations
 }
 
-func validateCommandImport(source, imported string) []string {
-	if source == "cmd/ycy" {
-		return nil
-	}
-	if source == "pkg/cmd/root" {
-		if _, ok := rootCommandImportAllowlist[imported]; ok {
-			return nil
-		}
-		return []string{source + ": root transition does not allow command module " + imported}
-	}
-	if !strings.HasPrefix(source, "internal/commands/") {
-		return []string{source + ": shared module imports a command package " + imported}
-	}
-	if commandOwner(source) != commandOwner(imported) {
-		return []string{source + ": command module imports sibling " + imported}
-	}
-	return nil
-}
-
 func validateTargetCommandImport(source, filePath, imported string) []string {
 	if !strings.HasPrefix(imported, "pkg/cmd/") {
 		return nil
@@ -285,28 +295,8 @@ func targetCommandParent(source, imported string) bool {
 	return len(importedParts) == len(sourceParts)+1
 }
 
-func commandOwner(path string) string {
-	parts := strings.Split(path, "/")
-	if len(parts) < 3 {
-		return path
-	}
-	if parts[0] == "pkg" && parts[1] == "cmd" {
-		if len(parts) >= 4 && (parts[2] == "config" || parts[2] == "git" || parts[2] == "tunnel") {
-			return strings.Join(parts[:4], "/")
-		}
-		return strings.Join(parts[:3], "/")
-	}
-	if parts[0] == "internal" && parts[1] == "commands" {
-		if len(parts) >= 4 && (parts[2] == "config" || parts[2] == "git") {
-			return strings.Join(parts[:4], "/")
-		}
-		return strings.Join(parts[:3], "/")
-	}
-	return strings.Join(parts[:3], "/")
-}
-
 func cobraOwner(path string) bool {
-	return path == "cmd/ycy" || path == "pkg/cmd/root" || strings.HasPrefix(path, "pkg/cmd/")
+	return path == "pkg/cmd/root" || strings.HasPrefix(path, "pkg/cmd/")
 }
 
 func isInternalPackage(path string) bool {
@@ -314,10 +304,7 @@ func isInternalPackage(path string) bool {
 }
 
 func allowedCurrentBinaryImport(imported string) bool {
-	if strings.HasPrefix(imported, "internal/") || imported == "pkg/cmd/factory" || imported == "pkg/cmd/root" || imported == "pkg/cmd/upgrade" || imported == "pkg/cmdutil" || imported == "web" {
-		return true
-	}
-	return false
+	return imported == "internal/ycycmd"
 }
 
 func allowedYcycmdImport(imported string) bool {
@@ -325,7 +312,7 @@ func allowedYcycmdImport(imported string) bool {
 }
 
 func allowedWebassetsConsumer(path string) bool {
-	return path == "cmd/ycy" || path == "internal/ycycmd" || path == "pkg/cmd/diff" || path == "pkg/cmd/fs" || path == "pkg/cmd/tunnel/server" || path == "tools/web-browser-harness"
+	return path == "internal/ycycmd" || path == "pkg/cmd/diff" || path == "pkg/cmd/fs" || path == "pkg/cmd/tunnel/server" || path == "tools/web-browser-harness"
 }
 
 func repositoryRoot(t *testing.T) string {

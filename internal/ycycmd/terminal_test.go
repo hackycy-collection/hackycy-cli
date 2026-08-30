@@ -1,4 +1,4 @@
-package main
+package ycycmd
 
 import (
 	"context"
@@ -16,7 +16,7 @@ import (
 	"github.com/hackycy/hackycy-cli/pkg/cmdutil"
 )
 
-func TestNewRootTerminalConstructsOneExperienceFromInheritedFacts(t *testing.T) {
+func TestNewProcessFactsPreservesInheritedStreamsAndSession(t *testing.T) {
 	input, err := os.CreateTemp(t.TempDir(), "stdin")
 	if err != nil {
 		t.Fatalf("create stdin: %v", err)
@@ -33,15 +33,15 @@ func TestNewRootTerminalConstructsOneExperienceFromInheritedFacts(t *testing.T) 
 	}
 	defer diagnostics.Close()
 
-	root := newRootTerminal(input, output, diagnostics, func(key string) (string, bool) {
+	facts := NewProcessFacts(input, output, diagnostics, func(key string) (string, bool) {
 		return map[string]string{"TERM": "xterm-256color"}[key], key == "TERM"
 	}, func(*os.File) bool { return true })
 
-	if root.input != input || root.output != output || root.diagnostics != diagnostics {
-		t.Fatal("root terminal did not preserve the inherited stream identities")
+	if facts.IOStreams.In != input || facts.IOStreams.Out != output || facts.IOStreams.ErrOut != diagnostics {
+		t.Fatal("process facts did not preserve the inherited stream identities")
 	}
-	if got, want := root.experience.Session(), (terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true}); got != want {
-		t.Fatalf("experience session = %#v, want %#v", got, want)
+	if got, want := facts.Session, (terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true}); got != want {
+		t.Fatalf("process session = %#v, want %#v", got, want)
 	}
 }
 
@@ -74,12 +74,11 @@ func TestRootTunnelServerDiagnosticsPreserveSessionStreamContracts(t *testing.T)
 			}
 			defer diagnostics.Close()
 
-			root := newRootTerminal(input, output, diagnostics, func(key string) (string, bool) {
+			facts := NewProcessFacts(input, output, diagnostics, func(key string) (string, bool) {
 				value, ok := testCase.environment[key]
 				return value, ok
 			}, func(*os.File) bool { return testCase.terminal })
-			factory := newCommandFactoryForRootTerminal(root)
-			root.experience = factory.Terminal
+			factory := newCommandFactoryForProcessFacts(facts)
 			runtime := factory.Logging
 			runtime.SetFormat(testCase.format)
 			runtime.Logger("tunnel.server").Info("Tunnel started Bearer server-secret", map[string]any{
@@ -133,13 +132,12 @@ func TestRootTunnelServerDiagnosticsDeferUntilRendererLeaseCloses(t *testing.T) 
 	}
 	defer diagnostics.Close()
 
-	root := newRootTerminal(input, output, diagnostics, func(key string) (string, bool) {
+	facts := NewProcessFacts(input, output, diagnostics, func(key string) (string, bool) {
 		return map[string]string{"TERM": "dumb"}[key], key == "TERM"
 	}, func(*os.File) bool { return true })
-	factory := newCommandFactoryForRootTerminal(root)
-	root.experience = factory.Terminal
+	factory := newCommandFactoryForProcessFacts(facts)
 	runtime := factory.Logging
-	run := root.experience.Open(context.Background())
+	run := factory.Terminal.Open(context.Background())
 	updates := make(chan terminalexperience.OperationPhase)
 	tracked := make(chan error, 1)
 	updatesClosed := false
@@ -160,7 +158,7 @@ func TestRootTunnelServerDiagnosticsDeferUntilRendererLeaseCloses(t *testing.T) 
 	updates <- terminalexperience.OperationPhase{Name: "Scanning", State: terminalexperience.PhaseActive}
 	waitForRootDiagnostic(t, diagnostics, "Scanning\n")
 
-	if _, err := io.WriteString(root.experience.DiagnosticWriter(), "cobra diagnostic\n"); err != nil {
+	if _, err := io.WriteString(factory.Terminal.DiagnosticWriter(), "cobra diagnostic\n"); err != nil {
 		t.Fatalf("write normal diagnostic: %v", err)
 	}
 	runtime.Logger("tunnel.server").Info("logger diagnostic", nil)
@@ -212,14 +210,10 @@ func readRootDiagnostic(t *testing.T, file *os.File) string {
 	return string(contents)
 }
 
-func newCommandFactoryForRootTerminal(root rootTerminal) *cmdutil.Factory {
+func newCommandFactoryForProcessFacts(facts ProcessFacts) *cmdutil.Factory {
 	return commandfactory.New(commandfactory.Options{
-		Version: "0.0.0-dev",
-		IOStreams: cmdutil.IOStreams{
-			In:     root.input,
-			Out:    root.output,
-			ErrOut: root.diagnostics,
-		},
-		Session: root.experience.Session(),
+		Version:   "0.0.0-dev",
+		IOStreams: facts.IOStreams,
+		Session:   facts.Session,
 	})
 }
