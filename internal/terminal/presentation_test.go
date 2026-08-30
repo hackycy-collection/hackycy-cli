@@ -16,7 +16,6 @@ import (
 
 func TestWritePlainRendersDurableDocumentToStdoutWithoutTerminalControl(t *testing.T) {
 	document := terminal.PresentationDocument{
-		ClearBefore: true,
 		Blocks: []terminal.PresentationBlock{
 			{Role: terminal.VisualRoleTitle, Text: "HACKYCY CLI"},
 			{Role: terminal.VisualRoleSuccess, Text: "Saved \x1b[32mconfiguration\x1b[0m"},
@@ -28,7 +27,7 @@ func TestWritePlainRendersDurableDocumentToStdoutWithoutTerminalControl(t *testi
 	if err := terminal.WritePlain(&stdout, document); err != nil {
 		t.Fatalf("WritePlain() error = %v", err)
 	}
-	if got, want := stdout.String(), "HACKYCY CLI\nSaved [32mconfiguration[0m\npath: /tmp/ycy\n"; got != want {
+	if got, want := stdout.String(), "HACKYCY CLI\nSaved configuration\npath: /tmp/ycy\n"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
 	if terminaltest.ContainsTerminalControl(stdout.Bytes()) {
@@ -59,17 +58,14 @@ func TestWriteRichWrapsWithoutTruncating(t *testing.T) {
 	}
 }
 
-func TestWriteRichNoColorRetainsRichClearWithoutStyleBytes(t *testing.T) {
+func TestWriteRichNoColorContainsNoStyleBytes(t *testing.T) {
 	var stdout bytes.Buffer
-	document := terminal.PresentationDocument{
-		ClearBefore: true,
-		Blocks:      []terminal.PresentationBlock{{Role: terminal.VisualRoleTitle, Text: "HACKYCY CLI"}},
-	}
+	document := terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{Role: terminal.VisualRoleTitle, Text: "HACKYCY CLI"}}}
 
 	if err := terminal.WriteRich(&stdout, document, terminal.RichOptions{Color: false}); err != nil {
 		t.Fatalf("WriteRich() error = %v", err)
 	}
-	if got, want := stdout.String(), "\x1b[2J\x1b[HHACKYCY CLI\n"; got != want {
+	if got, want := stdout.String(), "HACKYCY CLI\n"; got != want {
 		t.Fatalf("NO_COLOR rich output = %q, want %q", got, want)
 	}
 }

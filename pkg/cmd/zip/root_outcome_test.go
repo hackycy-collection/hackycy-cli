@@ -23,7 +23,7 @@ func TestZIPAutomationFailsBeforeArchiveCreationOrInputRead(t *testing.T) {
 	writeZIPOutcomeFile(t, project, "dist/index.html", "<main />")
 	withZIPOutcomeWorkingDirectory(t, project)
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	app, factory := newZIPRootApp(t, panicZIPReader{}, stdout, stderr, terminal.Session{Kind: terminal.Automation})
+	app, factory := newZIPRootApp(t, panicZIPReader{}, stdout, stderr, terminal.Capabilities{Interaction: terminal.Automation})
 
 	outcome := app.Execute(context.Background(), []string{"zip", ".", "--without-open"})
 	if outcome.Code != 1 || outcome.Err == nil || outcome.Err.Error() != "zip requires an interactive terminal" || stdout.Len() != 0 || stderr.String() != "error: zip requires an interactive terminal\n" || terminaltest.ContainsTerminalControl(append(stdout.Bytes(), stderr.Bytes()...)) {
@@ -41,7 +41,7 @@ func TestZIPAutomationFailsBeforeArchiveCreationOrInputRead(t *testing.T) {
 	}
 }
 
-func newZIPRootApp(t *testing.T, input io.Reader, output, diagnostics *bytes.Buffer, session terminal.Session) (*rootcommand.App, *cmdutil.Factory) {
+func newZIPRootApp(t *testing.T, input io.Reader, output, diagnostics *bytes.Buffer, session terminal.Capabilities) (*rootcommand.App, *cmdutil.Factory) {
 	t.Helper()
 	factory := commandfactory.New(commandfactory.Options{
 		Version: "0.0.0-dev",
@@ -50,7 +50,7 @@ func newZIPRootApp(t *testing.T, input io.Reader, output, diagnostics *bytes.Buf
 			Out:    output,
 			ErrOut: diagnostics,
 		},
-		Session: session,
+		Capabilities: session,
 	})
 	app, err := rootcommand.New(factory)
 	if err != nil {

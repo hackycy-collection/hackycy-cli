@@ -25,7 +25,7 @@ func runPulse(options *Options) error {
 	defer cancel()
 	run := options.Terminal.Open(ctx)
 	defer run.Close()
-	adapter := newTerminalPulseAdapter(run, options.Terminal.Session(), cancel)
+	adapter := newTerminalPulseAdapter(run, cancel)
 	module, err := New(Dependencies{
 		WorkingDirectory: options.WorkingDirectory,
 		Stater:           osPathStater{},
@@ -41,10 +41,7 @@ func runPulse(options *Options) error {
 		return err
 	}
 	_, err = module.Run(ctx, Input{Directory: options.Directory, Days: options.Days})
-	if err != nil {
-		return err
-	}
-	return adapter.Flush()
+	return err
 }
 
 type osPathStater struct{}
@@ -61,14 +58,11 @@ func (osDirectoryReader) ReadDir(path string) ([]os.DirEntry, error) {
 
 type terminalPulseAdapter struct {
 	run           terminalexperience.ExperienceRun
-	session       terminalexperience.Session
 	requestCancel context.CancelFunc
-	pending       []terminalexperience.PresentationDocument
-	presentErr    error
 }
 
-func newTerminalPulseAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session, requestCancel context.CancelFunc) *terminalPulseAdapter {
-	return &terminalPulseAdapter{run: run, session: session, requestCancel: requestCancel}
+func newTerminalPulseAdapter(run terminalexperience.ExperienceRun, requestCancel context.CancelFunc) *terminalPulseAdapter {
+	return &terminalPulseAdapter{run: run, requestCancel: requestCancel}
 }
 
 func (adapter *terminalPulseAdapter) SelectDays(prompt DayPrompt) (int, bool, error) {
@@ -97,39 +91,26 @@ func (adapter *terminalPulseAdapter) Introduction(root string) {
 		{Role: terminalexperience.VisualRoleActive, Text: "Git Commit Tree"},
 		{Role: terminalexperience.VisualRoleMuted, Text: "Workspace: " + root},
 	}}
-	if adapter.session.Kind != terminalexperience.RichInteractive {
-		document = terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
-			Role: terminalexperience.VisualRolePlain,
-			Text: "HACKYCY CLI\n\nGit Commit Tree\nWorkspace: " + root,
-		}}}
-	}
-	adapter.present(document)
+	_ = adapter.run.Notice(document)
 }
 
 func (adapter *terminalPulseAdapter) RepositoriesFound(count int) {
-	adapter.present(pulseDocument(adapter.session, fmt.Sprintf("Found %d %s", count, pulsePlural(count, "repository", "repositories")), terminalexperience.VisualRoleSuccess))
+	_ = adapter.run.Notice(pulseDocument(fmt.Sprintf("Found %d %s", count, pulsePlural(count, "repository", "repositories")), terminalexperience.VisualRoleSuccess))
 }
 
 func (adapter *terminalPulseAdapter) NoRepositories() {
-	adapter.present(pulseDocument(adapter.session, "No Git repositories found.", terminalexperience.VisualRoleWarning))
+	_ = adapter.run.Result(pulseDocument("No Git repositories found.", terminalexperience.VisualRoleWarning))
 }
 
 func (adapter *terminalPulseAdapter) NoCommits() {
-	adapter.present(pulseDocument(adapter.session, "No commits found in the specified date range.", terminalexperience.VisualRoleWarning))
+	_ = adapter.run.Result(pulseDocument("No commits found in the specified date range.", terminalexperience.VisualRoleWarning))
 }
 
 func (adapter *terminalPulseAdapter) Cancelled() {
-	adapter.present(pulseDocument(adapter.session, "Operation cancelled.", terminalexperience.VisualRoleError))
+	_ = adapter.run.Result(pulseDocument("Operation cancelled.", terminalexperience.VisualRoleError))
 }
 
 func (adapter *terminalPulseAdapter) Present(report Report) {
-	if adapter.session.Kind != terminalexperience.RichInteractive {
-		adapter.present(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
-			Role: terminalexperience.VisualRolePlain,
-			Text: pulseReportText(report),
-		}}})
-		return
-	}
 	blocks := []terminalexperience.PresentationBlock{{
 		Role: terminalexperience.VisualRoleSuccess,
 		Text: fmt.Sprintf("Found %d %s in %d %s", report.CommitCount, pulsePlural(report.CommitCount, "commit", "commits"), len(report.Repositories), pulsePlural(len(report.Repositories), "repository", "repositories")),
@@ -147,7 +128,7 @@ func (adapter *terminalPulseAdapter) Present(report Report) {
 			blocks = append(blocks, terminalexperience.PresentationBlock{Role: terminalexperience.VisualRolePlain, Text: fmt.Sprintf("   %s %s | %s | %s", connector, commit.Date, commit.Author, commit.Subject)})
 		}
 	}
-	adapter.present(terminalexperience.PresentationDocument{Blocks: blocks})
+	_ = adapter.run.Result(terminalexperience.PresentationDocument{Blocks: blocks})
 }
 
 func (adapter *terminalPulseAdapter) Start(_ context.Context, _ PhaseKind) (PhaseReporter, error) {
@@ -166,22 +147,6 @@ func (adapter *terminalPulseAdapter) Start(_ context.Context, _ PhaseKind) (Phas
 	return reporter, nil
 }
 
-func (adapter *terminalPulseAdapter) Flush() error {
-	if adapter.presentErr != nil {
-		return adapter.presentErr
-	}
-	if adapter.session.Kind != terminalexperience.Automation {
-		return nil
-	}
-	for _, document := range adapter.pending {
-		if err := adapter.run.Present(document); err != nil {
-			return err
-		}
-	}
-	adapter.pending = nil
-	return nil
-}
-
 func (adapter *terminalPulseAdapter) ask(request terminalexperience.InteractionRequest) (terminalexperience.InteractionAnswer, bool, error) {
 	answer, err := adapter.run.Ask(request)
 	if errors.Is(err, terminalexperience.ErrInteractionCancelled) || errors.Is(err, context.Canceled) {
@@ -194,16 +159,6 @@ func (adapter *terminalPulseAdapter) ask(request terminalexperience.InteractionR
 		return terminalexperience.InteractionAnswer{}, false, err
 	}
 	return answer, false, nil
-}
-
-func (adapter *terminalPulseAdapter) present(document terminalexperience.PresentationDocument) {
-	if adapter.session.Kind == terminalexperience.Automation {
-		adapter.pending = append(adapter.pending, document)
-		return
-	}
-	if err := adapter.run.Present(document); err != nil && adapter.presentErr == nil {
-		adapter.presentErr = err
-	}
 }
 
 func pulseDayRequest(prompt DayPrompt) terminalexperience.InteractionRequest {
@@ -274,10 +229,7 @@ func pulseAuthorRequest(prompt AuthorPrompt) terminalexperience.InteractionReque
 	return request
 }
 
-func pulseDocument(session terminalexperience.Session, text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
-	if session.Kind != terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRolePlain
-	}
+func pulseDocument(text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
 }
 

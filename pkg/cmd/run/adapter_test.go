@@ -21,7 +21,7 @@ func TestTerminalRunAdapterTranslatesSelectionAndPresentation(t *testing.T) {
 		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Value: string(PackageManagerExternal)}},
 	)
 	run := experience.Open(context.Background())
-	adapter := newTerminalRunAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true})
+	adapter := newTerminalRunAdapter(run)
 
 	script, cancelled, err := adapter.SelectScript(ScriptPrompt{
 		Message: "Select a script to run:",
@@ -49,7 +49,7 @@ func TestTerminalRunAdapterTranslatesSelectionAndPresentation(t *testing.T) {
 	}
 
 	operations := experience.Run.Operations()
-	if len(operations) != 7 || operations[0].Kind != terminaltest.AskOperation || operations[2].Kind != terminaltest.PresentOperation || operations[6].Kind != terminaltest.CloseOperation {
+	if len(operations) != 7 || operations[0].Kind != terminaltest.AskOperation || operations[2].Kind != terminaltest.NoticeOperation || operations[5].Kind != terminaltest.ResultOperation || operations[6].Kind != terminaltest.CloseOperation {
 		t.Fatalf("operations = %#v", operations)
 	}
 	scriptRequest := operations[0].Value.(terminalexperience.InteractionRequest)
@@ -74,7 +74,7 @@ func TestTerminalRunAdapterTranslatesSelectionAndPresentation(t *testing.T) {
 
 func TestTerminalRunAdapterMapsAutomationInteractionFailure(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrAutomationInteraction})
-	adapter := newTerminalRunAdapter(experience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.Automation})
+	adapter := newTerminalRunAdapter(experience.Open(context.Background()))
 	if _, _, err := adapter.SelectScript(ScriptPrompt{Options: []ScriptChoice{{Value: "check", Label: "check"}}}); !errors.Is(err, errRunRequiresInteractive) {
 		t.Fatalf("SelectScript() error = %v", err)
 	}
@@ -107,10 +107,10 @@ func TestRunPlainSelectionReleasesFormBeforeRawChildIO(t *testing.T) {
 	rawInput := strings.NewReader("invalid\n1\n1\n")
 	stdout, diagnostics, childStderr := &bytes.Buffer{}, &bytes.Buffer{}, &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Input:       rawInput,
-		Output:      stdout,
-		Diagnostics: diagnostics,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        rawInput,
+		Output:       stdout,
+		Diagnostics:  diagnostics,
 	})
 
 	err := runRun(&Options{
@@ -124,10 +124,10 @@ func TestRunPlainSelectionReleasesFormBeforeRawChildIO(t *testing.T) {
 	if err != nil {
 		t.Fatalf("runRun() error = %v", err)
 	}
-	if got, want := stdout.String(), "HACKYCY CLI\n\nRun Script\n"+string(PackageManagerExternal)+" run check\n\nchild stdout"; got != want {
+	if got, want := stdout.String(), "child stdout"; got != want {
 		t.Fatalf("stdout = %q, want %q", got, want)
 	}
-	if !strings.Contains(diagnostics.String(), "Invalid selection") || !strings.Contains(diagnostics.String(), "check - echo check") || terminaltest.ContainsTerminalControl(diagnostics.Bytes()) {
+	if !strings.Contains(diagnostics.String(), "Invalid selection") || !strings.Contains(diagnostics.String(), "check - echo check") || !strings.Contains(diagnostics.String(), "HACKYCY CLI") || !strings.Contains(diagnostics.String(), string(PackageManagerExternal)+" run check") || terminaltest.ContainsTerminalControl(diagnostics.Bytes()) {
 		t.Fatalf("Plain diagnostics = %q", diagnostics.String())
 	}
 	if got, want := childStderr.String(), "child stderr"; got != want {

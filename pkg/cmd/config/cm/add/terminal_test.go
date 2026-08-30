@@ -22,7 +22,7 @@ func TestTerminalCMAddAdapterTranslatesTheOrderedForm(t *testing.T) {
 		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Value: "secret-api-key"}},
 	)
 	run := experience.Open(context.Background())
-	adapter := newTerminalCMAddAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true})
+	adapter := newTerminalCMAddAdapter(run)
 
 	input, cancelled, err := PromptAdd(adapter)
 	if err != nil || cancelled {
@@ -74,7 +74,7 @@ func TestTerminalCMAddAdapterTranslatesTheOrderedForm(t *testing.T) {
 
 func TestTerminalCMAddAdapterMapsTerminalCancellation(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrInteractionCancelled})
-	adapter := newTerminalCMAddAdapter(experience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.RichInteractive})
+	adapter := newTerminalCMAddAdapter(experience.Open(context.Background()))
 
 	input, cancelled, err := PromptAdd(adapter)
 	if err != nil || !cancelled || input != (AddInput{}) {
@@ -85,13 +85,13 @@ func TestTerminalCMAddAdapterMapsTerminalCancellation(t *testing.T) {
 func TestTerminalCMAddAdapterRoutesPlainPromptAndValidationToDiagnostics(t *testing.T) {
 	stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Input:       strings.NewReader("\nwork\n"),
-		Output:      stdout,
-		Diagnostics: diagnostics,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader("\nwork\n"),
+		Output:       stdout,
+		Diagnostics:  diagnostics,
 	})
 	run := experience.Open(context.Background())
-	adapter := newTerminalCMAddAdapter(run, experience.Session())
+	adapter := newTerminalCMAddAdapter(run)
 	value, cancelled, err := adapter.Text(AddTextPrompt{
 		Message:     "Profile name",
 		Placeholder: "e.g. openai, deepseek, work",
@@ -124,11 +124,11 @@ func TestTerminalCMAddAdapterRoutesPlainPromptAndValidationToDiagnostics(t *test
 func TestTerminalCMAddPresentationUsesTheSharedOutputBoundary(t *testing.T) {
 	var output bytes.Buffer
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session: terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Output:  &output,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Output:       &output,
 	})
 	run := experience.Open(context.Background())
-	adapter := newTerminalCMAddAdapter(run, experience.Session())
+	adapter := newTerminalCMAddAdapter(run)
 	adapter.Success("Profile work added")
 	adapter.Cancel("Cancelled")
 	if err := run.Close(); err != nil {
@@ -147,7 +147,7 @@ func TestTerminalCMAddPresentationUsesTheSharedOutputBoundary(t *testing.T) {
 		{role: terminalexperience.VisualRoleSuccess},
 		{cancelled: true, role: terminalexperience.VisualRoleWarning},
 	} {
-		document := terminalCMAddDocument(terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true}, "result", testCase.cancelled)
+		document := terminalCMAddDocument("result", testCase.cancelled)
 		if got := document.Blocks[0].Role; got != testCase.role {
 			t.Fatalf("Rich role = %v, want %v", got, testCase.role)
 		}
@@ -160,10 +160,10 @@ func TestConfigCMAddAutomationFailsBeforeReadOrWrite(t *testing.T) {
 	t.Setenv("USERPROFILE", "")
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
-		Input:       panicCMAddReader{},
-		Output:      stdout,
-		Diagnostics: stderr,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+		Input:        panicCMAddReader{},
+		Output:       stdout,
+		Diagnostics:  stderr,
 	})
 	err := runAdd(&Options{
 		Context:  context.Background(),

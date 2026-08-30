@@ -27,6 +27,6 @@ func newTunnelTestFactory() *cmdutil.Factory {
 			Out:    &bytes.Buffer{},
 			ErrOut: &bytes.Buffer{},
 		},
-		Session: terminal.Session{Kind: terminal.Automation},
+		Capabilities: terminal.Capabilities{Interaction: terminal.Automation},
 	})
 }

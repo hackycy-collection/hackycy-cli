@@ -67,7 +67,7 @@ func TestRootConfiguresDiagnosticsBeforeGitCM(t *testing.T) {
 			Out:    stdout,
 			ErrOut: stderr,
 		},
-		Session: terminal.Session{Kind: terminal.Automation},
+		Capabilities: terminal.Capabilities{Interaction: terminal.Automation},
 	})
 	factory.Logging = runtime
 	app, err := rootcommand.New(factory)
@@ -92,7 +92,7 @@ func TestRootNormalizesGitCMOptionalRemoteArgument(t *testing.T) {
 			Out:    stdout,
 			ErrOut: stderr,
 		},
-		Session: terminal.Session{Kind: terminal.Automation},
+		Capabilities: terminal.Capabilities{Interaction: terminal.Automation},
 	})
 	app, err := rootcommand.New(factory)
 	if err != nil {

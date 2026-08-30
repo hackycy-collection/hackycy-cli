@@ -21,7 +21,7 @@ func TestTerminalPulseAdapterTranslatesFormsPhasesAndPresentation(t *testing.T) 
 		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Values: []string{"Ada"}}},
 	)
 	run := experience.Open(context.Background())
-	adapter := newTerminalPulseAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true}, func() {})
+	adapter := newTerminalPulseAdapter(run, func() {})
 
 	days, cancelled, err := adapter.SelectDays(DayPrompt{Message: "Select date range:", Options: []DayChoice{{Value: 1, Label: "Today"}, {Value: 7, Label: "Last 7 days"}}})
 	if err != nil || cancelled || days != 7 {
@@ -39,7 +39,7 @@ func TestTerminalPulseAdapterTranslatesFormsPhasesAndPresentation(t *testing.T) 
 	}
 
 	operations := experience.Run.Operations()
-	if len(operations) != 6 || operations[0].Kind != terminaltest.AskOperation || operations[1].Kind != terminaltest.AskOperation || operations[5].Kind != terminaltest.CloseOperation {
+	if len(operations) != 6 || operations[0].Kind != terminaltest.AskOperation || operations[1].Kind != terminaltest.AskOperation || operations[2].Kind != terminaltest.NoticeOperation || operations[3].Kind != terminaltest.NoticeOperation || operations[4].Kind != terminaltest.ResultOperation || operations[5].Kind != terminaltest.CloseOperation {
 		t.Fatalf("operations = %#v", operations)
 	}
 	daysRequest := operations[0].Value.(terminalexperience.InteractionRequest)
@@ -61,13 +61,13 @@ func TestTerminalPulseAdapterTranslatesFormsPhasesAndPresentation(t *testing.T) 
 
 func TestTerminalPulseAdapterMapsCancellationAndAutomationInteraction(t *testing.T) {
 	cancelledExperience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrInteractionCancelled})
-	adapter := newTerminalPulseAdapter(cancelledExperience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.RichInteractive}, func() {})
+	adapter := newTerminalPulseAdapter(cancelledExperience.Open(context.Background()), func() {})
 	if _, cancelled, err := adapter.SelectDays(DayPrompt{}); err != nil || !cancelled {
 		t.Fatalf("cancelled SelectDays() = (%t, %v)", cancelled, err)
 	}
 
 	automationExperience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrAutomationInteraction})
-	automation := newTerminalPulseAdapter(automationExperience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.Automation}, func() {})
+	automation := newTerminalPulseAdapter(automationExperience.Open(context.Background()), func() {})
 	if _, _, err := automation.SelectDays(DayPrompt{}); !errors.Is(err, errGitPulseRequiresInteractive) {
 		t.Fatalf("Automation SelectDays() error = %v", err)
 	}
@@ -75,7 +75,7 @@ func TestTerminalPulseAdapterMapsCancellationAndAutomationInteraction(t *testing
 
 func TestTerminalPulseAdapterBridgesTypedPhaseToTrackedOperation(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience()
-	adapter := newTerminalPulseAdapter(experience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.RichInteractive}, func() {})
+	adapter := newTerminalPulseAdapter(experience.Open(context.Background()), func() {})
 	reporter, err := adapter.Start(context.Background(), PhaseScan)
 	if err != nil {
 		t.Fatalf("Start() error = %v", err)
@@ -111,10 +111,10 @@ func TestRunPulseAutomationFailsBeforeReadingInputOrWritingAResult(t *testing.T)
 			stdout := &bytes.Buffer{}
 			stderr := &bytes.Buffer{}
 			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-				Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
-				Input:       panicPulseReader{},
-				Output:      stdout,
-				Diagnostics: stderr,
+				Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+				Input:        panicPulseReader{},
+				Output:       stdout,
+				Diagnostics:  stderr,
 			})
 			err := runPulse(&Options{
 				Context:          context.Background(),
@@ -142,10 +142,10 @@ func TestRunPulsePlainJourneyKeepsPhasesOnStderrAndReportOnStdout(t *testing.T) 
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Input:       strings.NewReader("1\n1,2\n"),
-		Output:      stdout,
-		Diagnostics: stderr,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader("1\n1,2\n"),
+		Output:       stdout,
+		Diagnostics:  stderr,
 	})
 
 	err := runPulse(&Options{
@@ -159,12 +159,12 @@ func TestRunPulsePlainJourneyKeepsPhasesOnStderrAndReportOnStdout(t *testing.T) 
 	if err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	for _, expected := range []string{"HACKYCY CLI", "Git Commit Tree", "Found 2 repositories", "Found 2 commits in 2 repositories", "alpha commit", "beta commit"} {
+	for _, expected := range []string{"Found 2 commits in 2 repositories", "alpha commit", "beta commit"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Fatalf("stdout missing %q: %q", expected, stdout.String())
 		}
 	}
-	for _, expected := range []string{"Scanning repositories", "Select date range:", "Fetching commits", "Filter by authors:"} {
+	for _, expected := range []string{"HACKYCY CLI", "Git Commit Tree", "Scanning repositories", "Select date range:", "Found 2 repositories", "Fetching commits", "Filter by authors:"} {
 		if !strings.Contains(stderr.String(), expected) {
 			t.Fatalf("stderr missing %q: %q", expected, stderr.String())
 		}

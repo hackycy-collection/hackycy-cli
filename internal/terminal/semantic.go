@@ -44,7 +44,7 @@ type InteractionRequest struct {
 	PlainLead    string
 	PlainPrompt  string
 	// ParsePlain preserves a command-owned established Plain Interactive input grammar.
-	// It is not used by Rich Interactive forms or Automation Sessions.
+	// It is not used by Rich Interactive forms or Automation mode.
 	ParsePlain func(string) (InteractionAnswer, error)
 	Validate   func(InteractionAnswer) error
 }
@@ -62,16 +62,15 @@ const (
 	VisualRoleMuted
 )
 
-// PresentationBlock is one durable block of terminal presentation text.
+// PresentationBlock is one block of terminal presentation text.
 type PresentationBlock struct {
 	Role VisualRole
 	Text string
 }
 
-// PresentationDocument is a durable Command Result assembled from semantic roles.
+// PresentationDocument is presentation content assembled from semantic roles.
 type PresentationDocument struct {
-	ClearBefore bool
-	Blocks      []PresentationBlock
+	Blocks []PresentationBlock
 }
 
 // PhaseState describes one command-owned state in a tracked operation.
@@ -110,7 +109,8 @@ type Experience interface {
 // ExperienceRun exposes only semantic terminal operations for one command context.
 type ExperienceRun interface {
 	Ask(InteractionRequest) (InteractionAnswer, error)
-	Present(PresentationDocument) error
 	Track(TrackedOperation) error
+	Notice(PresentationDocument) error
+	Result(PresentationDocument) error
 	Close() error
 }

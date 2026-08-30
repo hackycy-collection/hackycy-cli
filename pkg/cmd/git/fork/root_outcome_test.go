@@ -56,7 +56,7 @@ func TestRootConfiguresDiagnosticsBeforeGitFork(t *testing.T) {
 			Out:    stdout,
 			ErrOut: stderr,
 		},
-		Session: terminal.Session{Kind: terminal.Automation},
+		Capabilities: terminal.Capabilities{Interaction: terminal.Automation},
 		Environment: func(key string) string {
 			switch key {
 			case "HOME":

@@ -47,7 +47,7 @@ func TestRootConfiguresDiagnosticsBeforeGitHeat(t *testing.T) {
 			Out:    stdout,
 			ErrOut: stderr,
 		},
-		Session: terminal.Session{Kind: terminal.Automation},
+		Capabilities: terminal.Capabilities{Interaction: terminal.Automation},
 	})
 	runtime := logging.NewRuntime(logging.Options{Writer: stderr})
 	factory.Logging = runtime

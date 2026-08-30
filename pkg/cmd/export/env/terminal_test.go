@@ -15,7 +15,7 @@ import (
 func TestTerminalExportEnvAdapterTranslatesSelectionAndPresentation(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Value: ".env.production"}})
 	run := experience.Open(context.Background())
-	adapter := newTerminalExportEnvAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true})
+	adapter := newTerminalExportEnvAdapter(run, false)
 	choices := []EnvironmentChoice{
 		{Value: ".env", Label: "default"},
 		{Value: ".env.production", Label: "production"},
@@ -48,7 +48,7 @@ func TestTerminalExportEnvAdapterTranslatesSelectionAndPresentation(t *testing.T
 		{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRolePlain, Text: "{\n  \"VALUE\": \"production\"\n}"}}},
 		{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleWarning, Text: "Cancelled"}}},
 	} {
-		if operations[index+1].Kind != terminaltest.PresentOperation || !reflect.DeepEqual(operations[index+1].Value, want) {
+		if operations[index+1].Kind != terminaltest.ResultOperation || !reflect.DeepEqual(operations[index+1].Value, want) {
 			t.Fatalf("presentation %d = %#v, want %#v", index, operations[index+1], want)
 		}
 	}
@@ -61,13 +61,13 @@ func TestTerminalExportEnvAdapterRoutesPlainSelectionValidationAndCancellation(t
 	}
 	stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Input:       strings.NewReader("invalid\n2\n"),
-		Output:      stdout,
-		Diagnostics: diagnostics,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader("invalid\n2\n"),
+		Output:       stdout,
+		Diagnostics:  diagnostics,
 	})
 	run := experience.Open(context.Background())
-	adapter := newTerminalExportEnvAdapter(run, experience.Session())
+	adapter := newTerminalExportEnvAdapter(run, experience.Capabilities().Interaction == terminalexperience.Automation)
 	value, cancelled, err := adapter.SelectEnvironment("Select environment", choices)
 	if err != nil || cancelled || value != ".env.production" {
 		t.Fatalf("SelectEnvironment() = (%q, %t, %v)", value, cancelled, err)
@@ -80,12 +80,12 @@ func TestTerminalExportEnvAdapterRoutesPlainSelectionValidationAndCancellation(t
 	}
 
 	cancelledExperience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Input:       strings.NewReader("quit\n"),
-		Diagnostics: &bytes.Buffer{},
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader("quit\n"),
+		Diagnostics:  &bytes.Buffer{},
 	})
 	cancelledRun := cancelledExperience.Open(context.Background())
-	cancelledAdapter := newTerminalExportEnvAdapter(cancelledRun, cancelledExperience.Session())
+	cancelledAdapter := newTerminalExportEnvAdapter(cancelledRun, cancelledExperience.Capabilities().Interaction == terminalexperience.Automation)
 	value, cancelled, err = cancelledAdapter.SelectEnvironment("Select environment", choices)
 	if err != nil || !cancelled || value != "" {
 		t.Fatalf("cancelled SelectEnvironment() = (%q, %t, %v)", value, cancelled, err)
@@ -97,38 +97,38 @@ func TestTerminalExportEnvAdapterRoutesPlainSelectionValidationAndCancellation(t
 
 func TestTerminalExportEnvAdapterPreservesAutomationResolutionAndRejectsInteraction(t *testing.T) {
 	uniqueExperience := terminaltest.NewRecordingExperience()
-	uniqueAdapter := newTerminalExportEnvAdapter(uniqueExperience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.Automation})
+	uniqueAdapter := newTerminalExportEnvAdapter(uniqueExperience.Open(context.Background()), true)
 	value, cancelled, err := uniqueAdapter.SelectEnvironment("Select environment", []EnvironmentChoice{{Value: ".env.production", Label: "production"}})
 	if err != nil || cancelled || value != ".env.production" || len(uniqueExperience.Run.Operations()) != 0 {
 		t.Fatalf("unique Automation selection = (%q, %t, %v), operations=%#v", value, cancelled, err, uniqueExperience.Run.Operations())
 	}
 
 	automationExperience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrAutomationInteraction})
-	automationAdapter := newTerminalExportEnvAdapter(automationExperience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.Automation})
+	automationAdapter := newTerminalExportEnvAdapter(automationExperience.Open(context.Background()), true)
 	if _, _, err := automationAdapter.SelectEnvironment("Select environment", []EnvironmentChoice{{Value: ".env", Label: "default"}, {Value: ".env.production", Label: "production"}}); !errors.Is(err, errExportEnvRequiresInteractive) {
 		t.Fatalf("ambiguous Automation selection error = %v", err)
 	}
 }
 
 func TestTerminalExportEnvPresentationPreservesPlainAndAutomationResults(t *testing.T) {
-	for _, session := range []terminalexperience.Session{
-		{Kind: terminalexperience.PlainInteractive},
-		{Kind: terminalexperience.Automation},
+	for _, session := range []terminalexperience.Capabilities{
+		{Interaction: terminalexperience.PlainInteractive},
+		{Interaction: terminalexperience.Automation},
 	} {
 		var output bytes.Buffer
-		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Session: session, Output: &output})
+		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Capabilities: session, Output: &output})
 		run := experience.Open(context.Background())
-		adapter := newTerminalExportEnvAdapter(run, session)
+		adapter := newTerminalExportEnvAdapter(run, session.Interaction == terminalexperience.Automation)
 		adapter.Outro("Exported variables:")
 		adapter.Print("{\n  \"VALUE\": \"production\"\n}")
 		if err := run.Close(); err != nil {
 			t.Fatalf("Close() error = %v", err)
 		}
 		if got, want := output.String(), "Exported variables:\n{\n  \"VALUE\": \"production\"\n}\n"; got != want {
-			t.Fatalf("%v output = %q, want %q", session.Kind, got, want)
+			t.Fatalf("%v output = %q, want %q", session.Interaction, got, want)
 		}
 		if terminaltest.ContainsTerminalControl(output.Bytes()) {
-			t.Fatalf("%v output contains terminal control: %q", session.Kind, output.String())
+			t.Fatalf("%v output contains terminal control: %q", session.Interaction, output.String())
 		}
 	}
 
@@ -139,7 +139,7 @@ func TestTerminalExportEnvPresentationPreservesPlainAndAutomationResults(t *test
 		{role: terminalexperience.VisualRolePlain},
 		{role: terminalexperience.VisualRoleWarning},
 	} {
-		document := terminalExportEnvDocument(terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true}, "result", testCase.role)
+		document := terminalExportEnvDocument("result", testCase.role)
 		if got := document.Blocks[0].Role; got != testCase.role {
 			t.Fatalf("Rich role = %v, want %v", got, testCase.role)
 		}

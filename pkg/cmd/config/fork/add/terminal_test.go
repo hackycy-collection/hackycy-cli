@@ -23,7 +23,7 @@ func TestTerminalForkAddAdapterTranslatesTheOrderedForm(t *testing.T) {
 		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Value: "secret-token"}},
 	)
 	run := experience.Open(context.Background())
-	adapter := newTerminalForkAddAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true})
+	adapter := newTerminalForkAddAdapter(run)
 
 	input, cancelled, err := PromptAdd(adapter)
 	if err != nil || cancelled {
@@ -86,7 +86,7 @@ func TestTerminalForkAddAdapterTranslatesTheOrderedForm(t *testing.T) {
 
 func TestTerminalForkAddAdapterMapsTerminalCancellation(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrInteractionCancelled})
-	adapter := newTerminalForkAddAdapter(experience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.RichInteractive})
+	adapter := newTerminalForkAddAdapter(experience.Open(context.Background()))
 
 	input, cancelled, err := PromptAdd(adapter)
 	if err != nil || !cancelled || input != (AddInput{}) {
@@ -97,13 +97,13 @@ func TestTerminalForkAddAdapterMapsTerminalCancellation(t *testing.T) {
 func TestTerminalForkAddAdapterRoutesPlainPromptAndValidationToDiagnostics(t *testing.T) {
 	stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Input:       strings.NewReader("\nwork\n"),
-		Output:      stdout,
-		Diagnostics: diagnostics,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader("\nwork\n"),
+		Output:       stdout,
+		Diagnostics:  diagnostics,
 	})
 	run := experience.Open(context.Background())
-	adapter := newTerminalForkAddAdapter(run, experience.Session())
+	adapter := newTerminalForkAddAdapter(run)
 
 	value, cancelled, err := adapter.Text(TextPrompt{
 		Message:     "Instance name (alias)",
@@ -137,11 +137,11 @@ func TestTerminalForkAddAdapterRoutesPlainPromptAndValidationToDiagnostics(t *te
 func TestTerminalForkAddPresentationUsesTheSharedOutputBoundary(t *testing.T) {
 	var output bytes.Buffer
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session: terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Output:  &output,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Output:       &output,
 	})
 	run := experience.Open(context.Background())
-	adapter := newTerminalForkAddAdapter(run, experience.Session())
+	adapter := newTerminalForkAddAdapter(run)
 	adapter.Success("Instance work (gitlab.example) added successfully")
 	adapter.Cancel("Cancelled")
 	if err := run.Close(); err != nil {
@@ -161,7 +161,7 @@ func TestTerminalForkAddPresentationUsesTheSharedOutputBoundary(t *testing.T) {
 		{role: terminalexperience.VisualRoleSuccess},
 		{cancelled: true, role: terminalexperience.VisualRoleWarning},
 	} {
-		document := terminalForkAddDocument(terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true}, "result", testCase.cancelled)
+		document := terminalForkAddDocument("result", testCase.cancelled)
 		if got := document.Blocks[0].Role; got != testCase.role {
 			t.Fatalf("Rich role = %v, want %v", got, testCase.role)
 		}
@@ -174,10 +174,10 @@ func TestConfigForkAddAutomationFailsBeforeReadOrWrite(t *testing.T) {
 	t.Setenv("USERPROFILE", "")
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
-		Input:       panicForkAddReader{},
-		Output:      stdout,
-		Diagnostics: stderr,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+		Input:        panicForkAddReader{},
+		Output:       stdout,
+		Diagnostics:  stderr,
 	})
 	err := runAdd(&Options{
 		Context:  context.Background(),

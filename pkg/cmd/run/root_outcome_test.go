@@ -38,7 +38,7 @@ func TestRunAutomationFailsBeforeChildStartupOrInputRead(t *testing.T) {
 	withRunOutcomeWorkingDirectory(t, project)
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	app, _ := newRunRootApp(t, panicRunReader{}, stdout, stderr, terminal.Session{Kind: terminal.Automation})
+	app, _ := newRunRootApp(t, panicRunReader{}, stdout, stderr, terminal.Capabilities{Interaction: terminal.Automation})
 	outcome := app.Execute(context.Background(), []string{"run"})
 	if outcome.Code != 1 || outcome.Err == nil || outcome.Err.Error() != "run requires an interactive terminal" || stdout.Len() != 0 || stderr.String() != "error: run requires an interactive terminal\n" {
 		t.Fatalf("Automation outcome = %#v, streams = (%q, %q)", outcome, stdout.String(), stderr.String())
@@ -53,7 +53,7 @@ func TestRunAutomationFailsBeforeChildStartupOrInputRead(t *testing.T) {
 
 func TestRootConfiguresDiagnosticsForRunAfterLeafArgumentValidation(t *testing.T) {
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	app, factory := newRunRootApp(t, strings.NewReader(""), stdout, stderr, terminal.Session{Kind: terminal.Automation})
+	app, factory := newRunRootApp(t, strings.NewReader(""), stdout, stderr, terminal.Capabilities{Interaction: terminal.Automation})
 
 	outcome := app.Execute(context.Background(), []string{"run", "one", "two", "--log-level", "invalid"})
 	if outcome.Code != 1 || outcome.Err == nil || !strings.Contains(outcome.Err.Error(), "accepts at most 1 arg(s)") || strings.Contains(stderr.String(), "invalid log level") {
@@ -88,14 +88,14 @@ func TestRootMapsRunChildExitWithoutDiagnostic(t *testing.T) {
 	withRunOutcomeWorkingDirectory(t, project)
 
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	app, _ := newRunRootApp(t, strings.NewReader("1\n1\n"), stdout, stderr, terminal.Session{Kind: terminal.PlainInteractive})
+	app, _ := newRunRootApp(t, strings.NewReader("1\n1\n"), stdout, stderr, terminal.Capabilities{Interaction: terminal.PlainInteractive})
 	outcome := app.Execute(context.Background(), []string{"run"})
 	if outcome.Code != 7 || outcome.Err != nil || strings.Contains(stderr.String(), "error:") {
 		t.Fatalf("child exit outcome = %#v, stdout = %q, stderr = %q", outcome, stdout.String(), stderr.String())
 	}
 }
 
-func newRunRootApp(t *testing.T, input io.Reader, output, diagnostics *bytes.Buffer, session terminal.Session) (*rootcommand.App, *cmdutil.Factory) {
+func newRunRootApp(t *testing.T, input io.Reader, output, diagnostics *bytes.Buffer, session terminal.Capabilities) (*rootcommand.App, *cmdutil.Factory) {
 	t.Helper()
 	factory := commandfactory.New(commandfactory.Options{
 		Version: "0.0.0-dev",
@@ -104,7 +104,7 @@ func newRunRootApp(t *testing.T, input io.Reader, output, diagnostics *bytes.Buf
 			Out:    output,
 			ErrOut: diagnostics,
 		},
-		Session: session,
+		Capabilities: session,
 	})
 	app, err := rootcommand.New(factory)
 	if err != nil {

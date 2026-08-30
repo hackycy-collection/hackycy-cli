@@ -26,7 +26,7 @@ func executeCM(options *Options) (Result, error) {
 	defer cancel()
 	run := options.Terminal.Open(ctx)
 	defer run.Close()
-	adapter := newTerminalGitCMAdapter(run, options.Terminal.Session(), cancel)
+	adapter := newTerminalGitCMAdapter(run, cancel)
 
 	store, err := options.Config()
 	if err != nil {
@@ -44,7 +44,7 @@ func executeCM(options *Options) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
-	if options.Terminal.Session().Kind == terminalexperience.Automation {
+	if options.Terminal.Capabilities().Interaction == terminalexperience.Automation {
 		requiresInteraction, err := RequiresInteraction(options.Input)
 		if err != nil {
 			return Result{}, err
@@ -57,13 +57,13 @@ func executeCM(options *Options) (Result, error) {
 	result, err := module.Run(ctx, options.Input)
 	if err != nil {
 		if result.Generated == nil && result.Profile != (ProfileDiagnostic{}) {
-			if presentErr := adapter.PresentFailure(result); presentErr != nil {
-				return result, presentErr
+			if err := adapter.PresentFailure(result); err != nil {
+				return result, err
 			}
 		}
 		if result.Committed && !result.Pushed {
-			if presentErr := adapter.PresentOutcome(result); presentErr != nil {
-				return result, presentErr
+			if err := adapter.PresentOutcome(result); err != nil {
+				return result, err
 			}
 		}
 		return result, err
@@ -76,21 +76,16 @@ func executeCM(options *Options) (Result, error) {
 	if err := adapter.PresentOutcome(result); err != nil {
 		return result, err
 	}
-	if err := adapter.Flush(); err != nil {
-		return result, err
-	}
 	return result, nil
 }
 
 type terminalGitCMAdapter struct {
 	run           terminalexperience.ExperienceRun
-	session       terminalexperience.Session
 	requestCancel context.CancelFunc
-	pending       []terminalexperience.PresentationDocument
 }
 
-func newTerminalGitCMAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session, requestCancel context.CancelFunc) *terminalGitCMAdapter {
-	return &terminalGitCMAdapter{run: run, session: session, requestCancel: requestCancel}
+func newTerminalGitCMAdapter(run terminalexperience.ExperienceRun, requestCancel context.CancelFunc) *terminalGitCMAdapter {
+	return &terminalGitCMAdapter{run: run, requestCancel: requestCancel}
 }
 
 func (adapter *terminalGitCMAdapter) SelectFiles(prompt StagePrompt) ([]string, bool, error) {
@@ -102,12 +97,10 @@ func (adapter *terminalGitCMAdapter) SelectFiles(prompt StagePrompt) ([]string, 
 }
 
 func (adapter *terminalGitCMAdapter) ConfirmCommit(prompt CommitPrompt) (bool, bool, error) {
-	if adapter.session.Kind == terminalexperience.PlainInteractive {
-		if err := adapter.present(gitCMGeneratedDocument(adapter.session, prompt.Generated, prompt.Profile)); err != nil {
-			return false, false, err
-		}
+	if err := adapter.run.Notice(gitCMGeneratedDocument(prompt.Generated, prompt.Profile)); err != nil {
+		return false, false, err
 	}
-	answer, cancelled, err := adapter.ask(gitCMCommitRequest(prompt, adapter.session.Kind == terminalexperience.RichInteractive))
+	answer, cancelled, err := adapter.ask(gitCMCommitRequest(prompt))
 	if err != nil || cancelled {
 		return false, cancelled, err
 	}
@@ -134,32 +127,19 @@ func (adapter *terminalGitCMAdapter) PresentGenerated(result Result) error {
 	if result.Generated == nil {
 		return nil
 	}
-	return adapter.present(gitCMGeneratedDocument(adapter.session, *result.Generated, result.Profile))
+	return adapter.run.Result(gitCMGeneratedDocument(*result.Generated, result.Profile))
 }
 
 func (adapter *terminalGitCMAdapter) PresentFailure(result Result) error {
-	return adapter.run.Present(gitCMFailureDocument(adapter.session, result.Profile))
+	return adapter.run.Result(gitCMFailureDocument(result.Profile))
 }
 
 func (adapter *terminalGitCMAdapter) PresentOutcome(result Result) error {
-	document := gitCMOutcomeDocument(adapter.session, result)
+	document := gitCMOutcomeDocument(result)
 	if len(document.Blocks) == 0 {
 		return nil
 	}
-	return adapter.present(document)
-}
-
-func (adapter *terminalGitCMAdapter) Flush() error {
-	if adapter.session.Kind != terminalexperience.Automation {
-		return nil
-	}
-	for _, document := range adapter.pending {
-		if err := adapter.run.Present(document); err != nil {
-			return err
-		}
-	}
-	adapter.pending = nil
-	return nil
+	return adapter.run.Result(document)
 }
 
 func (adapter *terminalGitCMAdapter) ask(request terminalexperience.InteractionRequest) (terminalexperience.InteractionAnswer, bool, error) {
@@ -174,14 +154,6 @@ func (adapter *terminalGitCMAdapter) ask(request terminalexperience.InteractionR
 		return terminalexperience.InteractionAnswer{}, false, err
 	}
 	return answer, false, nil
-}
-
-func (adapter *terminalGitCMAdapter) present(document terminalexperience.PresentationDocument) error {
-	if adapter.session.Kind == terminalexperience.Automation {
-		adapter.pending = append(adapter.pending, document)
-		return nil
-	}
-	return adapter.run.Present(document)
 }
 
 func gitCMStageRequest(prompt StagePrompt) terminalexperience.InteractionRequest {
@@ -215,15 +187,10 @@ func gitCMStageRequest(prompt StagePrompt) terminalexperience.InteractionRequest
 	}
 }
 
-func gitCMCommitRequest(prompt CommitPrompt, richDescription bool) terminalexperience.InteractionRequest {
-	description := ""
-	if richDescription {
-		description = strings.TrimSuffix(gitCMGeneratedText(prompt.Generated, prompt.Profile), "\n")
-	}
+func gitCMCommitRequest(prompt CommitPrompt) terminalexperience.InteractionRequest {
 	return terminalexperience.InteractionRequest{
 		Kind:         terminalexperience.InteractionConfirm,
 		Message:      prompt.Message,
-		Description:  description,
 		HasDefault:   true,
 		Default:      terminalexperience.InteractionAnswer{Confirmed: true},
 		CancelValues: []string{"q", "quit", "cancel"},
@@ -339,46 +306,36 @@ func terminalGitCMPhaseState(state PhaseState) terminalexperience.PhaseState {
 	}
 }
 
-func gitCMGeneratedDocument(session terminalexperience.Session, generated GeneratedMessage, profile ProfileDiagnostic) terminalexperience.PresentationDocument {
-	messageRole := terminalexperience.VisualRolePlain
-	metadataRole := terminalexperience.VisualRolePlain
-	if session.Kind == terminalexperience.RichInteractive {
-		messageRole = terminalexperience.VisualRoleSuccess
-		metadataRole = terminalexperience.VisualRoleMuted
-	}
+func gitCMGeneratedDocument(generated GeneratedMessage, profile ProfileDiagnostic) terminalexperience.PresentationDocument {
 	coverage := generated.Evidence
 	blocks := []terminalexperience.PresentationBlock{
-		{Role: messageRole, Text: generated.Message + "\n\n"},
-		{Role: metadataRole, Text: fmt.Sprintf("Profile: %s (%s)", profile.Name, profile.Model)},
-		{Role: metadataRole, Text: formatGitCMTokenUsage(generated.Usage)},
-		{Role: metadataRole, Text: fmt.Sprintf("Local evidence estimate: ~%s serialized prompt tokens / %d of %d clusters / %d of %d facts", formatGitCMCount(float64(coverage.EstimatedLocalPromptTokens)), coverage.RepresentedClusters, coverage.TotalClusters, coverage.IncludedFacts, coverage.IncludedFacts+coverage.OmittedFacts)},
+		{Role: terminalexperience.VisualRoleSuccess, Text: generated.Message + "\n\n"},
+		{Role: terminalexperience.VisualRoleMuted, Text: fmt.Sprintf("Profile: %s (%s)", profile.Name, profile.Model)},
+		{Role: terminalexperience.VisualRoleMuted, Text: formatGitCMTokenUsage(generated.Usage)},
+		{Role: terminalexperience.VisualRoleMuted, Text: fmt.Sprintf("Local evidence estimate: ~%s serialized prompt tokens / %d of %d clusters / %d of %d facts", formatGitCMCount(float64(coverage.EstimatedLocalPromptTokens)), coverage.RepresentedClusters, coverage.TotalClusters, coverage.IncludedFacts, coverage.IncludedFacts+coverage.OmittedFacts)},
 	}
 	if coverage.ContentCompacted {
 		suffix := "s"
 		if coverage.TotalClusters == 1 {
 			suffix = ""
 		}
-		blocks = append(blocks, terminalexperience.PresentationBlock{Role: metadataRole, Text: fmt.Sprintf("Commit scope: %d cluster%s represented with compacted semantic evidence. This does not affect which files are committed.", coverage.TotalClusters, suffix)})
+		blocks = append(blocks, terminalexperience.PresentationBlock{Role: terminalexperience.VisualRoleMuted, Text: fmt.Sprintf("Commit scope: %d cluster%s represented with compacted semantic evidence. This does not affect which files are committed.", coverage.TotalClusters, suffix)})
 	}
 	return terminalexperience.PresentationDocument{Blocks: blocks}
 }
 
 func gitCMGeneratedText(generated GeneratedMessage, profile ProfileDiagnostic) string {
-	return terminalexperience.RenderPlain(gitCMGeneratedDocument(terminalexperience.Session{Kind: terminalexperience.PlainInteractive}, generated, profile))
+	return terminalexperience.RenderPlain(gitCMGeneratedDocument(generated, profile))
 }
 
-func gitCMFailureDocument(session terminalexperience.Session, profile ProfileDiagnostic) terminalexperience.PresentationDocument {
-	role := terminalexperience.VisualRolePlain
-	if session.Kind == terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRoleMuted
-	}
+func gitCMFailureDocument(profile ProfileDiagnostic) terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
-		Role: role,
+		Role: terminalexperience.VisualRoleMuted,
 		Text: fmt.Sprintf("Provider: %s\nBase URL: %s\nModel: %s", profile.Name, profile.BaseURL, profile.Model),
 	}}}
 }
 
-func gitCMOutcomeDocument(session terminalexperience.Session, result Result) terminalexperience.PresentationDocument {
+func gitCMOutcomeDocument(result Result) terminalexperience.PresentationDocument {
 	text := ""
 	role := terminalexperience.VisualRolePlain
 	switch {
@@ -403,9 +360,6 @@ func gitCMOutcomeDocument(session terminalexperience.Session, result Result) ter
 	}
 	if text == "" {
 		return terminalexperience.PresentationDocument{}
-	}
-	if session.Kind != terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRolePlain
 	}
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
 }

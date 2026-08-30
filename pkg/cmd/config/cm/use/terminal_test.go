@@ -13,42 +13,42 @@ func TestTerminalCMUsePresentationPreservesPlainAndAutomationResults(t *testing.
 	result := UseResult{Profile: "work"}
 	const want = "Default CM profile set to work\n"
 
-	for _, session := range []terminalexperience.Session{
-		{Kind: terminalexperience.PlainInteractive},
-		{Kind: terminalexperience.Automation},
+	for _, session := range []terminalexperience.Capabilities{
+		{Interaction: terminalexperience.PlainInteractive},
+		{Interaction: terminalexperience.Automation},
 	} {
 		var output bytes.Buffer
-		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Session: session, Output: &output})
+		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Capabilities: session, Output: &output})
 		run := experience.Open(context.Background())
-		if err := run.Present(terminalCMUseDocument(session, result)); err != nil {
+		if err := run.Result(terminalCMUseDocument(result)); err != nil {
 			t.Fatalf("Present() error = %v", err)
 		}
 		if err := run.Close(); err != nil {
 			t.Fatalf("Close() error = %v", err)
 		}
 		if got := output.String(); got != want {
-			t.Fatalf("%v result = %q, want %q", session.Kind, got, want)
+			t.Fatalf("%v result = %q, want %q", session.Interaction, got, want)
 		}
 		if terminaltest.ContainsTerminalControl(output.Bytes()) {
-			t.Fatalf("%v result contains terminal control: %q", session.Kind, output.String())
+			t.Fatalf("%v result contains terminal control: %q", session.Interaction, output.String())
 		}
 	}
 }
 
 func TestTerminalCMUsePresentationUsesARichSuccessRole(t *testing.T) {
 	result := UseResult{Profile: "work"}
-	for _, session := range []terminalexperience.Session{
-		{Kind: terminalexperience.RichInteractive, Color: true},
-		{Kind: terminalexperience.RichInteractive},
+	for _, session := range []terminalexperience.Capabilities{
+		{Interaction: terminalexperience.RichInteractive},
+		{Interaction: terminalexperience.RichInteractive},
 	} {
-		document := terminalCMUseDocument(session, result)
+		document := terminalCMUseDocument(result)
 		if got, want := document.Blocks[0].Role, terminalexperience.VisualRoleSuccess; got != want {
 			t.Fatalf("Rich role = %v, want %v", got, want)
 		}
 		var output bytes.Buffer
-		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Session: session, Output: &output})
+		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Capabilities: session, Output: &output})
 		run := experience.Open(context.Background())
-		if err := run.Present(document); err != nil {
+		if err := run.Result(document); err != nil {
 			t.Fatalf("Present() error = %v", err)
 		}
 		if err := run.Close(); err != nil {

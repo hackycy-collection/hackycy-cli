@@ -22,7 +22,7 @@ func TestTerminalDiscoveryPresenterTranslatesAndClosesOneExperienceRun(t *testin
 	})
 
 	operations := experience.Run.Operations()
-	if len(operations) != 2 || operations[0].Kind != terminaltest.PresentOperation || operations[1].Kind != terminaltest.CloseOperation {
+	if len(operations) != 2 || operations[0].Kind != terminaltest.ResultOperation || operations[1].Kind != terminaltest.CloseOperation {
 		t.Fatalf("operations = %#v", operations)
 	}
 	document, ok := operations[0].Value.(terminalexperience.PresentationDocument)

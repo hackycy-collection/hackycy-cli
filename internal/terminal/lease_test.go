@@ -2,7 +2,9 @@ package terminal_test
 
 import (
 	"bytes"
+	"errors"
 	"io"
+	"reflect"
 	"testing"
 	"time"
 
@@ -63,4 +65,34 @@ func TestRendererLeaseSerializesOwnership(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("second lease did not acquire after first lease released")
 	}
+}
+
+func TestRendererLeaseAttemptsEveryDeferredDiagnosticAndJoinsErrors(t *testing.T) {
+	first := errors.New("first write")
+	second := errors.New("second write")
+	destination := &sequenceErrorWriter{errors: []error{first, second}}
+	writer := terminal.NewLeaseAwareDiagnosticWriter(destination)
+	lease := writer.AcquireRendererLease()
+	_, _ = io.WriteString(writer, "first\n")
+	_, _ = io.WriteString(writer, "second\n")
+
+	err := lease.Close()
+	if !errors.Is(err, first) || !errors.Is(err, second) {
+		t.Fatalf("Close() error = %v, want both write errors", err)
+	}
+	if got, want := destination.writes, []string{"first\n", "second\n"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("writes = %#v, want %#v", got, want)
+	}
+}
+
+type sequenceErrorWriter struct {
+	errors []error
+	writes []string
+}
+
+func (writer *sequenceErrorWriter) Write(value []byte) (int, error) {
+	writer.writes = append(writer.writes, string(value))
+	err := writer.errors[0]
+	writer.errors = writer.errors[1:]
+	return 0, err
 }

@@ -63,7 +63,7 @@ func executeRemove(options *Options) (RemoveResult, error) {
 	}
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	adapter := newTerminalForkRemoveAdapter(run, options.Terminal.Session())
+	adapter := newTerminalForkRemoveAdapter(run)
 	module, err := NewRemove(RemoveDependencies{
 		Reader:    reader,
 		Prompter:  adapter,

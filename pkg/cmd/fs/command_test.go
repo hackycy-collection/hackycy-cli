@@ -131,6 +131,6 @@ func newFSTestFactory(environment map[string]string) *cmdutil.Factory {
 		Environment: func(key string) string {
 			return environment[key]
 		},
-		Session: terminal.Session{Kind: terminal.Automation},
+		Capabilities: terminal.Capabilities{Interaction: terminal.Automation},
 	})
 }

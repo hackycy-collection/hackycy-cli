@@ -58,15 +58,11 @@ func runSet(options *Options) error {
 	}
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	return run.Present(terminalCMSetDocument(options.Terminal.Session(), result))
+	return run.Result(terminalCMSetDocument(result))
 }
 
-func terminalCMSetDocument(session terminalexperience.Session, result SetResult) terminalexperience.PresentationDocument {
-	role := terminalexperience.VisualRolePlain
-	if session.Kind == terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRoleSuccess
-	}
-	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: fmt.Sprintf("Profile %s updated", result.Profile)}}}
+func terminalCMSetDocument(result SetResult) terminalexperience.PresentationDocument {
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleSuccess, Text: fmt.Sprintf("Profile %s updated", result.Profile)}}}
 }
 
 var _ SetWriter = (*appconfig.Store)(nil)

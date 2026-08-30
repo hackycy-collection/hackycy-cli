@@ -5,10 +5,11 @@ import (
 	"strings"
 
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // RenderPlain renders a durable document without styles or terminal control.
-// Plain Interactive and Automation Sessions intentionally share this renderer.
+// Plain Interactive and Automation modes intentionally share this renderer.
 func RenderPlain(document PresentationDocument) string {
 	var output strings.Builder
 	for index, block := range document.Blocks {
@@ -29,8 +30,6 @@ func WritePlain(output io.Writer, document PresentationDocument) error {
 	return err
 }
 
-const richClearScreen = "\x1b[2J\x1b[H"
-
 // RichOptions controls terminal-owned Rich Interactive presentation behavior.
 type RichOptions struct {
 	Width int
@@ -46,9 +45,6 @@ func WriteRich(output io.Writer, document PresentationDocument, options RichOpti
 
 func renderRich(renderer *lipgloss.Renderer, document PresentationDocument, options RichOptions) string {
 	var output strings.Builder
-	if document.ClearBefore {
-		output.WriteString(richClearScreen)
-	}
 	styles := richStyles(renderer, options.Color)
 	for index, block := range document.Blocks {
 		if index > 0 && output.Len() > 0 && !strings.HasSuffix(output.String(), "\n") {
@@ -148,6 +144,5 @@ func splitWord(word string, width int) []string {
 }
 
 func stripTerminalControl(value string) string {
-	value = strings.ReplaceAll(value, "\x1b", "")
-	return strings.ReplaceAll(value, "\x9b", "")
+	return ansi.Strip(value)
 }

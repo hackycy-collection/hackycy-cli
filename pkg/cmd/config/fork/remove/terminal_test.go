@@ -21,7 +21,7 @@ func TestTerminalForkRemoveAdapterTranslatesSelectionAndConfirmation(t *testing.
 		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Confirmed: true}},
 	)
 	run := experience.Open(context.Background())
-	adapter := newTerminalForkRemoveAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true})
+	adapter := newTerminalForkRemoveAdapter(run)
 
 	selected, cancelled, err := adapter.Select(SelectPrompt{
 		Message: "Select instance to remove",
@@ -57,7 +57,7 @@ func TestTerminalForkRemoveAdapterTranslatesSelectionAndConfirmation(t *testing.
 
 func TestTerminalForkRemoveAdapterMapsTerminalCancellation(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrInteractionCancelled})
-	adapter := newTerminalForkRemoveAdapter(experience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.RichInteractive})
+	adapter := newTerminalForkRemoveAdapter(experience.Open(context.Background()))
 
 	value, cancelled, err := adapter.Select(SelectPrompt{Message: "Select instance to remove"})
 	if err != nil || !cancelled || value != "" {
@@ -66,13 +66,14 @@ func TestTerminalForkRemoveAdapterMapsTerminalCancellation(t *testing.T) {
 }
 
 func TestTerminalForkRemovePresentationUsesTheSharedOutputBoundary(t *testing.T) {
-	var output bytes.Buffer
+	var output, diagnostics bytes.Buffer
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session: terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Output:  &output,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Output:       &output,
+		Diagnostics:  &diagnostics,
 	})
 	run := experience.Open(context.Background())
-	adapter := newTerminalForkRemoveAdapter(run, experience.Session())
+	adapter := newTerminalForkRemoveAdapter(run)
 	adapter.Info("No instances configured")
 	adapter.Outcome("Nothing to remove")
 	adapter.Outcome("Cancelled")
@@ -80,11 +81,14 @@ func TestTerminalForkRemovePresentationUsesTheSharedOutputBoundary(t *testing.T)
 	if err := run.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
 	}
-	if got, want := output.String(), "No instances configured\nNothing to remove\nCancelled\nInstance work removed\n"; got != want {
+	if got, want := output.String(), "Nothing to remove\nCancelled\nInstance work removed\n"; got != want {
 		t.Fatalf("output = %q, want %q", got, want)
 	}
-	if terminaltest.ContainsTerminalControl(output.Bytes()) {
-		t.Fatalf("plain output contains terminal control: %q", output.String())
+	if got, want := diagnostics.String(), "No instances configured\n"; got != want {
+		t.Fatalf("diagnostics = %q, want %q", got, want)
+	}
+	if terminaltest.ContainsTerminalControl(append(output.Bytes(), diagnostics.Bytes()...)) {
+		t.Fatalf("plain streams contain terminal control: (%q, %q)", output.String(), diagnostics.String())
 	}
 	for _, testCase := range []struct {
 		message string
@@ -94,7 +98,7 @@ func TestTerminalForkRemovePresentationUsesTheSharedOutputBoundary(t *testing.T)
 		{message: "Cancelled", role: terminalexperience.VisualRoleWarning},
 		{message: "Instance work removed", role: terminalexperience.VisualRoleSuccess},
 	} {
-		document := terminalForkRemoveDocument(terminalexperience.Session{Kind: terminalexperience.RichInteractive}, testCase.message, testCase.role)
+		document := terminalForkRemoveDocument(testCase.message, testCase.role)
 		if got := document.Blocks[0].Role; got != testCase.role {
 			t.Fatalf("Rich role = %v, want %v", got, testCase.role)
 		}
@@ -103,7 +107,7 @@ func TestTerminalForkRemovePresentationUsesTheSharedOutputBoundary(t *testing.T)
 
 func TestTerminalForkRemoveAdapterReportsAutomationInteraction(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrAutomationInteraction})
-	adapter := newTerminalForkRemoveAdapter(experience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.Automation})
+	adapter := newTerminalForkRemoveAdapter(experience.Open(context.Background()))
 	if _, _, err := adapter.Select(SelectPrompt{Message: "Select instance to remove"}); !errors.Is(err, errConfigForkRemoveRequiresInteractive) {
 		t.Fatalf("Select() error = %v", err)
 	}
@@ -116,17 +120,17 @@ func TestConfigForkRemoveAutomationPreservesEmptyAndRejectsNonemptyBeforeMutatio
 		t.Setenv("USERPROFILE", "")
 		stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-			Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
-			Input:       panicForkRemoveReader{},
-			Output:      stdout,
-			Diagnostics: diagnostics,
+			Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+			Input:        panicForkRemoveReader{},
+			Output:       stdout,
+			Diagnostics:  diagnostics,
 		})
 
 		result, err := executeRemove(newRemoveOptions(experience))
 		if err != nil || result != (RemoveResult{Empty: true}) {
 			t.Fatalf("executeRemove() = (%#v, %v)", result, err)
 		}
-		if got, want := stdout.String(), "No instances configured\nNothing to remove\n"; got != want {
+		if got, want := stdout.String(), "Nothing to remove\n"; got != want {
 			t.Fatalf("stdout = %q, want %q", got, want)
 		}
 		if diagnostics.Len() != 0 || terminaltest.ContainsTerminalControl(stdout.Bytes()) {
@@ -148,10 +152,10 @@ func TestConfigForkRemoveAutomationPreservesEmptyAndRejectsNonemptyBeforeMutatio
 		}
 		stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-			Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
-			Input:       panicForkRemoveReader{},
-			Output:      stdout,
-			Diagnostics: diagnostics,
+			Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+			Input:        panicForkRemoveReader{},
+			Output:       stdout,
+			Diagnostics:  diagnostics,
 		})
 
 		result, err := executeRemove(newRemoveOptions(experience))
@@ -193,10 +197,10 @@ func TestConfigForkRemovePlainConfirmationAndCancellationPreserveMutationBoundar
 			}
 			stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-				Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-				Input:       strings.NewReader(testCase.input),
-				Output:      stdout,
-				Diagnostics: diagnostics,
+				Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+				Input:        strings.NewReader(testCase.input),
+				Output:       stdout,
+				Diagnostics:  diagnostics,
 			})
 
 			result, err := executeRemove(newRemoveOptions(experience))

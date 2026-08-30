@@ -145,6 +145,6 @@ func newServerTestFactory(environment map[string]string) *cmdutil.Factory {
 			value, ok := environment[key]
 			return value, ok
 		},
-		Session: terminal.Session{Kind: terminal.Automation},
+		Capabilities: terminal.Capabilities{Interaction: terminal.Automation},
 	})
 }

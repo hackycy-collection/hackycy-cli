@@ -24,7 +24,7 @@ func runRun(options *Options) error {
 	}
 	defer closeRun()
 
-	adapter := newTerminalRunAdapter(run, options.Terminal.Session())
+	adapter := newTerminalRunAdapter(run)
 	module, err := New(Dependencies{
 		WorkingDirectory: options.WorkingDirectory,
 		Reader:           options.Reader,
@@ -41,9 +41,6 @@ func runRun(options *Options) error {
 	}
 	result, err := module.Run(options.Context, Input{Directory: options.Directory})
 	if err != nil {
-		return err
-	}
-	if err := adapter.Flush(); err != nil {
 		return err
 	}
 	if result.ExitCode != 0 {
@@ -82,13 +79,11 @@ func osRunPathExists(path string) (bool, error) {
 }
 
 type terminalRunAdapter struct {
-	run     terminalexperience.ExperienceRun
-	session terminalexperience.Session
-	pending []terminalexperience.PresentationDocument
+	run terminalexperience.ExperienceRun
 }
 
-func newTerminalRunAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalRunAdapter {
-	return &terminalRunAdapter{run: run, session: session}
+func newTerminalRunAdapter(run terminalexperience.ExperienceRun) *terminalRunAdapter {
+	return &terminalRunAdapter{run: run}
 }
 
 func (adapter *terminalRunAdapter) SelectScript(prompt ScriptPrompt) (string, bool, error) {
@@ -122,39 +117,22 @@ func (adapter *terminalRunAdapter) SelectPackageManager(prompt PackageManagerPro
 }
 
 func (adapter *terminalRunAdapter) Intro(message string) {
-	if adapter.session.Kind == terminalexperience.RichInteractive {
-		adapter.present(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
-			{Role: terminalexperience.VisualRoleTitle, Text: "HACKYCY CLI"},
-			{Role: terminalexperience.VisualRoleActive, Text: message},
-		}})
-		return
-	}
-	adapter.present(terminalRunDocument(adapter.session, "HACKYCY CLI\n\n"+message, terminalexperience.VisualRolePlain))
+	_ = adapter.run.Notice(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
+		{Role: terminalexperience.VisualRoleTitle, Text: "HACKYCY CLI"},
+		{Role: terminalexperience.VisualRoleActive, Text: message},
+	}})
 }
 
 func (adapter *terminalRunAdapter) Info(message string) {
-	adapter.present(terminalRunDocument(adapter.session, message, terminalexperience.VisualRoleActive))
+	_ = adapter.run.Notice(terminalRunDocument(message, terminalexperience.VisualRoleActive))
 }
 
 func (adapter *terminalRunAdapter) Blank() {
-	adapter.present(terminalRunDocument(adapter.session, "\n", terminalexperience.VisualRolePlain))
+	_ = adapter.run.Notice(terminalRunDocument("\n", terminalexperience.VisualRolePlain))
 }
 
 func (adapter *terminalRunAdapter) Cancel(message string) {
-	adapter.present(terminalRunDocument(adapter.session, message, terminalexperience.VisualRoleWarning))
-}
-
-func (adapter *terminalRunAdapter) Flush() error {
-	if adapter.session.Kind != terminalexperience.Automation {
-		return nil
-	}
-	for _, document := range adapter.pending {
-		if err := adapter.run.Present(document); err != nil {
-			return err
-		}
-	}
-	adapter.pending = nil
-	return nil
+	_ = adapter.run.Result(terminalRunDocument(message, terminalexperience.VisualRoleWarning))
 }
 
 func (adapter *terminalRunAdapter) ask(request terminalexperience.InteractionRequest) (terminalexperience.InteractionAnswer, bool, error) {
@@ -171,18 +149,7 @@ func (adapter *terminalRunAdapter) ask(request terminalexperience.InteractionReq
 	return answer, false, nil
 }
 
-func (adapter *terminalRunAdapter) present(document terminalexperience.PresentationDocument) {
-	if adapter.session.Kind == terminalexperience.Automation {
-		adapter.pending = append(adapter.pending, document)
-		return
-	}
-	_ = adapter.run.Present(document)
-}
-
-func terminalRunDocument(session terminalexperience.Session, text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
-	if session.Kind != terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRolePlain
-	}
+func terminalRunDocument(text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
 }
 

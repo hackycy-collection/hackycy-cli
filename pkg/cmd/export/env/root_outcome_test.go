@@ -41,7 +41,7 @@ func TestExportEnvAutomationPreservesResolvedPathsAndRejectsAmbiguityBeforeEffec
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-			app, _ := newRootApp(t, panicReader{}, stdout, stderr, terminal.Session{Kind: terminal.Automation})
+			app, _ := newRootApp(t, panicReader{}, stdout, stderr, terminal.Capabilities{Interaction: terminal.Automation})
 			outcome := app.Execute(context.Background(), testCase.arguments)
 			if testCase.wantErr == "" {
 				if outcome.Code != 0 || outcome.Err != nil || stdout.String() != testCase.wantOut || stderr.Len() != 0 {
@@ -71,7 +71,7 @@ func TestExportEnvPlainCancellationDoesNotWriteOutput(t *testing.T) {
 	}
 	withWorkingDirectory(t, workingDirectory)
 	stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
-	app, _ := newRootApp(t, strings.NewReader("cancel\n"), stdout, diagnostics, terminal.Session{Kind: terminal.PlainInteractive})
+	app, _ := newRootApp(t, strings.NewReader("cancel\n"), stdout, diagnostics, terminal.Capabilities{Interaction: terminal.PlainInteractive})
 
 	outcome := app.Execute(context.Background(), []string{"export", "env", "project", "--out", "protected.json"})
 	if outcome.Code != 0 || outcome.Err != nil || stdout.String() != "Cancelled\n" || terminaltest.ContainsTerminalControl(append(stdout.Bytes(), diagnostics.Bytes()...)) {
@@ -88,7 +88,7 @@ func TestRootConfiguresDiagnosticsBeforeExportEnv(t *testing.T) {
 	writeEnvFile(t, filepath.Join(workingDirectory, "project", ".env.production"), "VALUE=production\n")
 	withWorkingDirectory(t, workingDirectory)
 	stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
-	app, runtime := newRootApp(t, panicReader{}, stdout, stderr, terminal.Session{Kind: terminal.Automation})
+	app, runtime := newRootApp(t, panicReader{}, stdout, stderr, terminal.Capabilities{Interaction: terminal.Automation})
 
 	outcome := app.Execute(context.Background(), []string{"--log-level", "warn", "export", "env", "project", "--env", "production"})
 	if outcome.Code != 0 || outcome.Err != nil || runtime.Level() != logging.Warn {
@@ -96,7 +96,7 @@ func TestRootConfiguresDiagnosticsBeforeExportEnv(t *testing.T) {
 	}
 }
 
-func newRootApp(t *testing.T, input io.Reader, output, diagnostics *bytes.Buffer, session terminal.Session) (*rootcommand.App, *logging.Runtime) {
+func newRootApp(t *testing.T, input io.Reader, output, diagnostics *bytes.Buffer, session terminal.Capabilities) (*rootcommand.App, *logging.Runtime) {
 	t.Helper()
 	factory := commandfactory.New(commandfactory.Options{
 		Version: "0.0.0-dev",
@@ -105,7 +105,7 @@ func newRootApp(t *testing.T, input io.Reader, output, diagnostics *bytes.Buffer
 			Out:    output,
 			ErrOut: diagnostics,
 		},
-		Session:           session,
+		Capabilities:      session,
 		Environment:       func(string) string { return "" },
 		EnvironmentLookup: func(string) (string, bool) { return "", false },
 	})

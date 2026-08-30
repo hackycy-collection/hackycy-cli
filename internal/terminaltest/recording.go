@@ -8,8 +8,10 @@ type OperationKind string
 const (
 	// AskOperation records an interaction request.
 	AskOperation OperationKind = "ask"
-	// PresentOperation records a durable presentation request.
-	PresentOperation OperationKind = "present"
+	// NoticeOperation records transient command context.
+	NoticeOperation OperationKind = "notice"
+	// ResultOperation records a durable presentation request.
+	ResultOperation OperationKind = "result"
 	// TrackOperation records a tracked-operation request.
 	TrackOperation OperationKind = "track"
 	// CloseOperation records terminal cleanup requested by a caller.
@@ -57,9 +59,14 @@ func (run *RecordingRun) Ask(request any) Answer {
 	return answer
 }
 
-// Present records a durable presentation request.
-func (run *RecordingRun) Present(document any) {
-	run.record(PresentOperation, document)
+// Notice records transient command context.
+func (run *RecordingRun) Notice(document any) {
+	run.record(NoticeOperation, document)
+}
+
+// Result records a durable presentation request.
+func (run *RecordingRun) Result(document any) {
+	run.record(ResultOperation, document)
 }
 
 // Track records a tracked-operation request.

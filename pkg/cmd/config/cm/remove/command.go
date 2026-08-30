@@ -52,7 +52,7 @@ func executeRemove(options *Options) (RemoveResult, error) {
 	}
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	adapter := newTerminalCMRemoveAdapter(run, options.Terminal.Session())
+	adapter := newTerminalCMRemoveAdapter(run)
 	module, err := NewRemove(RemoveDependencies{Reader: reader, Prompter: adapter, Writer: writer, Presenter: adapter})
 	if err != nil {
 		return RemoveResult{}, err

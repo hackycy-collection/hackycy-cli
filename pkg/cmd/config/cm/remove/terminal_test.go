@@ -18,7 +18,7 @@ import (
 func TestTerminalCMRemoveAdapterTranslatesConfirmation(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Confirmed: true}})
 	run := experience.Open(context.Background())
-	adapter := newTerminalCMRemoveAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true})
+	adapter := newTerminalCMRemoveAdapter(run)
 
 	confirmed, cancelled, err := adapter.Confirm(RemoveConfirmPrompt{Message: `Remove CM profile "work"?`})
 
@@ -40,14 +40,14 @@ func TestTerminalCMRemoveAdapterTranslatesConfirmation(t *testing.T) {
 
 func TestTerminalCMRemoveAdapterMapsCancellationAndAutomation(t *testing.T) {
 	cancelledExperience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrInteractionCancelled})
-	cancelledAdapter := newTerminalCMRemoveAdapter(cancelledExperience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.RichInteractive})
+	cancelledAdapter := newTerminalCMRemoveAdapter(cancelledExperience.Open(context.Background()))
 	confirmed, cancelled, err := cancelledAdapter.Confirm(RemoveConfirmPrompt{Message: "Remove CM profile \"work\"?"})
 	if err != nil || !cancelled || confirmed {
 		t.Fatalf("cancelled Confirm() = (%t, %t, %v)", confirmed, cancelled, err)
 	}
 
 	automationExperience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrAutomationInteraction})
-	automationAdapter := newTerminalCMRemoveAdapter(automationExperience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.Automation})
+	automationAdapter := newTerminalCMRemoveAdapter(automationExperience.Open(context.Background()))
 	if _, _, err := automationAdapter.Confirm(RemoveConfirmPrompt{Message: "Remove CM profile \"work\"?"}); !errors.Is(err, errConfigCMRemoveRequiresInteractive) {
 		t.Fatalf("Automation Confirm() error = %v", err)
 	}
@@ -56,11 +56,11 @@ func TestTerminalCMRemoveAdapterMapsCancellationAndAutomation(t *testing.T) {
 func TestTerminalCMRemovePresentationUsesTheSharedOutputBoundary(t *testing.T) {
 	var output bytes.Buffer
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session: terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Output:  &output,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Output:       &output,
 	})
 	run := experience.Open(context.Background())
-	adapter := newTerminalCMRemoveAdapter(run, experience.Session())
+	adapter := newTerminalCMRemoveAdapter(run)
 	adapter.Cancel("Cancelled")
 	adapter.Success("Profile work removed")
 	if err := run.Close(); err != nil {
@@ -79,7 +79,7 @@ func TestTerminalCMRemovePresentationUsesTheSharedOutputBoundary(t *testing.T) {
 		{cancelled: true, role: terminalexperience.VisualRoleWarning},
 		{role: terminalexperience.VisualRoleSuccess},
 	} {
-		document := terminalCMRemoveDocument(terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true}, "result", testCase.cancelled)
+		document := terminalCMRemoveDocument("result", testCase.cancelled)
 		if got := document.Blocks[0].Role; got != testCase.role {
 			t.Fatalf("Rich role = %v, want %v", got, testCase.role)
 		}
@@ -106,10 +106,10 @@ func TestConfigCMRemoveAutomationValidatesBeforePromptAndMutation(t *testing.T) 
 			}
 			stdout, stderr := &bytes.Buffer{}, &bytes.Buffer{}
 			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-				Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
-				Input:       panicCMRemoveReader{},
-				Output:      stdout,
-				Diagnostics: stderr,
+				Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+				Input:        panicCMRemoveReader{},
+				Output:       stdout,
+				Diagnostics:  stderr,
 			})
 			options := newCMRemoveOptions(experience)
 			options.Profile = testCase.profile
@@ -154,10 +154,10 @@ func TestConfigCMRemovePlainConfirmationAndCancellationPreserveMutationBoundary(
 			}
 			stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-				Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-				Input:       strings.NewReader(testCase.input),
-				Output:      stdout,
-				Diagnostics: diagnostics,
+				Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+				Input:        strings.NewReader(testCase.input),
+				Output:       stdout,
+				Diagnostics:  diagnostics,
 			})
 
 			options := newCMRemoveOptions(experience)

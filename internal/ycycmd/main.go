@@ -37,7 +37,7 @@ func run(version string, arguments []string, input, output, diagnostics *os.File
 	commandFactory := commandfactory.New(commandfactory.Options{
 		Version:           version,
 		IOStreams:         processFacts.IOStreams,
-		Session:           processFacts.Session,
+		Capabilities:      processFacts.Capabilities,
 		Environment:       os.Getenv,
 		EnvironmentLookup: os.LookupEnv,
 	})

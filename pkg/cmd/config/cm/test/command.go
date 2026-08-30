@@ -60,20 +60,14 @@ func runTest(options *Options) error {
 	if result.Content != "" || result.Diagnostic != nil {
 		run := options.Terminal.Open(options.Context)
 		defer run.Close()
-		if err := run.Present(terminalCMTestDocument(options.Terminal.Session(), result)); err != nil {
+		if err := run.Result(terminalCMTestDocument(result)); err != nil {
 			return err
 		}
 	}
 	return runErr
 }
 
-func terminalCMTestDocument(session terminalexperience.Session, result TestResult) terminalexperience.PresentationDocument {
-	if session.Kind != terminalexperience.RichInteractive {
-		if result.Diagnostic != nil {
-			return terminalCMTestFailureDocument(*result.Diagnostic, terminalexperience.VisualRolePlain)
-		}
-		return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRolePlain, Text: fmt.Sprintf("Response: %s\nDone", result.Content)}}}
-	}
+func terminalCMTestDocument(result TestResult) terminalexperience.PresentationDocument {
 	if result.Diagnostic != nil {
 		document := terminalCMTestFailureDocument(*result.Diagnostic, terminalexperience.VisualRoleMuted)
 		document.Blocks = append([]terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleTitle, Text: "Commit message provider test"}, {Role: terminalexperience.VisualRoleWarning, Text: "Provider request failed"}}, document.Blocks...)

@@ -10,12 +10,11 @@ import (
 var errConfigCMRemoveRequiresInteractive = errors.New("config cm remove requires an interactive terminal")
 
 type terminalCMRemoveAdapter struct {
-	run     terminalexperience.ExperienceRun
-	session terminalexperience.Session
+	run terminalexperience.ExperienceRun
 }
 
-func newTerminalCMRemoveAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalCMRemoveAdapter {
-	return &terminalCMRemoveAdapter{run: run, session: session}
+func newTerminalCMRemoveAdapter(run terminalexperience.ExperienceRun) *terminalCMRemoveAdapter {
+	return &terminalCMRemoveAdapter{run: run}
 }
 
 func (adapter *terminalCMRemoveAdapter) Confirm(question RemoveConfirmPrompt) (bool, bool, error) {
@@ -33,19 +32,16 @@ func (adapter *terminalCMRemoveAdapter) Confirm(question RemoveConfirmPrompt) (b
 }
 
 func (adapter *terminalCMRemoveAdapter) Cancel(message string) {
-	_ = adapter.run.Present(terminalCMRemoveDocument(adapter.session, message, true))
+	_ = adapter.run.Result(terminalCMRemoveDocument(message, true))
 }
 func (adapter *terminalCMRemoveAdapter) Success(message string) {
-	_ = adapter.run.Present(terminalCMRemoveDocument(adapter.session, message, false))
+	_ = adapter.run.Result(terminalCMRemoveDocument(message, false))
 }
 
-func terminalCMRemoveDocument(session terminalexperience.Session, message string, cancelled bool) terminalexperience.PresentationDocument {
-	role := terminalexperience.VisualRolePlain
-	if session.Kind == terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRoleSuccess
-		if cancelled {
-			role = terminalexperience.VisualRoleWarning
-		}
+func terminalCMRemoveDocument(message string, cancelled bool) terminalexperience.PresentationDocument {
+	role := terminalexperience.VisualRoleSuccess
+	if cancelled {
+		role = terminalexperience.VisualRoleWarning
 	}
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: message}}}
 }

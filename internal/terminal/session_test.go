@@ -11,37 +11,42 @@ func TestClassify(t *testing.T) {
 	tests := []struct {
 		name  string
 		facts terminaltest.Facts
-		want  terminal.Session
+		want  terminal.Capabilities
 	}{
 		{
 			name:  "recognized terminal is rich",
 			facts: allTerminalFacts(map[string]string{"TERM": "xterm-256color"}),
-			want:  terminal.Session{Kind: terminal.RichInteractive, Color: true},
+			want: terminal.Capabilities{
+				Interaction: terminal.RichInteractive,
+				Stdin:       terminal.StreamCapability{Terminal: true},
+				Stdout:      terminal.StreamCapability{Terminal: true, Color: true},
+				Stderr:      terminal.StreamCapability{Terminal: true, Color: true},
+			},
 		},
 		{
 			name:  "no color keeps rich session",
 			facts: allTerminalFacts(map[string]string{"TERM": "screen-256color", "NO_COLOR": "1"}),
-			want:  terminal.Session{Kind: terminal.RichInteractive},
+			want:  terminal.Capabilities{Interaction: terminal.RichInteractive, Stdin: terminal.StreamCapability{Terminal: true}, Stdout: terminal.StreamCapability{Terminal: true}, Stderr: terminal.StreamCapability{Terminal: true}},
 		},
 		{
 			name:  "empty no color keeps color enabled",
 			facts: allTerminalFacts(map[string]string{"TERM": "tmux-256color", "NO_COLOR": ""}),
-			want:  terminal.Session{Kind: terminal.RichInteractive, Color: true},
+			want:  terminal.Capabilities{Interaction: terminal.RichInteractive, Stdin: terminal.StreamCapability{Terminal: true}, Stdout: terminal.StreamCapability{Terminal: true, Color: true}, Stderr: terminal.StreamCapability{Terminal: true, Color: true}},
 		},
 		{
 			name:  "dumb terminal is plain",
 			facts: allTerminalFacts(map[string]string{"TERM": "dumb"}),
-			want:  terminal.Session{Kind: terminal.PlainInteractive},
+			want:  terminal.Capabilities{Interaction: terminal.PlainInteractive, Stdin: terminal.StreamCapability{Terminal: true}, Stdout: terminal.StreamCapability{Terminal: true}, Stderr: terminal.StreamCapability{Terminal: true}},
 		},
 		{
 			name:  "unknown terminal is plain",
 			facts: allTerminalFacts(map[string]string{"TERM": "unrecognized-terminal"}),
-			want:  terminal.Session{Kind: terminal.PlainInteractive},
+			want:  terminal.Capabilities{Interaction: terminal.PlainInteractive, Stdin: terminal.StreamCapability{Terminal: true}, Stdout: terminal.StreamCapability{Terminal: true}, Stderr: terminal.StreamCapability{Terminal: true}},
 		},
 		{
 			name:  "missing terminal is plain",
 			facts: allTerminalFacts(nil),
-			want:  terminal.Session{Kind: terminal.PlainInteractive},
+			want:  terminal.Capabilities{Interaction: terminal.PlainInteractive, Stdin: terminal.StreamCapability{Terminal: true}, Stdout: terminal.StreamCapability{Terminal: true}, Stderr: terminal.StreamCapability{Terminal: true}},
 		},
 		{
 			name: "redirected stdin is automation",
@@ -50,16 +55,16 @@ func TestClassify(t *testing.T) {
 				Stderr:      terminaltest.StreamFacts{Terminal: true},
 				Environment: map[string]string{"TERM": "xterm-256color"},
 			},
-			want: terminal.Session{Kind: terminal.Automation},
+			want: terminal.Capabilities{Interaction: terminal.Automation, Stdout: terminal.StreamCapability{Terminal: true}, Stderr: terminal.StreamCapability{Terminal: true}},
 		},
 		{
-			name: "redirected stdout is automation",
+			name: "redirected stdout keeps rich interaction",
 			facts: terminaltest.Facts{
 				Stdin:       terminaltest.StreamFacts{Terminal: true},
 				Stderr:      terminaltest.StreamFacts{Terminal: true},
 				Environment: map[string]string{"TERM": "xterm-256color"},
 			},
-			want: terminal.Session{Kind: terminal.Automation},
+			want: terminal.Capabilities{Interaction: terminal.RichInteractive, Stdin: terminal.StreamCapability{Terminal: true}, Stderr: terminal.StreamCapability{Terminal: true, Color: true}},
 		},
 		{
 			name: "redirected stderr is automation",
@@ -68,12 +73,12 @@ func TestClassify(t *testing.T) {
 				Stdout:      terminaltest.StreamFacts{Terminal: true},
 				Environment: map[string]string{"TERM": "xterm-256color"},
 			},
-			want: terminal.Session{Kind: terminal.Automation},
+			want: terminal.Capabilities{Interaction: terminal.Automation, Stdin: terminal.StreamCapability{Terminal: true}, Stdout: terminal.StreamCapability{Terminal: true}},
 		},
 		{
 			name:  "set empty CI is automation",
 			facts: allTerminalFacts(map[string]string{"TERM": "xterm-256color", "CI": ""}),
-			want:  terminal.Session{Kind: terminal.Automation},
+			want:  terminal.Capabilities{Interaction: terminal.Automation, Stdin: terminal.StreamCapability{Terminal: true}, Stdout: terminal.StreamCapability{Terminal: true}, Stderr: terminal.StreamCapability{Terminal: true}},
 		},
 	}
 

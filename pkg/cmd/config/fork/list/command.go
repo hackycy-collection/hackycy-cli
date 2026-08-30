@@ -68,7 +68,7 @@ func runList(options *Options) error {
 	}
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	return run.Present(terminalForkListDocument(options.Terminal.Session(), result))
+	return run.Result(terminalForkListDocument(result))
 }
 
 // Ensure the Factory's concrete Store remains the intended implementation of

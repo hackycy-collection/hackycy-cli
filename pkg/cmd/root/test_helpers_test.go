@@ -20,7 +20,7 @@ type testDependencies struct {
 	Environment       func(string) string
 	EnvironmentLookup func(string) (string, bool)
 	Logging           *logging.Runtime
-	Session           terminal.Session
+	Capabilities      terminal.Capabilities
 }
 
 func newTestApp(build BuildInfo, dependencies testDependencies) (*App, error) {
@@ -32,7 +32,7 @@ func newTestApp(build BuildInfo, dependencies testDependencies) (*App, error) {
 		},
 		Environment:       dependencies.Environment,
 		EnvironmentLookup: dependencies.EnvironmentLookup,
-		Session:           dependencies.Session,
+		Capabilities:      dependencies.Capabilities,
 	})
 	if dependencies.Logging != nil {
 		factory.Logging = dependencies.Logging

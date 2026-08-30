@@ -8,12 +8,11 @@ import (
 )
 
 type terminalCMAddAdapter struct {
-	run     terminalexperience.ExperienceRun
-	session terminalexperience.Session
+	run terminalexperience.ExperienceRun
 }
 
-func newTerminalCMAddAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalCMAddAdapter {
-	return &terminalCMAddAdapter{run: run, session: session}
+func newTerminalCMAddAdapter(run terminalexperience.ExperienceRun) *terminalCMAddAdapter {
+	return &terminalCMAddAdapter{run: run}
 }
 
 func (adapter *terminalCMAddAdapter) Text(question AddTextPrompt) (string, bool, error) {
@@ -25,10 +24,10 @@ func (adapter *terminalCMAddAdapter) Password(question AddTextPrompt) (string, b
 }
 
 func (adapter *terminalCMAddAdapter) Cancel(message string) {
-	_ = adapter.run.Present(terminalCMAddDocument(adapter.session, message, true))
+	_ = adapter.run.Result(terminalCMAddDocument(message, true))
 }
 func (adapter *terminalCMAddAdapter) Success(message string) {
-	_ = adapter.run.Present(terminalCMAddDocument(adapter.session, message, false))
+	_ = adapter.run.Result(terminalCMAddDocument(message, false))
 }
 
 func (adapter *terminalCMAddAdapter) ask(request terminalexperience.InteractionRequest) (string, bool, error) {
@@ -45,13 +44,10 @@ func (adapter *terminalCMAddAdapter) ask(request terminalexperience.InteractionR
 	return answer.Value, false, nil
 }
 
-func terminalCMAddDocument(session terminalexperience.Session, message string, cancelled bool) terminalexperience.PresentationDocument {
-	role := terminalexperience.VisualRolePlain
-	if session.Kind == terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRoleSuccess
-		if cancelled {
-			role = terminalexperience.VisualRoleWarning
-		}
+func terminalCMAddDocument(message string, cancelled bool) terminalexperience.PresentationDocument {
+	role := terminalexperience.VisualRoleSuccess
+	if cancelled {
+		role = terminalexperience.VisualRoleWarning
 	}
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: message}}}
 }

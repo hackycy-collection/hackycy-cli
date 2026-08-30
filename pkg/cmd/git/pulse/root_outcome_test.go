@@ -36,7 +36,7 @@ func TestRootConfiguresDiagnosticsBeforeGitPulse(t *testing.T) {
 			Out:    stdout,
 			ErrOut: stderr,
 		},
-		Session:          terminal.Session{Kind: terminal.PlainInteractive},
+		Capabilities:     terminal.Capabilities{Interaction: terminal.PlainInteractive},
 		WorkingDirectory: func() (string, error) { return workspace, nil },
 	})
 	runtime := logging.NewRuntime(logging.Options{Writer: stderr})

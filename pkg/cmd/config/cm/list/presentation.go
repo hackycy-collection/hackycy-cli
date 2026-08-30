@@ -9,10 +9,7 @@ import (
 
 const terminalCMListEmptyMessage = "No CM profiles configured. Run \"ycy config cm add\" to add one."
 
-func terminalCMListDocument(session terminalexperience.Session, result Result) terminalexperience.PresentationDocument {
-	if session.Kind != terminalexperience.RichInteractive {
-		return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRolePlain, Text: terminalCMListPlainText(result.Profiles)}}}
-	}
+func terminalCMListDocument(result Result) terminalexperience.PresentationDocument {
 	blocks := []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleTitle, Text: "Commit message profiles"}}
 	if len(result.Profiles) == 0 {
 		return terminalexperience.PresentationDocument{Blocks: append(blocks,

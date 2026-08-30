@@ -36,11 +36,14 @@ func TestRecordingExperienceCapturesOnlyTerminalSemantics(t *testing.T) {
 	if err != nil || answer.Value != "cli" {
 		t.Fatalf("Ask() = (%#v, %v)", answer, err)
 	}
-	if err := run.Present(document); err != nil {
-		t.Fatalf("Present() error = %v", err)
+	if err := run.Notice(document); err != nil {
+		t.Fatalf("Notice() error = %v", err)
 	}
 	if err := run.Track(operation); err != nil {
 		t.Fatalf("Track() error = %v", err)
+	}
+	if err := run.Result(document); err != nil {
+		t.Fatalf("Result() error = %v", err)
 	}
 	if err := run.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -48,8 +51,9 @@ func TestRecordingExperienceCapturesOnlyTerminalSemantics(t *testing.T) {
 
 	want := []terminaltest.Operation{
 		{Kind: terminaltest.AskOperation, Value: request},
-		{Kind: terminaltest.PresentOperation, Value: document},
+		{Kind: terminaltest.NoticeOperation, Value: document},
 		{Kind: terminaltest.TrackOperation, Value: operation},
+		{Kind: terminaltest.ResultOperation, Value: document},
 		{Kind: terminaltest.CloseOperation},
 	}
 	if got := experience.Run.Operations(); !reflect.DeepEqual(got, want) {

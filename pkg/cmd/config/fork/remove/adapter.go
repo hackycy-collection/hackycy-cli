@@ -10,12 +10,11 @@ import (
 var errConfigForkRemoveRequiresInteractive = errors.New("config fork remove requires an interactive terminal")
 
 type terminalForkRemoveAdapter struct {
-	run     terminalexperience.ExperienceRun
-	session terminalexperience.Session
+	run terminalexperience.ExperienceRun
 }
 
-func newTerminalForkRemoveAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalForkRemoveAdapter {
-	return &terminalForkRemoveAdapter{run: run, session: session}
+func newTerminalForkRemoveAdapter(run terminalexperience.ExperienceRun) *terminalForkRemoveAdapter {
+	return &terminalForkRemoveAdapter{run: run}
 }
 
 func (adapter *terminalForkRemoveAdapter) Select(question SelectPrompt) (string, bool, error) {
@@ -43,18 +42,15 @@ func (adapter *terminalForkRemoveAdapter) Confirm(question ConfirmPrompt) (bool,
 }
 
 func (adapter *terminalForkRemoveAdapter) Info(message string) {
-	_ = adapter.run.Present(terminalForkRemoveDocument(adapter.session, message, terminalexperience.VisualRoleMuted))
+	_ = adapter.run.Notice(terminalForkRemoveDocument(message, terminalexperience.VisualRoleMuted))
 }
 
 func (adapter *terminalForkRemoveAdapter) Outcome(message string) {
-	role := terminalexperience.VisualRolePlain
-	if adapter.session.Kind == terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRoleSuccess
-		if message == "Cancelled" {
-			role = terminalexperience.VisualRoleWarning
-		}
+	role := terminalexperience.VisualRoleSuccess
+	if message == "Cancelled" {
+		role = terminalexperience.VisualRoleWarning
 	}
-	_ = adapter.run.Present(terminalForkRemoveDocument(adapter.session, message, role))
+	_ = adapter.run.Result(terminalForkRemoveDocument(message, role))
 }
 
 func (adapter *terminalForkRemoveAdapter) ask(request terminalexperience.InteractionRequest) (terminalexperience.InteractionAnswer, bool, error) {
@@ -79,9 +75,6 @@ func interactionOptions(choices []Choice) []terminalexperience.InteractionOption
 	return options
 }
 
-func terminalForkRemoveDocument(session terminalexperience.Session, message string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
-	if session.Kind != terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRolePlain
-	}
+func terminalForkRemoveDocument(message string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: message}}}
 }

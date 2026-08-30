@@ -42,7 +42,7 @@ func TestRMAutomationErrorUsesStderrWithoutPartialCommandResult(t *testing.T) {
 			Out:    stdout,
 			ErrOut: stderr,
 		},
-		Session: terminal.Session{Kind: terminal.Automation},
+		Capabilities: terminal.Capabilities{Interaction: terminal.Automation},
 	})
 	factory.Logging = logging.NewRuntime(logging.Options{Writer: stderr})
 	app, err := rootcommand.New(factory)
@@ -70,7 +70,7 @@ func TestRootConfiguresDiagnosticsBeforeRM(t *testing.T) {
 			Out:    stdout,
 			ErrOut: stderr,
 		},
-		Session: terminal.Session{Kind: terminal.Automation},
+		Capabilities: terminal.Capabilities{Interaction: terminal.Automation},
 	})
 	runtime := logging.NewRuntime(logging.Options{Writer: stderr})
 	factory.Logging = runtime

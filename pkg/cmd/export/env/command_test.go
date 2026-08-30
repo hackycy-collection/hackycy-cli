@@ -54,6 +54,6 @@ func newEnvTestFactory(output, diagnostics *bytes.Buffer) *cmdutil.Factory {
 			Out:    output,
 			ErrOut: diagnostics,
 		},
-		Session: terminal.Session{Kind: terminal.Automation},
+		Capabilities: terminal.Capabilities{Interaction: terminal.Automation},
 	})
 }

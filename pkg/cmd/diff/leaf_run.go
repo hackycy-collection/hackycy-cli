@@ -32,7 +32,7 @@ func runDiff(options *Options) error {
 	}
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	if err := run.Present(terminalDiffStartupDocument(options.Terminal.Session(), operation.Startup)); err != nil {
+	if err := run.Result(terminalDiffStartupDocument(operation.Startup)); err != nil {
 		_ = operation.Close()
 		return err
 	}
@@ -86,13 +86,7 @@ func diffNetworkIP(address net.Addr) (netip.Addr, bool) {
 	return parsed.Unmap(), true
 }
 
-func terminalDiffStartupDocument(session terminalexperience.Session, start Startup) terminalexperience.PresentationDocument {
-	if session.Kind != terminalexperience.RichInteractive {
-		return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
-			Role: terminalexperience.VisualRolePlain,
-			Text: terminalDiffStartupPlainText(start),
-		}}}
-	}
+func terminalDiffStartupDocument(start Startup) terminalexperience.PresentationDocument {
 	blocks := []terminalexperience.PresentationBlock{{
 		Role: terminalexperience.VisualRoleActive,
 		Text: "Directory diff: " + start.LocalURL,

@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/hackycy/hackycy-cli/internal/logging"
-	"github.com/hackycy/hackycy-cli/internal/terminal"
 	configcommand "github.com/hackycy/hackycy-cli/pkg/cmd/config"
 	diffcommand "github.com/hackycy/hackycy-cli/pkg/cmd/diff"
 	exportcommand "github.com/hackycy/hackycy-cli/pkg/cmd/export"
@@ -157,12 +156,10 @@ func (app *App) rootCommandWithDiagnosticControls(controls diagnosticControls) *
 	root.AddCommand(fscommand.NewCmdFS(app.factory, nil))
 	root.AddCommand(tunnelcommand.NewCmdTunnel(app.factory))
 	root.AddCommand(upgradecommand.NewCmdUpgrade(app.factory, nil))
-	if app.factory.Terminal.Session().Kind == terminal.RichInteractive {
-		discovery := newTerminalDiscoveryAdapter(app.factory.Terminal)
-		root.SetHelpFunc(func(command *cobra.Command, _ []string) {
-			discovery.PresentDiscovery(command.Context(), newDiscoveryDocument(command))
-		})
-	}
+	discovery := newTerminalDiscoveryAdapter(app.factory.Terminal)
+	root.SetHelpFunc(func(command *cobra.Command, _ []string) {
+		discovery.PresentDiscovery(command.Context(), newDiscoveryDocument(command))
+	})
 	return root
 }
 

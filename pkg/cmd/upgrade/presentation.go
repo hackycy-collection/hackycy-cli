@@ -14,13 +14,8 @@ import (
 func PresentResult(ctx context.Context, experience *terminalexperience.Runtime, result updater.UpgradeResult, resultErr error) error {
 	run := experience.Open(ctx)
 	defer run.Close()
-	cleared := false
 	present := func(message string, role terminalexperience.VisualRole) error {
-		if err := run.Present(terminalUpgradeDocument(experience.Session(), message, role, !cleared)); err != nil {
-			return err
-		}
-		cleared = true
-		return nil
+		return run.Result(terminalUpgradeDocument(message, role))
 	}
 
 	if result.PreviousState != nil {
@@ -47,22 +42,8 @@ func PresentResult(ctx context.Context, experience *terminalexperience.Runtime, 
 	return nil
 }
 
-func terminalUpgradeDocument(session terminalexperience.Session, message string, role terminalexperience.VisualRole, clear bool) terminalexperience.PresentationDocument {
-	if session.Kind != terminalexperience.RichInteractive {
-		return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
-			Role: terminalexperience.VisualRolePlain,
-			Text: message,
-		}}}
-	}
-	blocks := make([]terminalexperience.PresentationBlock, 0, 2)
-	if clear {
-		blocks = append(blocks, terminalexperience.PresentationBlock{
-			Role: terminalexperience.VisualRoleTitle,
-			Text: "HACKYCY CLI",
-		})
-	}
-	blocks = append(blocks, terminalexperience.PresentationBlock{Role: role, Text: message})
-	return terminalexperience.PresentationDocument{ClearBefore: clear, Blocks: blocks}
+func terminalUpgradeDocument(message string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: message}}}
 }
 
 // StateMessage formats a persisted result for startup presentation.

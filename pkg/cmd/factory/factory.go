@@ -17,7 +17,7 @@ import (
 type Options struct {
 	Version           string
 	IOStreams         cmdutil.IOStreams
-	Session           terminal.Session
+	Capabilities      terminal.Capabilities
 	Environment       func(string) string
 	EnvironmentLookup func(string) (string, bool)
 	WorkingDirectory  func() (string, error)
@@ -33,15 +33,15 @@ type Options struct {
 func New(options Options) *cmdutil.Factory {
 	options = normalizeOptions(options)
 	terminalRuntime := terminal.NewExperience(terminal.ExperienceOptions{
-		Session:     options.Session,
-		Input:       options.IOStreams.In,
-		Output:      options.IOStreams.Out,
-		Diagnostics: options.IOStreams.ErrOut,
+		Capabilities: options.Capabilities,
+		Input:        options.IOStreams.In,
+		Output:       options.IOStreams.Out,
+		Diagnostics:  options.IOStreams.ErrOut,
 	})
 	loggingRuntime := logging.NewRuntime(logging.Options{
 		Writer: terminalRuntime.DiagnosticWriter(),
 		Now:    options.Now,
-		Color:  options.Session.Kind == terminal.RichInteractive && options.Session.Color,
+		Color:  options.Capabilities.Stderr.Color,
 	})
 
 	return &cmdutil.Factory{

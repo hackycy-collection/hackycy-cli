@@ -19,7 +19,7 @@ func TestTerminalTunnelConnectionAdapterTranslatesSelectionAndCancellation(t *te
 	}
 	experience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Value: "second"}})
 	run := experience.Open(context.Background())
-	selected, cancelled, err := newTerminalTunnelConnectionAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true}).Select(context.Background(), connections)
+	selected, cancelled, err := newTerminalTunnelConnectionAdapter(run).Select(context.Background(), connections)
 	if err != nil || cancelled || selected != "second" {
 		t.Fatalf("Select() = (%q, %t, %v)", selected, cancelled, err)
 	}
@@ -44,7 +44,7 @@ func TestTerminalTunnelConnectionAdapterTranslatesSelectionAndCancellation(t *te
 
 	cancelledExperience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrInteractionCancelled})
 	cancelledRun := cancelledExperience.Open(context.Background())
-	selected, cancelled, err = newTerminalTunnelConnectionAdapter(cancelledRun, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true}).Select(context.Background(), connections)
+	selected, cancelled, err = newTerminalTunnelConnectionAdapter(cancelledRun).Select(context.Background(), connections)
 	if err != nil || !cancelled || selected != "" {
 		t.Fatalf("cancelled Select() = (%q, %t, %v)", selected, cancelled, err)
 	}
@@ -52,7 +52,7 @@ func TestTerminalTunnelConnectionAdapterTranslatesSelectionAndCancellation(t *te
 		t.Fatalf("Close() error = %v", err)
 	}
 	cancelledOperations := cancelledExperience.Run.Operations()
-	if len(cancelledOperations) != 3 || cancelledOperations[1].Kind != terminaltest.PresentOperation || !reflect.DeepEqual(cancelledOperations[1].Value.(terminalexperience.PresentationDocument).Blocks, []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleWarning, Text: "Cancelled"}}) {
+	if len(cancelledOperations) != 3 || cancelledOperations[1].Kind != terminaltest.ResultOperation || !reflect.DeepEqual(cancelledOperations[1].Value.(terminalexperience.PresentationDocument).Blocks, []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleWarning, Text: "Cancelled"}}) {
 		t.Fatalf("cancelled operations = %#v", cancelledOperations)
 	}
 }
@@ -64,13 +64,13 @@ func TestTerminalTunnelConnectionAdapterPlainPreservesNumberedInputCancellationA
 	}
 	stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Input:       strings.NewReader("wrong\n2\n"),
-		Output:      stdout,
-		Diagnostics: diagnostics,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader("wrong\n2\n"),
+		Output:       stdout,
+		Diagnostics:  diagnostics,
 	})
 	run := experience.Open(context.Background())
-	selected, cancelled, err := newTerminalTunnelConnectionAdapter(run, experience.Session()).Select(context.Background(), connections)
+	selected, cancelled, err := newTerminalTunnelConnectionAdapter(run).Select(context.Background(), connections)
 	if err != nil || cancelled || selected != "second" || stdout.Len() != 0 || !strings.Contains(diagnostics.String(), "Invalid selection") || !strings.Contains(diagnostics.String(), "abcdefgh********wxyz") || !strings.Contains(diagnostics.String(), "***********") || strings.Contains(diagnostics.String(), "abcdefgh01234567wxyz") || strings.Contains(diagnostics.String(), "short-token") || terminaltest.ContainsTerminalControl(append(stdout.Bytes(), diagnostics.Bytes()...)) {
 		t.Fatalf("Plain Select() = (%q, %t, %v), streams = (%q, %q)", selected, cancelled, err, stdout.String(), diagnostics.String())
 	}
@@ -82,13 +82,13 @@ func TestTerminalTunnelConnectionAdapterPlainPreservesNumberedInputCancellationA
 		t.Run(input, func(t *testing.T) {
 			stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-				Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-				Input:       strings.NewReader(input),
-				Output:      stdout,
-				Diagnostics: diagnostics,
+				Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+				Input:        strings.NewReader(input),
+				Output:       stdout,
+				Diagnostics:  diagnostics,
 			})
 			run := experience.Open(context.Background())
-			selected, cancelled, err := newTerminalTunnelConnectionAdapter(run, experience.Session()).Select(context.Background(), connections)
+			selected, cancelled, err := newTerminalTunnelConnectionAdapter(run).Select(context.Background(), connections)
 			if err != nil || !cancelled || selected != "" || stdout.String() != "Cancelled\n" || terminaltest.ContainsTerminalControl(append(stdout.Bytes(), diagnostics.Bytes()...)) {
 				t.Fatalf("Select() = (%q, %t, %v), streams = (%q, %q)", selected, cancelled, err, stdout.String(), diagnostics.String())
 			}
@@ -102,10 +102,10 @@ func TestTerminalTunnelConnectionAdapterPlainPreservesNumberedInputCancellationA
 func TestTunnelConnectionSelectorLeavesAutomationResolutionAmbiguousWithoutReadingInput(t *testing.T) {
 	stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
-		Input:       panicTunnelReader{},
-		Output:      stdout,
-		Diagnostics: diagnostics,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+		Input:        panicTunnelReader{},
+		Output:       stdout,
+		Diagnostics:  diagnostics,
 	})
 	selector := terminalTunnelConnectionSelectorFor(experience)
 	if selector != nil {

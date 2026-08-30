@@ -31,14 +31,14 @@ func runFS(options *Options) error {
 	}
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	if err := run.Present(terminalFSStartupDocument(options.Terminal.Session(), operation.Startup)); err != nil {
+	if err := run.Result(terminalFSStartupDocument(operation.Startup)); err != nil {
 		_ = operation.Close()
 		return err
 	}
 	if err := operation.Wait(options.Context); err != nil {
 		return err
 	}
-	if err := run.Present(terminalFSStoppedDocument(options.Terminal.Session())); err != nil {
+	if err := run.Result(terminalFSStoppedDocument()); err != nil {
 		return err
 	}
 	return nil
@@ -85,13 +85,7 @@ func fsNetworkIP(address net.Addr) (netip.Addr, bool) {
 	return parsed.Unmap(), true
 }
 
-func terminalFSStartupDocument(session terminalexperience.Session, start Startup) terminalexperience.PresentationDocument {
-	if session.Kind != terminalexperience.RichInteractive {
-		return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
-			Role: terminalexperience.VisualRolePlain,
-			Text: terminalFSStartupPlainText(start),
-		}}}
-	}
+func terminalFSStartupDocument(start Startup) terminalexperience.PresentationDocument {
 	blocks := []terminalexperience.PresentationBlock{{
 		Role: terminalexperience.VisualRoleActive,
 		Text: "File Browser",
@@ -116,13 +110,9 @@ func terminalFSStartupDocument(session terminalexperience.Session, start Startup
 	return terminalexperience.PresentationDocument{Blocks: blocks}
 }
 
-func terminalFSStoppedDocument(session terminalexperience.Session) terminalexperience.PresentationDocument {
-	role := terminalexperience.VisualRolePlain
-	if session.Kind == terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRoleSuccess
-	}
+func terminalFSStoppedDocument() terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
-		Role: role,
+		Role: terminalexperience.VisualRoleSuccess,
 		Text: "File Browser stopped.",
 	}}}
 }

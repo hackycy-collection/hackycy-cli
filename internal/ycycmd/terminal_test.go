@@ -40,8 +40,25 @@ func TestNewProcessFactsPreservesInheritedStreamsAndSession(t *testing.T) {
 	if facts.IOStreams.In != input || facts.IOStreams.Out != output || facts.IOStreams.ErrOut != diagnostics {
 		t.Fatal("process facts did not preserve the inherited stream identities")
 	}
-	if got, want := facts.Session, (terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true}); got != want {
-		t.Fatalf("process session = %#v, want %#v", got, want)
+	wantCapabilities := terminalexperience.Capabilities{
+		Interaction: terminalexperience.RichInteractive,
+		Stdin:       terminalexperience.StreamCapability{Terminal: true},
+		Stdout:      terminalexperience.StreamCapability{Terminal: true, Color: true},
+		Stderr:      terminalexperience.StreamCapability{Terminal: true, Color: true},
+	}
+	if got := facts.Capabilities; got != wantCapabilities {
+		t.Fatalf("process capabilities = %#v, want %#v", got, wantCapabilities)
+	}
+}
+
+func TestIsTerminalRejectsCharacterDevicesWithoutTTYSemantics(t *testing.T) {
+	device, err := os.Open(os.DevNull)
+	if err != nil {
+		t.Fatalf("open null device: %v", err)
+	}
+	defer device.Close()
+	if isTerminal(device) {
+		t.Fatal("null device was classified as a TTY")
 	}
 }
 
@@ -115,7 +132,7 @@ func TestRootTunnelServerDiagnosticsPreserveSessionStreamContracts(t *testing.T)
 	}
 }
 
-func TestRootTunnelServerDiagnosticsDeferUntilRendererLeaseCloses(t *testing.T) {
+func TestRootTunnelServerPlainDiagnosticsWriteImmediately(t *testing.T) {
 	input, err := os.CreateTemp(t.TempDir(), "stdin")
 	if err != nil {
 		t.Fatalf("create stdin: %v", err)
@@ -162,8 +179,8 @@ func TestRootTunnelServerDiagnosticsDeferUntilRendererLeaseCloses(t *testing.T) 
 		t.Fatalf("write normal diagnostic: %v", err)
 	}
 	runtime.Logger("tunnel.server").Info("logger diagnostic", nil)
-	if got := readRootDiagnostic(t, diagnostics); strings.Contains(got, "cobra diagnostic") || strings.Contains(got, "logger diagnostic") {
-		t.Fatalf("normal diagnostics wrote during an active lease: %q", got)
+	if got := readRootDiagnostic(t, diagnostics); !strings.Contains(got, "cobra diagnostic") || !strings.Contains(got, "logger diagnostic") {
+		t.Fatalf("Plain diagnostics did not write immediately: %q", got)
 	}
 
 	close(updates)
@@ -185,7 +202,7 @@ func TestRootTunnelServerDiagnosticsDeferUntilRendererLeaseCloses(t *testing.T) 
 		}
 	}
 	if strings.Index(got, "Scanning\n") > strings.Index(got, "cobra diagnostic\n") || strings.Index(got, "cobra diagnostic\n") > strings.Index(got, "logger diagnostic") {
-		t.Fatalf("diagnostics did not flush after renderer output in write order: %q", got)
+		t.Fatalf("diagnostics were not written in order: %q", got)
 	}
 }
 
@@ -212,8 +229,8 @@ func readRootDiagnostic(t *testing.T, file *os.File) string {
 
 func newCommandFactoryForProcessFacts(facts ProcessFacts) *cmdutil.Factory {
 	return commandfactory.New(commandfactory.Options{
-		Version:   "0.0.0-dev",
-		IOStreams: facts.IOStreams,
-		Session:   facts.Session,
+		Version:      "0.0.0-dev",
+		IOStreams:    facts.IOStreams,
+		Capabilities: facts.Capabilities,
 	})
 }

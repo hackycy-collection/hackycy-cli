@@ -26,7 +26,7 @@ func TestTerminalZipAdapterTranslatesPlanningAndPresentation(t *testing.T) {
 		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Value: "custom archive"}},
 	)
 	run := experience.Open(context.Background())
-	adapter := newTerminalZipAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true})
+	adapter := newTerminalZipAdapter(run)
 	choices := []PlanningChoice{
 		{Value: "one", Label: "one", Hint: "first"},
 		{Value: "two", Label: "two", Hint: "second"},
@@ -61,7 +61,7 @@ func TestTerminalZipAdapterTranslatesPlanningAndPresentation(t *testing.T) {
 	}
 
 	operations := experience.Run.Operations()
-	if len(operations) != 10 || operations[0].Kind != terminaltest.AskOperation || operations[4].Kind != terminaltest.PresentOperation || operations[9].Kind != terminaltest.CloseOperation {
+	if len(operations) != 10 || operations[0].Kind != terminaltest.AskOperation || operations[4].Kind != terminaltest.NoticeOperation || operations[7].Kind != terminaltest.ResultOperation || operations[8].Kind != terminaltest.ResultOperation || operations[9].Kind != terminaltest.CloseOperation {
 		t.Fatalf("operations = %#v", operations)
 	}
 	packageRequest := operations[0].Value.(terminalexperience.InteractionRequest)
@@ -92,13 +92,13 @@ func TestTerminalZipAdapterTranslatesPlanningAndPresentation(t *testing.T) {
 func TestTerminalZipAdapterPlainPreservesLegacyInputGrammar(t *testing.T) {
 	stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Input:       strings.NewReader("invalid\n2\n\n2,3\n\nall\nnone\n\n custom archive \ncancel\n"),
-		Output:      stdout,
-		Diagnostics: diagnostics,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader("invalid\n2\n\n2,3\n\nall\nnone\n\n custom archive \ncancel\n"),
+		Output:       stdout,
+		Diagnostics:  diagnostics,
 	})
 	run := experience.Open(context.Background())
-	adapter := newTerminalZipAdapter(run, experience.Session())
+	adapter := newTerminalZipAdapter(run)
 	choices := []PlanningChoice{{Value: "one", Label: "one", Hint: "first"}, {Value: "two", Label: "two", Hint: "second"}, {Value: "three", Label: "three"}}
 	packageRoot, cancelled, err := adapter.SelectPackage(SelectPackageStep{Message: "Select a package to zip:", Options: choices})
 	if err != nil || cancelled || packageRoot != "two" {
@@ -141,13 +141,13 @@ func TestTerminalZipAdapterPlainPreservesLegacyInputGrammar(t *testing.T) {
 	for _, cancellation := range []string{"q", "quit", "cancel"} {
 		t.Run(cancellation, func(t *testing.T) {
 			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-				Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-				Input:       strings.NewReader(cancellation + "\n"),
-				Output:      io.Discard,
-				Diagnostics: io.Discard,
+				Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+				Input:        strings.NewReader(cancellation + "\n"),
+				Output:       io.Discard,
+				Diagnostics:  io.Discard,
 			})
 			run := experience.Open(context.Background())
-			_, cancelled, err := newTerminalZipAdapter(run, experience.Session()).SelectSource(SelectSourceStep{Options: choices})
+			_, cancelled, err := newTerminalZipAdapter(run).SelectSource(SelectSourceStep{Options: choices})
 			if err != nil || !cancelled {
 				t.Fatalf("SelectSource() cancellation = (%t, %v)", cancelled, err)
 			}
@@ -167,10 +167,10 @@ func TestZIPPlainJourneyCreatesAStructuralArchive(t *testing.T) {
 	withZIPWorkingDirectory(t, project)
 	stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Input:       strings.NewReader("\n\n\n"),
-		Output:      stdout,
-		Diagnostics: diagnostics,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader("\n\n\n"),
+		Output:       stdout,
+		Diagnostics:  diagnostics,
 	})
 
 	err := runZIP(&Options{
@@ -180,7 +180,7 @@ func TestZIPPlainJourneyCreatesAStructuralArchive(t *testing.T) {
 		WithDir:   "bundle",
 		Terminal:  experience,
 	})
-	if err != nil || !strings.Contains(stdout.String(), "Zip Directory") || !strings.Contains(stdout.String(), "Done!") || terminaltest.ContainsTerminalControl(append(stdout.Bytes(), diagnostics.Bytes()...)) {
+	if err != nil || stdout.String() != "Done!\n" || !strings.Contains(diagnostics.String(), "Zip Directory") || !strings.Contains(diagnostics.String(), "Collecting files") || terminaltest.ContainsTerminalControl(append(stdout.Bytes(), diagnostics.Bytes()...)) {
 		t.Fatalf("Plain zip = (%v), streams = (%q, %q)", err, stdout.String(), diagnostics.String())
 	}
 	archivePath := filepath.Join(project, "dist", "project.zip")

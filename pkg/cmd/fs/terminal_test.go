@@ -39,30 +39,30 @@ func TestTerminalFSPresentationPreservesPlainAndAutomationLifecycle(t *testing.T
 		"Authentication: true\n" +
 		"Session storage: /workspace/.ycy/sessions\n" +
 		"File Browser stopped.\n"
-	for _, session := range []terminalexperience.Session{
-		{Kind: terminalexperience.PlainInteractive},
-		{Kind: terminalexperience.Automation},
+	for _, session := range []terminalexperience.Capabilities{
+		{Interaction: terminalexperience.PlainInteractive},
+		{Interaction: terminalexperience.Automation},
 	} {
 		var output, diagnostics bytes.Buffer
-		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Session: session, Output: &output, Diagnostics: &diagnostics})
+		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Capabilities: session, Output: &output, Diagnostics: &diagnostics})
 		run := experience.Open(context.Background())
-		if err := run.Present(terminalFSStartupDocument(session, startup)); err != nil {
-			t.Fatalf("%v startup Present() error = %v", session.Kind, err)
+		if err := run.Result(terminalFSStartupDocument(startup)); err != nil {
+			t.Fatalf("%v startup Present() error = %v", session.Interaction, err)
 		}
-		if err := run.Present(terminalFSStoppedDocument(session)); err != nil {
-			t.Fatalf("%v stopped Present() error = %v", session.Kind, err)
+		if err := run.Result(terminalFSStoppedDocument()); err != nil {
+			t.Fatalf("%v stopped Present() error = %v", session.Interaction, err)
 		}
 		if err := run.Close(); err != nil {
-			t.Fatalf("%v Close() error = %v", session.Kind, err)
+			t.Fatalf("%v Close() error = %v", session.Interaction, err)
 		}
 		if output.String() != want {
-			t.Fatalf("%v presentation = %q, want %q", session.Kind, output.String(), want)
+			t.Fatalf("%v presentation = %q, want %q", session.Interaction, output.String(), want)
 		}
 		if terminaltest.ContainsTerminalControl(output.Bytes()) {
-			t.Fatalf("%v lifecycle contains terminal control: %q", session.Kind, output.String())
+			t.Fatalf("%v lifecycle contains terminal control: %q", session.Interaction, output.String())
 		}
 		if diagnostics.Len() != 0 {
-			t.Fatalf("%v lifecycle wrote stderr: %q", session.Kind, diagnostics.String())
+			t.Fatalf("%v lifecycle wrote stderr: %q", session.Interaction, diagnostics.String())
 		}
 	}
 }
@@ -93,46 +93,26 @@ func TestTerminalFSPresentationUsesRichSemanticRoles(t *testing.T) {
 		terminalexperience.VisualRoleMuted,
 		terminalexperience.VisualRoleMuted,
 	}
-	for _, session := range []terminalexperience.Session{
-		{Kind: terminalexperience.RichInteractive, Color: true},
-		{Kind: terminalexperience.RichInteractive},
-	} {
-		document := terminalFSStartupDocument(session, startup)
-		if document.ClearBefore || len(document.Blocks) != len(want) {
-			t.Fatalf("Rich document = %#v", document)
+	document := terminalFSStartupDocument(startup)
+	if len(document.Blocks) != len(want) {
+		t.Fatalf("document = %#v", document)
+	}
+	for index, role := range want {
+		if document.Blocks[index].Role != role {
+			t.Fatalf("block %d role = %v, want %v", index, document.Blocks[index].Role, role)
 		}
-		for index, role := range want {
-			if document.Blocks[index].Role != role {
-				t.Fatalf("Rich block %d role = %v, want %v", index, document.Blocks[index].Role, role)
-			}
-		}
-		stopped := terminalFSStoppedDocument(session)
-		if stopped.ClearBefore || len(stopped.Blocks) != 1 || stopped.Blocks[0].Role != terminalexperience.VisualRoleSuccess {
-			t.Fatalf("Rich stopped document = %#v", stopped)
-		}
-		var output bytes.Buffer
-		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Session: session, Output: &output})
-		run := experience.Open(context.Background())
-		if err := run.Present(document); err != nil {
-			t.Fatalf("startup Present() error = %v", err)
-		}
-		if err := run.Present(stopped); err != nil {
-			t.Fatalf("stopped Present() error = %v", err)
-		}
-		if err := run.Close(); err != nil {
-			t.Fatalf("Close() error = %v", err)
-		}
-		if !session.Color && strings.Contains(output.String(), "\x1b[") {
-			t.Fatalf("NO_COLOR Rich output contains style bytes: %q", output.String())
-		}
+	}
+	stopped := terminalFSStoppedDocument()
+	if len(stopped.Blocks) != 1 || stopped.Blocks[0].Role != terminalexperience.VisualRoleSuccess {
+		t.Fatalf("stopped document = %#v", stopped)
 	}
 }
 
 func TestRunFSClosesTheOperationWhenStartupPresentationFails(t *testing.T) {
 	output := &failingFSWriter{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session: terminalexperience.Session{Kind: terminalexperience.Automation},
-		Output:  output,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+		Output:       output,
 	})
 	err := runFS(&Options{
 		Context:  context.Background(),

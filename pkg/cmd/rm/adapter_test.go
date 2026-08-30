@@ -21,7 +21,7 @@ func TestTerminalRMAdapterTranslatesPromptClusterAndPresentation(t *testing.T) {
 		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Values: []string{"/project/dist"}}},
 	)
 	run := experience.Open(context.Background())
-	adapter := newTerminalRMAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true})
+	adapter := newTerminalRMAdapter(run)
 
 	confirmed, cancelled, err := adapter.ConfirmExplicit(ExplicitConfirmationPrompt{Message: "Delete 1 item?"})
 	if err != nil || cancelled || !confirmed {
@@ -51,7 +51,7 @@ func TestTerminalRMAdapterTranslatesPromptClusterAndPresentation(t *testing.T) {
 	}
 
 	operations := experience.Run.Operations()
-	if len(operations) != 11 || operations[0].Kind != terminaltest.AskOperation || operations[3].Kind != terminaltest.PresentOperation || operations[10].Kind != terminaltest.CloseOperation {
+	if len(operations) != 11 || operations[0].Kind != terminaltest.AskOperation || operations[3].Kind != terminaltest.NoticeOperation || operations[8].Kind != terminaltest.ResultOperation || operations[9].Kind != terminaltest.ResultOperation || operations[10].Kind != terminaltest.CloseOperation {
 		t.Fatalf("operations = %#v", operations)
 	}
 	confirm := operations[0].Value.(terminalexperience.InteractionRequest)
@@ -93,10 +93,10 @@ func TestTerminalRMAdapterPlainPreservesLegacyInputGrammarAndMutationBoundaries(
 		t.Run(testCase.name, func(t *testing.T) {
 			stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-				Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-				Input:       strings.NewReader(testCase.input),
-				Output:      stdout,
-				Diagnostics: diagnostics,
+				Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+				Input:        strings.NewReader(testCase.input),
+				Output:       stdout,
+				Diagnostics:  diagnostics,
 			})
 			withRMWorkingDirectory(t, root)
 
@@ -129,29 +129,24 @@ func TestRMAutomationPreservesForceAndNoTargetPathsAndFailsPromptPathsBeforeEffe
 	forcedTarget := writeStandaloneRMFile(t, root, "forced.txt")
 	promptTarget := writeStandaloneRMFile(t, root, "prompt.txt")
 	withRMWorkingDirectory(t, root)
-	workingDirectory, err := os.Getwd()
-	if err != nil {
-		t.Fatalf("get working directory: %v", err)
-	}
-
 	for _, testCase := range []struct {
 		name      string
 		input     Input
 		wantOut   string
 		wantError error
 	}{
-		{name: "force explicit", input: Input{Paths: []string{"forced.txt"}, Force: true}, wantOut: "HACKYCY CLI\n\nRemove\nDeleting 1 item...\nDeleted 1 item\nDone!\n"},
-		{name: "missing explicit", input: Input{Paths: []string{"missing.txt"}}, wantOut: "HACKYCY CLI\n\nRemove\n  not found, skipping: " + filepath.Join(workingDirectory, "missing.txt") + "\nNo valid paths to delete.\n"},
+		{name: "force explicit", input: Input{Paths: []string{"forced.txt"}, Force: true}, wantOut: "Done!\n"},
+		{name: "missing explicit", input: Input{Paths: []string{"missing.txt"}}, wantOut: "No valid paths to delete.\n"},
 		{name: "explicit confirmation", input: Input{Paths: []string{"prompt.txt"}}, wantError: errRMRequiresInteractive},
 		{name: "smart selection", input: Input{}, wantError: errRMRequiresInteractive},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-				Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
-				Input:       panicRMReader{},
-				Output:      stdout,
-				Diagnostics: diagnostics,
+				Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+				Input:        panicRMReader{},
+				Output:       stdout,
+				Diagnostics:  diagnostics,
 			})
 			err := runRMForTest(context.Background(), experience, testCase.input)
 			if testCase.wantError == nil {

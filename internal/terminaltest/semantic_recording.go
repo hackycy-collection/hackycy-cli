@@ -63,9 +63,15 @@ func (run *RecordingSemanticRun) Ask(request terminal.InteractionRequest) (termi
 	return answer.Value, answer.Err
 }
 
-// Present records a durable presentation document.
-func (run *RecordingSemanticRun) Present(document terminal.PresentationDocument) error {
-	run.record(PresentOperation, document)
+// Notice records transient command context.
+func (run *RecordingSemanticRun) Notice(document terminal.PresentationDocument) error {
+	run.record(NoticeOperation, document)
+	return nil
+}
+
+// Result records a durable presentation document.
+func (run *RecordingSemanticRun) Result(document terminal.PresentationDocument) error {
+	run.record(ResultOperation, document)
 	return nil
 }
 

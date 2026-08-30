@@ -15,7 +15,7 @@ var errRMRequiresInteractive = errors.New("rm requires an interactive terminal")
 func runRM(options *Options) error {
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	adapter := newTerminalRMAdapter(run, options.Terminal.Session())
+	adapter := newTerminalRMAdapter(run)
 	module, err := New(Dependencies{
 		WorkingDirectory: options.WorkingDirectory,
 		Prompter:         adapter,
@@ -25,24 +25,20 @@ func runRM(options *Options) error {
 	if err != nil {
 		return err
 	}
-	if _, err := module.Run(options.Context, Input{
+	_, err = module.Run(options.Context, Input{
 		Paths: options.Paths,
 		Force: options.Force,
 		Depth: options.Depth,
-	}); err != nil {
-		return err
-	}
-	return adapter.Flush()
+	})
+	return err
 }
 
 type terminalRMAdapter struct {
-	run     terminalexperience.ExperienceRun
-	session terminalexperience.Session
-	pending []terminalexperience.PresentationDocument
+	run terminalexperience.ExperienceRun
 }
 
-func newTerminalRMAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalRMAdapter {
-	return &terminalRMAdapter{run: run, session: session}
+func newTerminalRMAdapter(run terminalexperience.ExperienceRun) *terminalRMAdapter {
+	return &terminalRMAdapter{run: run}
 }
 
 func (adapter *terminalRMAdapter) ConfirmExplicit(prompt ExplicitConfirmationPrompt) (bool, bool, error) {
@@ -106,14 +102,10 @@ func (adapter *terminalRMAdapter) SelectSmartTargets(prompt SmartTargetPrompt) (
 }
 
 func (adapter *terminalRMAdapter) Intro(message string) {
-	if adapter.session.Kind == terminalexperience.RichInteractive {
-		adapter.present(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
-			{Role: terminalexperience.VisualRoleTitle, Text: "HACKYCY CLI"},
-			{Role: terminalexperience.VisualRoleActive, Text: message},
-		}})
-		return
-	}
-	adapter.present(terminalRMDocument(adapter.session, "HACKYCY CLI\n\n"+message, terminalexperience.VisualRolePlain))
+	_ = adapter.run.Notice(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
+		{Role: terminalexperience.VisualRoleTitle, Text: "HACKYCY CLI"},
+		{Role: terminalexperience.VisualRoleActive, Text: message},
+	}})
 }
 
 func (adapter *terminalRMAdapter) Paths(paths []string) {
@@ -125,40 +117,27 @@ func (adapter *terminalRMAdapter) Paths(paths []string) {
 		text.WriteByte('\n')
 	}
 	text.WriteByte('\n')
-	adapter.present(terminalRMDocument(adapter.session, text.String(), terminalexperience.VisualRoleMuted))
+	_ = adapter.run.Notice(terminalRMDocument(text.String(), terminalexperience.VisualRoleMuted))
 }
 
 func (adapter *terminalRMAdapter) Notice(message string) {
-	adapter.present(terminalRMDocument(adapter.session, message, terminalexperience.VisualRoleWarning))
+	_ = adapter.run.Notice(terminalRMDocument(message, terminalexperience.VisualRoleWarning))
 }
 
 func (adapter *terminalRMAdapter) ProgressStart(message string) {
-	adapter.present(terminalRMDocument(adapter.session, message, terminalexperience.VisualRoleActive))
+	_ = adapter.run.Notice(terminalRMDocument(message, terminalexperience.VisualRoleActive))
 }
 
 func (adapter *terminalRMAdapter) ProgressStop(message string) {
-	adapter.present(terminalRMDocument(adapter.session, message, terminalexperience.VisualRoleMuted))
+	_ = adapter.run.Notice(terminalRMDocument(message, terminalexperience.VisualRoleMuted))
 }
 
 func (adapter *terminalRMAdapter) Cancel(message string) {
-	adapter.present(terminalRMDocument(adapter.session, message, terminalexperience.VisualRoleWarning))
+	_ = adapter.run.Result(terminalRMDocument(message, terminalexperience.VisualRoleWarning))
 }
 
 func (adapter *terminalRMAdapter) Outro(message string) {
-	adapter.present(terminalRMDocument(adapter.session, message, terminalexperience.VisualRoleSuccess))
-}
-
-func (adapter *terminalRMAdapter) Flush() error {
-	if adapter.session.Kind != terminalexperience.Automation {
-		return nil
-	}
-	for _, document := range adapter.pending {
-		if err := adapter.run.Present(document); err != nil {
-			return err
-		}
-	}
-	adapter.pending = nil
-	return nil
+	_ = adapter.run.Result(terminalRMDocument(message, terminalexperience.VisualRoleSuccess))
 }
 
 func (adapter *terminalRMAdapter) ask(request terminalexperience.InteractionRequest) (terminalexperience.InteractionAnswer, bool, error) {
@@ -175,18 +154,7 @@ func (adapter *terminalRMAdapter) ask(request terminalexperience.InteractionRequ
 	return answer, false, nil
 }
 
-func (adapter *terminalRMAdapter) present(document terminalexperience.PresentationDocument) {
-	if adapter.session.Kind == terminalexperience.Automation {
-		adapter.pending = append(adapter.pending, document)
-		return
-	}
-	_ = adapter.run.Present(document)
-}
-
-func terminalRMDocument(session terminalexperience.Session, text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
-	if session.Kind != terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRolePlain
-	}
+func terminalRMDocument(text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
 }
 

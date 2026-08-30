@@ -30,7 +30,7 @@ func TestNewUsesExplicitProcessFacts(t *testing.T) {
 			Out:    output,
 			ErrOut: diagnostics,
 		},
-		Session:           terminal.Session{Kind: terminal.RichInteractive, Color: true},
+		Capabilities:      terminal.Capabilities{Interaction: terminal.RichInteractive},
 		Environment:       environment,
 		EnvironmentLookup: lookup,
 		WorkingDirectory:  workingDirectory,
@@ -41,7 +41,7 @@ func TestNewUsesExplicitProcessFacts(t *testing.T) {
 	if result.Version != "1.2.3" || result.IOStreams.In != input || result.IOStreams.Out != output || result.IOStreams.ErrOut != diagnostics {
 		t.Fatalf("Factory process facts = %#v", result)
 	}
-	if got := result.Terminal.Session(); got != (terminal.Session{Kind: terminal.RichInteractive, Color: true}) {
+	if got := result.Terminal.Capabilities(); got != (terminal.Capabilities{Interaction: terminal.RichInteractive}) {
 		t.Fatalf("Terminal session = %#v", got)
 	}
 	if result.Logging == nil || result.HTTPClient != client {

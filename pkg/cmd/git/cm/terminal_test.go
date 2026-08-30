@@ -19,7 +19,7 @@ func TestTerminalGitCMAdapterTranslatesFormsPhasesAndPresentation(t *testing.T) 
 		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Confirmed: true}},
 	)
 	run := experience.Open(context.Background())
-	adapter := newTerminalGitCMAdapter(run, terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true}, func() {})
+	adapter := newTerminalGitCMAdapter(run, func() {})
 	stagePrompt := StagePrompt{
 		Message:       "Select files to stage",
 		Options:       []StageOption{{Value: "one.go", Label: "M one.go"}, {Value: "two.go", Label: "A two.go"}},
@@ -59,26 +59,30 @@ func TestTerminalGitCMAdapterTranslatesFormsPhasesAndPresentation(t *testing.T) 
 	}
 
 	operations := experience.Run.Operations()
-	if len(operations) != 6 || operations[0].Kind != terminaltest.AskOperation || operations[1].Kind != terminaltest.AskOperation || operations[2].Kind != terminaltest.TrackOperation || operations[5].Kind != terminaltest.CloseOperation {
+	if len(operations) != 7 || operations[0].Kind != terminaltest.AskOperation || operations[1].Kind != terminaltest.NoticeOperation || operations[2].Kind != terminaltest.AskOperation || operations[3].Kind != terminaltest.TrackOperation || operations[4].Kind != terminaltest.ResultOperation || operations[5].Kind != terminaltest.ResultOperation || operations[6].Kind != terminaltest.CloseOperation {
 		t.Fatalf("operations = %#v", operations)
 	}
 	stageRequest := operations[0].Value.(terminalexperience.InteractionRequest)
 	if stageRequest.Kind != terminalexperience.InteractionMultiSelect || !stageRequest.HasDefault || !reflect.DeepEqual(stageRequest.Default.Values, stagePrompt.InitialValues) || !reflect.DeepEqual(stageRequest.CancelValues, []string{"q", "quit", "cancel"}) {
 		t.Fatalf("stage request = %#v", stageRequest)
 	}
-	commitRequest := operations[1].Value.(terminalexperience.InteractionRequest)
-	if commitRequest.Kind != terminalexperience.InteractionConfirm || !commitRequest.HasDefault || !commitRequest.Default.Confirmed || !strings.Contains(commitRequest.Description, "feat(cm): present output") || !strings.Contains(commitRequest.Description, "Profile: work (model)") {
+	preview := operations[1].Value.(terminalexperience.PresentationDocument)
+	if preview.Blocks[0].Role != terminalexperience.VisualRoleSuccess || !strings.Contains(preview.Blocks[0].Text, "feat(cm): present output") || !strings.Contains(terminalexperience.RenderPlain(preview), "Profile: work (model)") {
+		t.Fatalf("preview document = %#v", preview)
+	}
+	commitRequest := operations[2].Value.(terminalexperience.InteractionRequest)
+	if commitRequest.Kind != terminalexperience.InteractionConfirm || !commitRequest.HasDefault || !commitRequest.Default.Confirmed || commitRequest.Description != "" {
 		t.Fatalf("commit request = %#v", commitRequest)
 	}
-	operation := operations[2].Value.(terminalexperience.TrackedOperation)
+	operation := operations[3].Value.(terminalexperience.TrackedOperation)
 	if operation.Label != "Git CM" {
 		t.Fatalf("tracked operation = %#v", operation)
 	}
-	generated := operations[3].Value.(terminalexperience.PresentationDocument)
+	generated := operations[4].Value.(terminalexperience.PresentationDocument)
 	if generated.Blocks[0].Role != terminalexperience.VisualRoleSuccess || !strings.Contains(generated.Blocks[0].Text, "feat(cm): present output") {
 		t.Fatalf("generated document = %#v", generated)
 	}
-	outcome := operations[4].Value.(terminalexperience.PresentationDocument)
+	outcome := operations[5].Value.(terminalexperience.PresentationDocument)
 	if outcome.Blocks[0].Role != terminalexperience.VisualRoleSuccess || outcome.Blocks[0].Text != "Commit created" {
 		t.Fatalf("outcome document = %#v", outcome)
 	}
@@ -86,13 +90,13 @@ func TestTerminalGitCMAdapterTranslatesFormsPhasesAndPresentation(t *testing.T) 
 
 func TestTerminalGitCMAdapterMapsCancellationAndAutomationInteraction(t *testing.T) {
 	cancelledExperience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrInteractionCancelled})
-	cancelledAdapter := newTerminalGitCMAdapter(cancelledExperience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.RichInteractive}, func() {})
+	cancelledAdapter := newTerminalGitCMAdapter(cancelledExperience.Open(context.Background()), func() {})
 	if _, cancelled, err := cancelledAdapter.SelectFiles(StagePrompt{}); err != nil || !cancelled {
 		t.Fatalf("SelectFiles() = (%t, %v)", cancelled, err)
 	}
 
 	automationExperience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrAutomationInteraction})
-	automationAdapter := newTerminalGitCMAdapter(automationExperience.Open(context.Background()), terminalexperience.Session{Kind: terminalexperience.Automation}, func() {})
+	automationAdapter := newTerminalGitCMAdapter(automationExperience.Open(context.Background()), func() {})
 	if _, _, err := automationAdapter.ConfirmCommit(CommitPrompt{}); !errors.Is(err, errGitCMRequiresInteractive) {
 		t.Fatalf("ConfirmCommit() error = %v", err)
 	}
@@ -108,22 +112,22 @@ func TestGitCMPlainJourneyKeepsFormsAndPhasesOnStderr(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Input:       strings.NewReader("1\n\n"),
-		Output:      stdout,
-		Diagnostics: stderr,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader("1\n\n"),
+		Output:       stdout,
+		Diagnostics:  stderr,
 	})
 
 	result, err := executeCMForTest(context.Background(), experience, Input{Stage: true})
 	if err != nil || !result.Committed || result.Pushed || provider.calls != 1 {
 		t.Fatalf("Run() = (%#v, %v), provider calls = %d", result, err, provider.calls)
 	}
-	for _, expected := range []string{"feat(cm): plain tracked journey", "Profile: env (fixture-model)", "Commit created"} {
+	for _, expected := range []string{"Commit created"} {
 		if !strings.Contains(stdout.String(), expected) {
 			t.Fatalf("stdout omitted %q: %q", expected, stdout.String())
 		}
 	}
-	for _, expected := range []string{"Select files to stage", "1) A README.md", "Staging selected files", "Collecting changes", "Generating commit message", "Create this commit? [Y/n]:", "Creating commit"} {
+	for _, expected := range []string{"Select files to stage", "1) A README.md", "Staging selected files", "Collecting changes", "Generating commit message", "feat(cm): plain tracked journey", "Profile: env (fixture-model)", "Create this commit? [Y/n]:", "Creating commit"} {
 		if !strings.Contains(stderr.String(), expected) {
 			t.Fatalf("stderr omitted %q: %q", expected, stderr.String())
 		}
@@ -186,10 +190,10 @@ func TestGitCMAutomationFailsBeforePromptDependentMutationOrOutput(t *testing.T)
 			stdout := &bytes.Buffer{}
 			stderr := &bytes.Buffer{}
 			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-				Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
-				Input:       panicGitCMReader{},
-				Output:      stdout,
-				Diagnostics: stderr,
+				Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+				Input:        panicGitCMReader{},
+				Output:       stdout,
+				Diagnostics:  stderr,
 			})
 			_, err := executeCMForTest(context.Background(), experience, testCase.input)
 			if !errors.Is(err, errGitCMRequiresInteractive) || stdout.Len() != 0 || stderr.Len() != 0 {
@@ -218,10 +222,10 @@ func TestGitCMGenerationOnlyAutomationRetainsTheDurableResult(t *testing.T) {
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
-		Input:       panicGitCMReader{},
-		Output:      stdout,
-		Diagnostics: stderr,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+		Input:        panicGitCMReader{},
+		Output:       stdout,
+		Diagnostics:  stderr,
 	})
 
 	result, err := executeCMForTest(context.Background(), experience, Input{DryRun: true})
@@ -252,10 +256,10 @@ func TestExecuteCMPresentsCommittedPartialOutcomeAfterPushFailure(t *testing.T) 
 	stdout := &bytes.Buffer{}
 	stderr := &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Input:       strings.NewReader("\n"),
-		Output:      stdout,
-		Diagnostics: stderr,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader("\n"),
+		Output:       stdout,
+		Diagnostics:  stderr,
 	})
 
 	remote := "origin"
@@ -263,10 +267,10 @@ func TestExecuteCMPresentsCommittedPartialOutcomeAfterPushFailure(t *testing.T) 
 	if err == nil || !result.Committed || result.Pushed || result.PushRemote != "" || provider.calls != 1 {
 		t.Fatalf("Run() = (%#v, %v), provider calls = %d", result, err, provider.calls)
 	}
-	if !strings.Contains(stdout.String(), "feat(cm): retain partial commit") || !strings.Contains(stdout.String(), "Commit created") || strings.Contains(stdout.String(), "Commit created and pushed") {
+	if !strings.Contains(stdout.String(), "Commit created") || strings.Contains(stdout.String(), "feat(cm): retain partial commit") || strings.Contains(stdout.String(), "Commit created and pushed") {
 		t.Fatalf("partial stdout = %q", stdout.String())
 	}
-	if !strings.Contains(stderr.String(), "Pushing commit") {
+	if !strings.Contains(stderr.String(), "feat(cm): retain partial commit") || !strings.Contains(stderr.String(), "Pushing commit") {
 		t.Fatalf("partial stderr = %q", stderr.String())
 	}
 	if afterHead := gitCMOutput(t, repository, "rev-parse", "HEAD"); afterHead == beforeHead {
@@ -289,11 +293,11 @@ func TestGitCMDocumentsPreserveTheExistingPlainResults(t *testing.T) {
 		{result: Result{Committed: true}, want: "Commit created\n"},
 		{result: Result{Pushed: true}, want: "Commit created and pushed\n"},
 	} {
-		if got := terminalexperience.RenderPlain(gitCMOutcomeDocument(terminalexperience.Session{Kind: terminalexperience.PlainInteractive}, testCase.result)); got != testCase.want {
+		if got := terminalexperience.RenderPlain(gitCMOutcomeDocument(testCase.result)); got != testCase.want {
 			t.Fatalf("Outcome(%#v) = %q, want %q", testCase.result, got, testCase.want)
 		}
 	}
-	generated := gitCMGeneratedDocument(terminalexperience.Session{Kind: terminalexperience.PlainInteractive}, GeneratedMessage{Message: "feat(cm): compact", Evidence: EvidenceCoverage{EstimatedLocalPromptTokens: 4000, RepresentedClusters: 2, TotalClusters: 3, IncludedFacts: 18, OmittedFacts: 13, ContentCompacted: true}}, ProfileDiagnostic{Name: "work", Model: "model"})
+	generated := gitCMGeneratedDocument(GeneratedMessage{Message: "feat(cm): compact", Evidence: EvidenceCoverage{EstimatedLocalPromptTokens: 4000, RepresentedClusters: 2, TotalClusters: 3, IncludedFacts: 18, OmittedFacts: 13, ContentCompacted: true}}, ProfileDiagnostic{Name: "work", Model: "model"})
 	if got := terminalexperience.RenderPlain(generated); !strings.Contains(got, "Provider tokens: unavailable") || !strings.Contains(got, "4,000") || !strings.Contains(got, "3 clusters represented with compacted semantic evidence") {
 		t.Fatalf("generated output = %q", got)
 	}

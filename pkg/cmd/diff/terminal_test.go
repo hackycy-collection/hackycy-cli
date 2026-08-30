@@ -7,7 +7,6 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
-	"strings"
 	"testing"
 
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
@@ -30,27 +29,27 @@ func TestTerminalDiffPresentationPreservesPlainAndAutomationReadiness(t *testing
 		"Network MCP: http://10.0.0.8:43123/mcp\n" +
 		"Baseline: /workspace/baseline\n" +
 		"Target:   /workspace/target\n"
-	for _, session := range []terminalexperience.Session{
-		{Kind: terminalexperience.PlainInteractive},
-		{Kind: terminalexperience.Automation},
+	for _, session := range []terminalexperience.Capabilities{
+		{Interaction: terminalexperience.PlainInteractive},
+		{Interaction: terminalexperience.Automation},
 	} {
 		var output, diagnostics bytes.Buffer
-		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Session: session, Output: &output, Diagnostics: &diagnostics})
+		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Capabilities: session, Output: &output, Diagnostics: &diagnostics})
 		run := experience.Open(context.Background())
-		if err := run.Present(terminalDiffStartupDocument(session, startup)); err != nil {
-			t.Fatalf("%v Present() error = %v", session.Kind, err)
+		if err := run.Result(terminalDiffStartupDocument(startup)); err != nil {
+			t.Fatalf("%v Present() error = %v", session.Interaction, err)
 		}
 		if err := run.Close(); err != nil {
-			t.Fatalf("%v Close() error = %v", session.Kind, err)
+			t.Fatalf("%v Close() error = %v", session.Interaction, err)
 		}
 		if output.String() != want {
-			t.Fatalf("%v presentation = %q, want %q", session.Kind, output.String(), want)
+			t.Fatalf("%v presentation = %q, want %q", session.Interaction, output.String(), want)
 		}
 		if terminaltest.ContainsTerminalControl(output.Bytes()) {
-			t.Fatalf("%v readiness contains terminal control: %q", session.Kind, output.String())
+			t.Fatalf("%v readiness contains terminal control: %q", session.Interaction, output.String())
 		}
 		if diagnostics.Len() != 0 {
-			t.Fatalf("%v readiness wrote stderr: %q", session.Kind, diagnostics.String())
+			t.Fatalf("%v readiness wrote stderr: %q", session.Interaction, diagnostics.String())
 		}
 	}
 }
@@ -62,38 +61,21 @@ func TestTerminalDiffPresentationUsesRichSemanticRoles(t *testing.T) {
 		BaselineDirectory: "/workspace/baseline",
 		TargetDirectory:   "/workspace/target",
 	}
-	for _, session := range []terminalexperience.Session{
-		{Kind: terminalexperience.RichInteractive, Color: true},
-		{Kind: terminalexperience.RichInteractive},
-	} {
-		document := terminalDiffStartupDocument(session, startup)
-		want := []terminalexperience.VisualRole{
-			terminalexperience.VisualRoleActive,
-			terminalexperience.VisualRoleMuted,
-			terminalexperience.VisualRoleActive,
-			terminalexperience.VisualRoleMuted,
-			terminalexperience.VisualRoleMuted,
-			terminalexperience.VisualRoleMuted,
-		}
-		if document.ClearBefore || len(document.Blocks) != len(want) {
-			t.Fatalf("Rich document = %#v", document)
-		}
-		for index, role := range want {
-			if document.Blocks[index].Role != role {
-				t.Fatalf("Rich block %d role = %v, want %v", index, document.Blocks[index].Role, role)
-			}
-		}
-		var output bytes.Buffer
-		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Session: session, Output: &output})
-		run := experience.Open(context.Background())
-		if err := run.Present(document); err != nil {
-			t.Fatalf("Present() error = %v", err)
-		}
-		if err := run.Close(); err != nil {
-			t.Fatalf("Close() error = %v", err)
-		}
-		if !session.Color && strings.Contains(output.String(), "\x1b[") {
-			t.Fatalf("NO_COLOR Rich output contains style bytes: %q", output.String())
+	document := terminalDiffStartupDocument(startup)
+	want := []terminalexperience.VisualRole{
+		terminalexperience.VisualRoleActive,
+		terminalexperience.VisualRoleMuted,
+		terminalexperience.VisualRoleActive,
+		terminalexperience.VisualRoleMuted,
+		terminalexperience.VisualRoleMuted,
+		terminalexperience.VisualRoleMuted,
+	}
+	if len(document.Blocks) != len(want) {
+		t.Fatalf("document = %#v", document)
+	}
+	for index, role := range want {
+		if document.Blocks[index].Role != role {
+			t.Fatalf("block %d role = %v, want %v", index, document.Blocks[index].Role, role)
 		}
 	}
 }

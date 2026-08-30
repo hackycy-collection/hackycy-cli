@@ -16,7 +16,7 @@ var errZipRequiresInteractive = errors.New("zip requires an interactive terminal
 func runZIP(options *Options) error {
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	adapter := newTerminalZipAdapter(run, options.Terminal.Session())
+	adapter := newTerminalZipAdapter(run)
 	module, err := New(Dependencies{
 		Prompter:           adapter,
 		Presenter:          adapter,
@@ -26,24 +26,20 @@ func runZIP(options *Options) error {
 	if err != nil {
 		return err
 	}
-	if _, err := module.Run(Input{
+	_, err = module.Run(Input{
 		Directory: options.Directory,
 		Open:      options.Open,
 		WithDir:   options.WithDir,
-	}); err != nil {
-		return err
-	}
-	return adapter.Flush()
+	})
+	return err
 }
 
 type terminalZipAdapter struct {
-	run     terminalexperience.ExperienceRun
-	session terminalexperience.Session
-	pending []terminalexperience.PresentationDocument
+	run terminalexperience.ExperienceRun
 }
 
-func newTerminalZipAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalZipAdapter {
-	return &terminalZipAdapter{run: run, session: session}
+func newTerminalZipAdapter(run terminalexperience.ExperienceRun) *terminalZipAdapter {
+	return &terminalZipAdapter{run: run}
 }
 
 func (adapter *terminalZipAdapter) SelectPackage(step SelectPackageStep) (string, bool, error) {
@@ -91,51 +87,29 @@ func (adapter *terminalZipAdapter) EditOutputFile(step EditOutputFileStep) (stri
 }
 
 func (adapter *terminalZipAdapter) Intro() {
-	if adapter.session.Kind == terminalexperience.RichInteractive {
-		adapter.present(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
-			{Role: terminalexperience.VisualRoleTitle, Text: "HACKYCY CLI"},
-			{Role: terminalexperience.VisualRoleActive, Text: "Zip Directory"},
-		}})
-		return
-	}
-	adapter.present(terminalZipDocument(adapter.session, "HACKYCY CLI\n\nZip Directory", terminalexperience.VisualRolePlain))
+	_ = adapter.run.Notice(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
+		{Role: terminalexperience.VisualRoleTitle, Text: "HACKYCY CLI"},
+		{Role: terminalexperience.VisualRoleActive, Text: "Zip Directory"},
+	}})
 }
 
 func (adapter *terminalZipAdapter) Note(note PlanningNote) {
-	if adapter.session.Kind == terminalexperience.RichInteractive {
-		adapter.present(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
-			{Role: terminalexperience.VisualRoleActive, Text: note.Title},
-			{Role: terminalexperience.VisualRoleMuted, Text: strings.Join(note.Lines, "\n")},
-		}})
-		return
-	}
-	lines := append([]string{note.Title}, note.Lines...)
-	adapter.present(terminalZipDocument(adapter.session, strings.Join(lines, "\n"), terminalexperience.VisualRolePlain))
+	_ = adapter.run.Notice(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
+		{Role: terminalexperience.VisualRoleActive, Text: note.Title},
+		{Role: terminalexperience.VisualRoleMuted, Text: strings.Join(note.Lines, "\n")},
+	}})
 }
 
 func (adapter *terminalZipAdapter) Progress(message string) {
-	adapter.present(terminalZipDocument(adapter.session, message, terminalexperience.VisualRoleActive))
+	_ = adapter.run.Notice(terminalZipDocument(message, terminalexperience.VisualRoleActive))
 }
 
 func (adapter *terminalZipAdapter) Cancel(message string) {
-	adapter.present(terminalZipDocument(adapter.session, message, terminalexperience.VisualRoleWarning))
+	_ = adapter.run.Result(terminalZipDocument(message, terminalexperience.VisualRoleWarning))
 }
 
 func (adapter *terminalZipAdapter) Outro(message string) {
-	adapter.present(terminalZipDocument(adapter.session, message, terminalexperience.VisualRoleSuccess))
-}
-
-func (adapter *terminalZipAdapter) Flush() error {
-	if adapter.session.Kind != terminalexperience.Automation {
-		return nil
-	}
-	for _, document := range adapter.pending {
-		if err := adapter.run.Present(document); err != nil {
-			return err
-		}
-	}
-	adapter.pending = nil
-	return nil
+	_ = adapter.run.Result(terminalZipDocument(message, terminalexperience.VisualRoleSuccess))
 }
 
 func (adapter *terminalZipAdapter) ask(request terminalexperience.InteractionRequest) (terminalexperience.InteractionAnswer, bool, error) {
@@ -150,14 +124,6 @@ func (adapter *terminalZipAdapter) ask(request terminalexperience.InteractionReq
 		return terminalexperience.InteractionAnswer{}, false, err
 	}
 	return answer, false, nil
-}
-
-func (adapter *terminalZipAdapter) present(document terminalexperience.PresentationDocument) {
-	if adapter.session.Kind == terminalexperience.Automation {
-		adapter.pending = append(adapter.pending, document)
-		return
-	}
-	_ = adapter.run.Present(document)
 }
 
 func zipChoiceRequest(message string, choices []PlanningChoice) terminalexperience.InteractionRequest {
@@ -192,10 +158,7 @@ func zipInteractionOptions(choices []PlanningChoice) []terminalexperience.Intera
 	return options
 }
 
-func terminalZipDocument(session terminalexperience.Session, text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
-	if session.Kind != terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRolePlain
-	}
+func terminalZipDocument(text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
 }
 

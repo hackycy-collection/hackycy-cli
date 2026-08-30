@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"errors"
 	"io"
 	"sync"
 )
@@ -55,16 +56,16 @@ func (writer *LeaseAwareDiagnosticWriter) releaseRendererLease() error {
 	writer.leased = false
 	pending := writer.pending
 	writer.pending = nil
-	var firstErr error
+	var flushErrors []error
 	for _, value := range pending {
 		_, err := writer.destination.Write(value)
-		if err != nil && firstErr == nil {
-			firstErr = err
+		if err != nil {
+			flushErrors = append(flushErrors, err)
 		}
 	}
 	writer.mu.Unlock()
 	writer.leaseMu.Unlock()
-	return firstErr
+	return errors.Join(flushErrors...)
 }
 
 // RendererLease is exclusive temporary access to a diagnostic stream for one view.

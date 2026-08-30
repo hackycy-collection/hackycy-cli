@@ -18,8 +18,8 @@ func TestRunDiffClosesTheForegroundServerAfterPresentationCancellation(t *testin
 	defer cancel()
 	var output bytes.Buffer
 	experience := terminal.NewExperience(terminal.ExperienceOptions{
-		Session: terminal.Session{Kind: terminal.Automation},
-		Output:  &cancelAfterWrite{Writer: &output, Cancel: cancel},
+		Capabilities: terminal.Capabilities{Interaction: terminal.Automation},
+		Output:       &cancelAfterWrite{Writer: &output, Cancel: cancel},
 	})
 
 	err := runDiff(&Options{

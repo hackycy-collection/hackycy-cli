@@ -60,15 +60,11 @@ func executeUse(options *Options) error {
 	}
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	return run.Present(terminalCMUseDocument(options.Terminal.Session(), result))
+	return run.Result(terminalCMUseDocument(result))
 }
 
-func terminalCMUseDocument(session terminalexperience.Session, result UseResult) terminalexperience.PresentationDocument {
-	role := terminalexperience.VisualRolePlain
-	if session.Kind == terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRoleSuccess
-	}
-	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: fmt.Sprintf("Default CM profile set to %s", result.Profile)}}}
+func terminalCMUseDocument(result UseResult) terminalexperience.PresentationDocument {
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleSuccess, Text: fmt.Sprintf("Default CM profile set to %s", result.Profile)}}}
 }
 
 var _ UseWriter = (*appconfig.Store)(nil)

@@ -12,23 +12,22 @@ import (
 )
 
 func terminalTunnelConnectionSelectorFor(experience *terminalexperience.Runtime) ClientConnectionSelector {
-	if experience == nil || experience.Session().Kind == terminalexperience.Automation {
+	if experience == nil || experience.Capabilities().Interaction == terminalexperience.Automation {
 		return nil
 	}
 	return func(ctx context.Context, connections []appconfig.TunnelConnection) (string, bool, error) {
 		run := experience.Open(ctx)
 		defer run.Close()
-		return newTerminalTunnelConnectionAdapter(run, experience.Session()).Select(ctx, connections)
+		return newTerminalTunnelConnectionAdapter(run).Select(ctx, connections)
 	}
 }
 
 type terminalTunnelConnectionAdapter struct {
-	run     terminalexperience.ExperienceRun
-	session terminalexperience.Session
+	run terminalexperience.ExperienceRun
 }
 
-func newTerminalTunnelConnectionAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalTunnelConnectionAdapter {
-	return &terminalTunnelConnectionAdapter{run: run, session: session}
+func newTerminalTunnelConnectionAdapter(run terminalexperience.ExperienceRun) *terminalTunnelConnectionAdapter {
+	return &terminalTunnelConnectionAdapter{run: run}
 }
 
 func (adapter *terminalTunnelConnectionAdapter) Select(_ context.Context, connections []appconfig.TunnelConnection) (string, bool, error) {
@@ -44,7 +43,7 @@ func (adapter *terminalTunnelConnectionAdapter) Select(_ context.Context, connec
 		},
 	})
 	if errors.Is(err, terminalexperience.ErrInteractionCancelled) {
-		_ = adapter.run.Present(terminalTunnelConnectionDocument(adapter.session, "Cancelled"))
+		_ = adapter.run.Result(terminalTunnelConnectionDocument("Cancelled"))
 		return "", true, nil
 	}
 	if err != nil {
@@ -72,12 +71,8 @@ func parseTunnelConnectionSelection(value string, connections []appconfig.Tunnel
 	return terminalexperience.InteractionAnswer{Value: connections[index-1].ID}, nil
 }
 
-func terminalTunnelConnectionDocument(session terminalexperience.Session, text string) terminalexperience.PresentationDocument {
-	role := terminalexperience.VisualRolePlain
-	if session.Kind == terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRoleWarning
-	}
-	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
+func terminalTunnelConnectionDocument(text string) terminalexperience.PresentationDocument {
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleWarning, Text: text}}}
 }
 
 func maskTunnelToken(token string) string {

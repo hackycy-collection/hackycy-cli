@@ -41,9 +41,9 @@ func TestDispatchThumbnailWorkerKeepsPrivateRouteBounded(t *testing.T) {
 func TestVersionFlagsSkipStartupResultConsumption(t *testing.T) {
 	output, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
-		Output:      output,
-		Diagnostics: diagnostics,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+		Output:       output,
+		Diagnostics:  diagnostics,
 	})
 	if err := consumeUpgradeStartup([]string{"--version"}, experience); err != nil {
 		t.Fatal(err)
@@ -69,9 +69,9 @@ func TestConsumeUpgradeStartupReportsCompletedAndBlocksPending(t *testing.T) {
 			state.Status = testCase.status
 			output, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
 			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-				Session:     terminalexperience.Session{Kind: terminalexperience.Automation},
-				Output:      output,
-				Diagnostics: diagnostics,
+				Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+				Output:       output,
+				Diagnostics:  diagnostics,
 			})
 			err := consumeUpgradeStartupWith(
 				[]string{"config", "cm", "list"},

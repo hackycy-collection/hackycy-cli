@@ -11,14 +11,7 @@ import (
 
 const terminalForkListEmptyMessage = "No instances configured. Run \"ycy config fork add\" to add one."
 
-func terminalForkListDocument(session terminalexperience.Session, result Result) terminalexperience.PresentationDocument {
-	if session.Kind != terminalexperience.RichInteractive {
-		return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
-			Role: terminalexperience.VisualRolePlain,
-			Text: terminalForkListPlainText(result.Instances),
-		}}}
-	}
-
+func terminalForkListDocument(result Result) terminalexperience.PresentationDocument {
 	blocks := []terminalexperience.PresentationBlock{{
 		Role: terminalexperience.VisualRoleTitle,
 		Text: "Fork provider instances",

@@ -19,9 +19,9 @@ import (
 
 func TestAutomationAskFailsBeforeReadingOrWriting(t *testing.T) {
 	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
-		Session:     terminal.Session{Kind: terminal.Automation},
-		Input:       panicReader{},
-		Diagnostics: panicWriter{},
+		Capabilities: terminal.Capabilities{Interaction: terminal.Automation},
+		Input:        panicReader{},
+		Diagnostics:  panicWriter{},
 	})
 
 	_, err := handler.Ask(context.Background(), terminal.InteractionRequest{Kind: terminal.InteractionText, Message: "Name"})
@@ -32,9 +32,9 @@ func TestAutomationAskFailsBeforeReadingOrWriting(t *testing.T) {
 
 func TestPlainSecretRejectsNonTerminalInputWithoutReadingOrWriting(t *testing.T) {
 	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
-		Session:     terminal.Session{Kind: terminal.PlainInteractive},
-		Input:       panicReader{},
-		Diagnostics: panicWriter{},
+		Capabilities: terminal.Capabilities{Interaction: terminal.PlainInteractive},
+		Input:        panicReader{},
+		Diagnostics:  panicWriter{},
 	})
 
 	_, err := handler.Ask(context.Background(), terminal.InteractionRequest{Kind: terminal.InteractionSecret, Message: "Access token"})
@@ -46,9 +46,9 @@ func TestPlainSecretRejectsNonTerminalInputWithoutReadingOrWriting(t *testing.T)
 func TestPlainAskUsesDiagnosticStreamAndRetriesValidation(t *testing.T) {
 	var diagnostics bytes.Buffer
 	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
-		Session:     terminal.Session{Kind: terminal.PlainInteractive},
-		Input:       strings.NewReader("\nproject\n"),
-		Diagnostics: &diagnostics,
+		Capabilities: terminal.Capabilities{Interaction: terminal.PlainInteractive},
+		Input:        strings.NewReader("\nproject\n"),
+		Diagnostics:  &diagnostics,
 	})
 
 	answer, err := handler.Ask(context.Background(), terminal.InteractionRequest{
@@ -77,9 +77,9 @@ func TestPlainAskUsesDiagnosticStreamAndRetriesValidation(t *testing.T) {
 func TestPlainAskSelectsExistingOptionsWithoutImplicitDefault(t *testing.T) {
 	var diagnostics bytes.Buffer
 	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
-		Session:     terminal.Session{Kind: terminal.PlainInteractive},
-		Input:       strings.NewReader("wrong\n2\n"),
-		Diagnostics: &diagnostics,
+		Capabilities: terminal.Capabilities{Interaction: terminal.PlainInteractive},
+		Input:        strings.NewReader("wrong\n2\n"),
+		Diagnostics:  &diagnostics,
 	})
 
 	answer, err := handler.Ask(context.Background(), terminal.InteractionRequest{
@@ -101,9 +101,9 @@ func TestPlainAskSelectsExistingOptionsWithoutImplicitDefault(t *testing.T) {
 func TestPlainAskHonorsCommandOwnedCancelValues(t *testing.T) {
 	var diagnostics bytes.Buffer
 	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
-		Session:     terminal.Session{Kind: terminal.PlainInteractive},
-		Input:       strings.NewReader("quit\n"),
-		Diagnostics: &diagnostics,
+		Capabilities: terminal.Capabilities{Interaction: terminal.PlainInteractive},
+		Input:        strings.NewReader("quit\n"),
+		Diagnostics:  &diagnostics,
 	})
 
 	_, err := handler.Ask(context.Background(), terminal.InteractionRequest{
@@ -124,9 +124,9 @@ func TestPlainAskHonorsCommandOwnedCancelValues(t *testing.T) {
 func TestPlainAskUsesCommandOwnedParserWithoutChangingDefaultOrCancellation(t *testing.T) {
 	var diagnostics bytes.Buffer
 	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
-		Session:     terminal.Session{Kind: terminal.PlainInteractive},
-		Input:       strings.NewReader("bad\nlegacy\n"),
-		Diagnostics: &diagnostics,
+		Capabilities: terminal.Capabilities{Interaction: terminal.PlainInteractive},
+		Input:        strings.NewReader("bad\nlegacy\n"),
+		Diagnostics:  &diagnostics,
 	})
 
 	answer, err := handler.Ask(context.Background(), terminal.InteractionRequest{
@@ -151,9 +151,9 @@ func TestPlainAskUsesCommandOwnedParserWithoutChangingDefaultOrCancellation(t *t
 func TestPlainAskUsesCommandOwnedPromptLayout(t *testing.T) {
 	var diagnostics bytes.Buffer
 	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
-		Session:     terminal.Session{Kind: terminal.PlainInteractive},
-		Input:       strings.NewReader("2\n"),
-		Diagnostics: &diagnostics,
+		Capabilities: terminal.Capabilities{Interaction: terminal.PlainInteractive},
+		Input:        strings.NewReader("2\n"),
+		Diagnostics:  &diagnostics,
 	})
 
 	answer, err := handler.Ask(context.Background(), terminal.InteractionRequest{
@@ -178,12 +178,15 @@ func TestPlainAskUsesCommandOwnedPromptLayout(t *testing.T) {
 func TestRichAskUsesExplicitPTYInputAndDiagnosticOutput(t *testing.T) {
 	const helperEnvironment = "YCY_TERMINAL_HUH_HELPER"
 	if os.Getenv(helperEnvironment) == "1" {
-		handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
-			Session:     terminal.Session{Kind: terminal.RichInteractive, Color: true},
-			Input:       os.Stdin,
-			Diagnostics: os.Stderr,
+		experience := terminal.NewExperience(terminal.ExperienceOptions{
+			Capabilities: richTestCapabilities(true),
+			Input:        os.Stdin,
+			Output:       os.Stdout,
+			Diagnostics:  os.Stderr,
 		})
-		answer, err := handler.Ask(context.Background(), terminal.InteractionRequest{
+		run := experience.Open(context.Background())
+		defer run.Close()
+		answer, err := run.Ask(terminal.InteractionRequest{
 			Kind:    terminal.InteractionText,
 			Message: "Project name",
 			Validate: func(answer terminal.InteractionAnswer) error {
@@ -196,7 +199,9 @@ func TestRichAskUsesExplicitPTYInputAndDiagnosticOutput(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Ask() error = %v", err)
 		}
-		_, _ = fmt.Fprintf(os.Stdout, "answer=%s\n", answer.Value)
+		if err := run.Result(terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{Text: "answer=" + answer.Value}}}); err != nil {
+			t.Fatalf("Result() error = %v", err)
+		}
 		return
 	}
 
@@ -211,7 +216,7 @@ func TestRichAskUsesExplicitPTYInputAndDiagnosticOutput(t *testing.T) {
 	}
 	defer process.Close()
 
-	output := newPromptBuffer("submit")
+	output := newPromptBuffer("Project name")
 	readDone := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(output, process.Terminal())
@@ -243,14 +248,19 @@ func TestRichAskUsesExplicitPTYInputAndDiagnosticOutput(t *testing.T) {
 func TestRichAskCtrlCRestoresTerminalBeforeReturningCancellation(t *testing.T) {
 	const helperEnvironment = "YCY_TERMINAL_HUH_CANCEL_HELPER"
 	if os.Getenv(helperEnvironment) == "1" {
-		handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
-			Session:     terminal.Session{Kind: terminal.RichInteractive, Color: true},
-			Input:       os.Stdin,
-			Diagnostics: os.Stderr,
+		experience := terminal.NewExperience(terminal.ExperienceOptions{
+			Capabilities: richTestCapabilities(true),
+			Input:        os.Stdin,
+			Output:       os.Stdout,
+			Diagnostics:  os.Stderr,
 		})
-		_, err := handler.Ask(context.Background(), terminal.InteractionRequest{Kind: terminal.InteractionText, Message: "Project name"})
+		run := experience.Open(context.Background())
+		_, err := run.Ask(terminal.InteractionRequest{Kind: terminal.InteractionText, Message: "Project name"})
 		if !errors.Is(err, terminal.ErrInteractionCancelled) {
 			t.Fatalf("Ask() error = %v, want ErrInteractionCancelled", err)
+		}
+		if err := run.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
 		}
 		_, _ = fmt.Fprintln(os.Stdout, "cancelled=true")
 		return
@@ -267,7 +277,7 @@ func TestRichAskCtrlCRestoresTerminalBeforeReturningCancellation(t *testing.T) {
 	}
 	defer process.Close()
 
-	output := newPromptBuffer("submit")
+	output := newPromptBuffer("Project name")
 	readDone := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(output, process.Terminal())
@@ -294,6 +304,15 @@ func TestRichAskCtrlCRestoresTerminalBeforeReturningCancellation(t *testing.T) {
 		t.Fatal("timed out reading PTY output")
 	}
 	assertRichCleanup(t, output.String(), "cancelled=true")
+}
+
+func richTestCapabilities(color bool) terminal.Capabilities {
+	return terminal.Capabilities{
+		Interaction: terminal.RichInteractive,
+		Stdin:       terminal.StreamCapability{Terminal: true},
+		Stdout:      terminal.StreamCapability{Terminal: true, Color: color},
+		Stderr:      terminal.StreamCapability{Terminal: true, Color: color},
+	}
 }
 
 type promptBuffer struct {

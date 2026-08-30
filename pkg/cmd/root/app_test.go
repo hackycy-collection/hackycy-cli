@@ -161,10 +161,10 @@ func TestRichTerminalDiscoveryPreservesVersionAndRawCompletion(t *testing.T) {
 	output := &bytes.Buffer{}
 	errors := &bytes.Buffer{}
 	app, err := newTestApp(BuildInfo{Version: "0.0.0-dev"}, testDependencies{
-		Out:     output,
-		Err:     errors,
-		Session: terminal.Session{Kind: terminal.RichInteractive},
-		Logging: logging.NewRuntime(logging.Options{Writer: errors}),
+		Out:          output,
+		Err:          errors,
+		Capabilities: terminal.Capabilities{Interaction: terminal.RichInteractive},
+		Logging:      logging.NewRuntime(logging.Options{Writer: errors}),
 	})
 	if err != nil {
 		t.Fatalf("New returned an error: %v", err)
@@ -290,7 +290,7 @@ func TestTunnelLeafIsAlwaysRegistered(t *testing.T) {
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"tunnel", "connect", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "--server") || !strings.Contains(output.String(), "--token") || strings.Contains(output.String(), "--control-port") || !strings.Contains(output.String(), "Global Flags:") || !strings.Contains(output.String(), "--log-level") || !strings.Contains(output.String(), "--log-format") || !strings.Contains(output.String(), "--quiet") || !strings.Contains(output.String(), "--verbose") || errors.Len() != 0 {
+	if outcome := app.Execute(context.Background(), []string{"tunnel", "connect", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "--server") || !strings.Contains(output.String(), "--token") || strings.Contains(output.String(), "--control-port") || !strings.Contains(output.String(), "--log-level") || !strings.Contains(output.String(), "--log-format") || !strings.Contains(output.String(), "--quiet") || !strings.Contains(output.String(), "--verbose") || errors.Len() != 0 {
 		t.Fatalf("tunnel connect help outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
 	}
 }

@@ -19,7 +19,7 @@ func StartPTY(command *exec.Cmd) (*PTYProcess, error) {
 	if command == nil {
 		return nil, errors.New("PTY command is required")
 	}
-	terminal, err := pty.Start(command)
+	terminal, err := pty.StartWithSize(command, &pty.Winsize{Cols: 80, Rows: 24})
 	if err != nil {
 		return nil, err
 	}

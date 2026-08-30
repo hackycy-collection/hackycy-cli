@@ -8,12 +8,11 @@ import (
 )
 
 type terminalForkAddAdapter struct {
-	run     terminalexperience.ExperienceRun
-	session terminalexperience.Session
+	run terminalexperience.ExperienceRun
 }
 
-func newTerminalForkAddAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalForkAddAdapter {
-	return &terminalForkAddAdapter{run: run, session: session}
+func newTerminalForkAddAdapter(run terminalexperience.ExperienceRun) *terminalForkAddAdapter {
+	return &terminalForkAddAdapter{run: run}
 }
 
 func (adapter *terminalForkAddAdapter) Text(question TextPrompt) (string, bool, error) {
@@ -51,11 +50,11 @@ func (adapter *terminalForkAddAdapter) Password(question TextPrompt) (string, bo
 }
 
 func (adapter *terminalForkAddAdapter) Cancel(message string) {
-	_ = adapter.run.Present(terminalForkAddDocument(adapter.session, message, true))
+	_ = adapter.run.Result(terminalForkAddDocument(message, true))
 }
 
 func (adapter *terminalForkAddAdapter) Success(message string) {
-	_ = adapter.run.Present(terminalForkAddDocument(adapter.session, message, false))
+	_ = adapter.run.Result(terminalForkAddDocument(message, false))
 }
 
 func (adapter *terminalForkAddAdapter) ask(request terminalexperience.InteractionRequest) (string, bool, error) {
@@ -80,13 +79,10 @@ func interactionOptions(choices []Choice) []terminalexperience.InteractionOption
 	return options
 }
 
-func terminalForkAddDocument(session terminalexperience.Session, message string, cancelled bool) terminalexperience.PresentationDocument {
-	role := terminalexperience.VisualRolePlain
-	if session.Kind == terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRoleSuccess
-		if cancelled {
-			role = terminalexperience.VisualRoleWarning
-		}
+func terminalForkAddDocument(message string, cancelled bool) terminalexperience.PresentationDocument {
+	role := terminalexperience.VisualRoleSuccess
+	if cancelled {
+		role = terminalexperience.VisualRoleWarning
 	}
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: message}}}
 }

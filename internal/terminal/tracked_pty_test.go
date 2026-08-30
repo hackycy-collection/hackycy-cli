@@ -34,8 +34,8 @@ func TestRichTrackLeavesInlineFinalPhaseBeforeDeferredDiagnosticsAndResult(t *te
 	})
 
 	assertTrackedPTYCleanup(t, output, "durable-result")
-	if strings.Contains(output, "\x1b[?1049h") || strings.Contains(output, "\x1b[?1047h") || strings.Contains(output, "\x1b[?47h") {
-		t.Fatalf("tracked renderer entered an alternate screen: %q", output)
+	if countAlternateScreen(output, "h") != 1 || countAlternateScreen(output, "l") != 1 {
+		t.Fatalf("tracked renderer did not own exactly one alternate-screen session: %q", output)
 	}
 	final := strings.LastIndex(output, "Fetching commits")
 	deferred := strings.LastIndex(output, "deferred diagnostic")
@@ -56,7 +56,7 @@ func TestRichTrackHonorsNoColor(t *testing.T) {
 	})
 
 	assertTrackedPTYCleanup(t, output, "durable-result")
-	for _, colorPrefix := range []string{"\x1b[3", "\x1b[9", "\x1b[38;"} {
+	for _, colorPrefix := range []string{"\x1b[3m", "\x1b[9m", "\x1b[38;"} {
 		if strings.Contains(output, colorPrefix) {
 			t.Fatalf("NO_COLOR tracked output contains %q: %q", colorPrefix, output)
 		}
@@ -112,10 +112,10 @@ func TestRichTrackKeepsDurableResultsOnStdout(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	experience := terminal.NewExperience(terminal.ExperienceOptions{
-		Session:     terminal.Session{Kind: terminal.RichInteractive},
-		Input:       strings.NewReader(""),
-		Output:      &stdout,
-		Diagnostics: &stderr,
+		Capabilities: terminal.Capabilities{Interaction: terminal.PlainInteractive},
+		Input:        strings.NewReader(""),
+		Output:       &stdout,
+		Diagnostics:  &stderr,
 	})
 	run := experience.Open(context.Background())
 	updates := make(chan terminal.OperationPhase, 1)
@@ -124,8 +124,8 @@ func TestRichTrackKeepsDurableResultsOnStdout(t *testing.T) {
 	if err := run.Track(terminal.TrackedOperation{Label: "Git Pulse", Updates: updates}); err != nil {
 		t.Fatalf("Track() error = %v", err)
 	}
-	if err := run.Present(terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{Text: "durable-result"}}}); err != nil {
-		t.Fatalf("Present() error = %v", err)
+	if err := run.Result(terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{Text: "durable-result"}}}); err != nil {
+		t.Fatalf("Result() error = %v", err)
 	}
 	if err := run.Close(); err != nil {
 		t.Fatalf("Close() error = %v", err)
@@ -142,10 +142,10 @@ func runTrackedPTYHelper(t *testing.T) {
 	t.Helper()
 	color := os.Getenv("NO_COLOR") == ""
 	experience := terminal.NewExperience(terminal.ExperienceOptions{
-		Session:     terminal.Session{Kind: terminal.RichInteractive, Color: color},
-		Input:       os.Stdin,
-		Output:      os.Stdout,
-		Diagnostics: os.Stderr,
+		Capabilities: richTestCapabilities(color),
+		Input:        os.Stdin,
+		Output:       os.Stdout,
+		Diagnostics:  os.Stderr,
 	})
 	run := experience.Open(context.Background())
 	defer run.Close()
@@ -161,8 +161,8 @@ func runTrackedPTYHelper(t *testing.T) {
 	if err := run.Track(terminal.TrackedOperation{Label: "Git Pulse", Updates: updates}); err != nil {
 		t.Fatalf("Track() error = %v", err)
 	}
-	if err := run.Present(terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{Text: "durable-result"}}}); err != nil {
-		t.Fatalf("Present() error = %v", err)
+	if err := run.Result(terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{Text: "durable-result"}}}); err != nil {
+		t.Fatalf("Result() error = %v", err)
 	}
 }
 
@@ -171,10 +171,10 @@ func runTrackedCancellationPTYHelper(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	experience := terminal.NewExperience(terminal.ExperienceOptions{
-		Session:     terminal.Session{Kind: terminal.RichInteractive, Color: true},
-		Input:       os.Stdin,
-		Output:      os.Stdout,
-		Diagnostics: os.Stderr,
+		Capabilities: richTestCapabilities(true),
+		Input:        os.Stdin,
+		Output:       os.Stdout,
+		Diagnostics:  os.Stderr,
 	})
 	run := experience.Open(ctx)
 	defer run.Close()
@@ -194,8 +194,8 @@ func runTrackedCancellationPTYHelper(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("Track() error = %v", err)
 	}
-	if err := run.Present(terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{Text: "cancelled-result"}}}); err != nil {
-		t.Fatalf("Present() error = %v", err)
+	if err := run.Result(terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{Text: "cancelled-result"}}}); err != nil {
+		t.Fatalf("Result() error = %v", err)
 	}
 }
 
@@ -257,6 +257,14 @@ func assertTrackedPTYCleanup(t *testing.T, output, marker string) {
 	if !strings.Contains(output, "\x1b[?25h") {
 		t.Fatalf("tracked renderer did not restore the cursor: %q", output)
 	}
+}
+
+func countAlternateScreen(output, suffix string) int {
+	count := 0
+	for _, code := range []string{"\x1b[?1049" + suffix, "\x1b[?1047" + suffix, "\x1b[?47" + suffix} {
+		count += strings.Count(output, code)
+	}
+	return count
 }
 
 func trackedPTYEnvironment() []string {

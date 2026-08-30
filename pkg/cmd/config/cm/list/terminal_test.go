@@ -16,26 +16,26 @@ func TestTerminalCMListPresentationPreservesPlainAndAutomationResults(t *testing
 		{Name: "work", Model: "gpt-4.1-mini", BaseURL: "https://work.example/v1"},
 		{Name: "personal", Model: "deepseek-chat", BaseURL: "https://personal.example/v1", Default: true},
 	}}
-	const want = "  work gpt-4.1-mini https://work.example/v1\n* personal deepseek-chat https://personal.example/v1\n"
+	const want = "Commit message profiles\nPROFILE  MODEL  BASE URL\n  work gpt-4.1-mini https://work.example/v1\n* personal deepseek-chat https://personal.example/v1\n"
 
-	for _, session := range []terminalexperience.Session{
-		{Kind: terminalexperience.PlainInteractive},
-		{Kind: terminalexperience.Automation},
+	for _, session := range []terminalexperience.Capabilities{
+		{Interaction: terminalexperience.PlainInteractive},
+		{Interaction: terminalexperience.Automation},
 	} {
 		var output bytes.Buffer
-		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Session: session, Output: &output})
+		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Capabilities: session, Output: &output})
 		run := experience.Open(context.Background())
-		if err := run.Present(terminalCMListDocument(session, result)); err != nil {
+		if err := run.Result(terminalCMListDocument(result)); err != nil {
 			t.Fatalf("Present() error = %v", err)
 		}
 		if err := run.Close(); err != nil {
 			t.Fatalf("Close() error = %v", err)
 		}
 		if got := output.String(); got != want {
-			t.Fatalf("%v result = %q, want %q", session.Kind, got, want)
+			t.Fatalf("%v result = %q, want %q", session.Interaction, got, want)
 		}
 		if terminaltest.ContainsTerminalControl(output.Bytes()) {
-			t.Fatalf("%v result contains terminal control: %q", session.Kind, output.String())
+			t.Fatalf("%v result contains terminal control: %q", session.Interaction, output.String())
 		}
 	}
 }
@@ -48,13 +48,13 @@ func TestTerminalCMListPresentationUsesRichSemanticRoles(t *testing.T) {
 
 	for _, testCase := range []struct {
 		name    string
-		session terminalexperience.Session
+		session terminalexperience.Capabilities
 	}{
-		{name: "color", session: terminalexperience.Session{Kind: terminalexperience.RichInteractive, Color: true}},
-		{name: "no color", session: terminalexperience.Session{Kind: terminalexperience.RichInteractive}},
+		{name: "color", session: terminalexperience.Capabilities{Interaction: terminalexperience.RichInteractive}},
+		{name: "no color", session: terminalexperience.Capabilities{Interaction: terminalexperience.RichInteractive}},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
-			document := terminalCMListDocument(testCase.session, result)
+			document := terminalCMListDocument(result)
 			if got, want := []terminalexperience.VisualRole{
 				document.Blocks[0].Role,
 				document.Blocks[1].Role,
@@ -69,9 +69,9 @@ func TestTerminalCMListPresentationUsesRichSemanticRoles(t *testing.T) {
 				t.Fatalf("Rich roles = %#v, want %#v", got, want)
 			}
 			var output bytes.Buffer
-			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Session: testCase.session, Output: &output})
+			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Capabilities: testCase.session, Output: &output})
 			run := experience.Open(context.Background())
-			if err := run.Present(document); err != nil {
+			if err := run.Result(document); err != nil {
 				t.Fatalf("Present() error = %v", err)
 			}
 			if err := run.Close(); err != nil {

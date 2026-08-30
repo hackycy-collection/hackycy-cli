@@ -15,25 +15,25 @@ import (
 )
 
 var (
-	// ErrAutomationInteraction reports an interaction request in an Automation Session.
+	// ErrAutomationInteraction reports an interaction request in Automation mode.
 	ErrAutomationInteraction = errors.New("interaction requires an interactive terminal")
 	// ErrInteractionCancelled reports that an interactive answer was not supplied.
 	ErrInteractionCancelled = errors.New("terminal interaction cancelled")
 )
 
-// InteractionOptions supplies explicit I/O and the immutable session to one handler.
+// InteractionOptions supplies explicit I/O and immutable capabilities to one handler.
 type InteractionOptions struct {
-	Session     Session
-	Input       io.Reader
-	Diagnostics io.Writer
+	Capabilities Capabilities
+	Input        io.Reader
+	Diagnostics  io.Writer
 }
 
-// InteractionHandler translates terminal-owned semantic requests into one session's UI.
+// InteractionHandler translates terminal-owned semantic requests into the selected UI.
 type InteractionHandler struct {
-	session     Session
-	input       io.Reader
-	lines       *bufio.Reader
-	diagnostics io.Writer
+	capabilities Capabilities
+	input        io.Reader
+	lines        *bufio.Reader
+	diagnostics  io.Writer
 }
 
 // NewInteractionHandler creates an interaction handler without consulting a process terminal.
@@ -47,59 +47,27 @@ func NewInteractionHandler(options InteractionOptions) *InteractionHandler {
 		diagnostics = io.Discard
 	}
 	return &InteractionHandler{
-		session:     options.Session,
-		input:       input,
-		lines:       bufio.NewReader(input),
-		diagnostics: diagnostics,
+		capabilities: options.Capabilities,
+		input:        input,
+		lines:        bufio.NewReader(input),
+		diagnostics:  diagnostics,
 	}
 }
 
-func (handler *InteractionHandler) withDiagnostics(diagnostics io.Writer) *InteractionHandler {
-	if diagnostics == nil {
-		diagnostics = io.Discard
-	}
-	return &InteractionHandler{
-		session:     handler.session,
-		input:       handler.input,
-		lines:       handler.lines,
-		diagnostics: diagnostics,
-	}
-}
-
-// Ask obtains one answer according to the session selected before interaction begins.
+// Ask obtains one answer according to the capabilities selected before interaction begins.
 func (handler *InteractionHandler) Ask(ctx context.Context, request InteractionRequest) (InteractionAnswer, error) {
 	if err := ctx.Err(); err != nil {
 		return InteractionAnswer{}, err
 	}
-	if handler.session.Kind == Automation {
+	if handler.capabilities.Interaction == Automation {
 		return InteractionAnswer{}, ErrAutomationInteraction
-	}
-	if handler.session.Kind == RichInteractive {
-		return handler.askHuh(ctx, request)
 	}
 	return handler.askPlain(ctx, request)
 }
 
-func (handler *InteractionHandler) askHuh(ctx context.Context, request InteractionRequest) (InteractionAnswer, error) {
-	form, answer, err := handler.huhForm(request)
-	if err != nil {
-		return InteractionAnswer{}, err
-	}
-	if err := form.RunWithContext(ctx); err != nil {
-		if contextErr := ctx.Err(); contextErr != nil {
-			return InteractionAnswer{}, contextErr
-		}
-		if errors.Is(err, huh.ErrUserAborted) {
-			return InteractionAnswer{}, ErrInteractionCancelled
-		}
-		return InteractionAnswer{}, err
-	}
-	return answer(), nil
-}
-
 func (handler *InteractionHandler) huhForm(request InteractionRequest) (*huh.Form, func() InteractionAnswer, error) {
 	newForm := func(field huh.Field) *huh.Form {
-		return huh.NewForm(huh.NewGroup(field)).WithInput(handler.input).WithOutput(handler.diagnostics)
+		return huh.NewForm(huh.NewGroup(field))
 	}
 
 	switch request.Kind {

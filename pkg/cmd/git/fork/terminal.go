@@ -28,7 +28,7 @@ func executeFork(options *Options) (Result, error) {
 	defer cancel()
 	run := options.Terminal.Open(ctx)
 	defer run.Close()
-	adapter := newTerminalGitForkAdapter(run, options.Terminal.Session(), cancel)
+	adapter := newTerminalGitForkAdapter(run, cancel)
 
 	store, err := options.Config()
 	if err != nil {
@@ -57,9 +57,6 @@ func executeFork(options *Options) (Result, error) {
 	if err != nil {
 		return result, err
 	}
-	if err := adapter.Flush(); err != nil {
-		return result, err
-	}
 	return result, nil
 }
 
@@ -77,14 +74,11 @@ func (osForkDirectoryRemover) RemoveAll(path string) error {
 
 type terminalGitForkAdapter struct {
 	run           terminalexperience.ExperienceRun
-	session       terminalexperience.Session
 	requestCancel context.CancelFunc
-	pending       []terminalexperience.PresentationDocument
-	presentErr    error
 }
 
-func newTerminalGitForkAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session, requestCancel context.CancelFunc) *terminalGitForkAdapter {
-	return &terminalGitForkAdapter{run: run, session: session, requestCancel: requestCancel}
+func newTerminalGitForkAdapter(run terminalexperience.ExperienceRun, requestCancel context.CancelFunc) *terminalGitForkAdapter {
+	return &terminalGitForkAdapter{run: run, requestCancel: requestCancel}
 }
 
 func (adapter *terminalGitForkAdapter) ConfirmOverwrite(prompt OverwritePrompt) (bool, bool, error) {
@@ -119,15 +113,15 @@ func (adapter *terminalGitForkAdapter) ConfirmOverwrite(prompt OverwritePrompt) 
 }
 
 func (adapter *terminalGitForkAdapter) Introduction() {
-	adapter.present(gitForkIntroductionDocument(adapter.session))
+	_ = adapter.run.Notice(gitForkIntroductionDocument())
 }
 
 func (adapter *terminalGitForkAdapter) Cancelled() {
-	adapter.present(gitForkCancelledDocument(adapter.session))
+	_ = adapter.run.Result(gitForkCancelledDocument())
 }
 
 func (adapter *terminalGitForkAdapter) Outcome(result Result) {
-	adapter.present(gitForkOutcomeDocument(adapter.session, result))
+	_ = adapter.run.Result(gitForkOutcomeDocument(result))
 }
 
 func (adapter *terminalGitForkAdapter) Start(_ context.Context) (PhaseReporter, error) {
@@ -144,32 +138,6 @@ func (adapter *terminalGitForkAdapter) Start(_ context.Context) (PhaseReporter, 
 		reporter.complete(err)
 	}()
 	return reporter, nil
-}
-
-func (adapter *terminalGitForkAdapter) Flush() error {
-	if adapter.presentErr != nil {
-		return adapter.presentErr
-	}
-	if adapter.session.Kind != terminalexperience.Automation {
-		return nil
-	}
-	for _, document := range adapter.pending {
-		if err := adapter.run.Present(document); err != nil {
-			return err
-		}
-	}
-	adapter.pending = nil
-	return nil
-}
-
-func (adapter *terminalGitForkAdapter) present(document terminalexperience.PresentationDocument) {
-	if adapter.session.Kind == terminalexperience.Automation {
-		adapter.pending = append(adapter.pending, document)
-		return
-	}
-	if err := adapter.run.Present(document); err != nil && adapter.presentErr == nil {
-		adapter.presentErr = err
-	}
 }
 
 type terminalGitForkPhaseReporter struct {
@@ -242,62 +210,49 @@ func terminalGitForkPhaseState(state PhaseState) terminalexperience.PhaseState {
 	}
 }
 
-func gitForkIntroductionDocument(session terminalexperience.Session) terminalexperience.PresentationDocument {
-	if session.Kind != terminalexperience.RichInteractive {
-		return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
-			Role: terminalexperience.VisualRolePlain,
-			Text: "HACKYCY CLI\n\nGit Fork",
-		}}}
-	}
+func gitForkIntroductionDocument() terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
 		{Role: terminalexperience.VisualRoleTitle, Text: "HACKYCY CLI"},
 		{Role: terminalexperience.VisualRoleActive, Text: "Git Fork"},
 	}}
 }
 
-func gitForkCancelledDocument(session terminalexperience.Session) terminalexperience.PresentationDocument {
-	role := terminalexperience.VisualRolePlain
-	if session.Kind == terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRoleWarning
-	}
-	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: "Cancelled"}}}
+func gitForkCancelledDocument() terminalexperience.PresentationDocument {
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleWarning, Text: "Cancelled"}}}
 }
 
-func gitForkOutcomeDocument(session terminalexperience.Session, result Result) terminalexperience.PresentationDocument {
+func gitForkOutcomeDocument(result Result) terminalexperience.PresentationDocument {
 	blocks := []terminalexperience.PresentationBlock{
-		gitForkBlock(session, terminalexperience.VisualRoleMuted, fmt.Sprintf("Resolved: %s/%s/%s (%s)", result.Repository.Host, result.Repository.Owner, result.Repository.Name, result.Repository.ProviderType)),
+		gitForkBlock(terminalexperience.VisualRoleMuted, fmt.Sprintf("Resolved: %s/%s/%s (%s)", result.Repository.Host, result.Repository.Owner, result.Repository.Name, result.Repository.ProviderType)),
 	}
 	if result.Repository.Ref == "" && result.Ref != "" {
-		blocks = append(blocks, gitForkBlock(session, terminalexperience.VisualRoleActive, "Branch: "+result.Ref))
+		blocks = append(blocks, gitForkBlock(terminalexperience.VisualRoleActive, "Branch: "+result.Ref))
 	}
 	if result.DefaultBranchError != nil {
 		blocks = append(blocks,
-			gitForkBlock(session, terminalexperience.VisualRoleError, "Failed to get default branch: "+logging.Redact(result.DefaultBranchError.Error())),
-			gitForkBlock(session, terminalexperience.VisualRoleWarning, "Falling back to git clone with remote default branch."),
+			gitForkBlock(terminalexperience.VisualRoleError, "Failed to get default branch: "+logging.Redact(result.DefaultBranchError.Error())),
+			gitForkBlock(terminalexperience.VisualRoleWarning, "Falling back to git clone with remote default branch."),
 		)
 	}
 	if result.ArchiveError != nil {
 		blocks = append(blocks,
-			gitForkBlock(session, terminalexperience.VisualRoleError, "Archive download failed: "+logging.Redact(result.ArchiveError.Error())),
-			gitForkBlock(session, terminalexperience.VisualRoleWarning, "Falling back to git clone..."),
+			gitForkBlock(terminalexperience.VisualRoleError, "Archive download failed: "+logging.Redact(result.ArchiveError.Error())),
+			gitForkBlock(terminalexperience.VisualRoleWarning, "Falling back to git clone..."),
 		)
 	}
 	switch result.Acquisition {
 	case "archive":
-		blocks = append(blocks, gitForkBlock(session, terminalexperience.VisualRoleSuccess, "Archive downloaded and extracted"))
+		blocks = append(blocks, gitForkBlock(terminalexperience.VisualRoleSuccess, "Archive downloaded and extracted"))
 	case "clone":
 		if result.ArchiveError == nil {
-			blocks = append(blocks, gitForkBlock(session, terminalexperience.VisualRoleWarning, "Falling back to git clone..."))
+			blocks = append(blocks, gitForkBlock(terminalexperience.VisualRoleWarning, "Falling back to git clone..."))
 		}
-		blocks = append(blocks, gitForkBlock(session, terminalexperience.VisualRoleSuccess, "Cloned and cleaned up"))
+		blocks = append(blocks, gitForkBlock(terminalexperience.VisualRoleSuccess, "Cloned and cleaned up"))
 	}
-	blocks = append(blocks, gitForkBlock(session, terminalexperience.VisualRoleSuccess, "Done! Project created at "+result.Destination))
+	blocks = append(blocks, gitForkBlock(terminalexperience.VisualRoleSuccess, "Done! Project created at "+result.Destination))
 	return terminalexperience.PresentationDocument{Blocks: blocks}
 }
 
-func gitForkBlock(session terminalexperience.Session, role terminalexperience.VisualRole, text string) terminalexperience.PresentationBlock {
-	if session.Kind != terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRolePlain
-	}
+func gitForkBlock(role terminalexperience.VisualRole, text string) terminalexperience.PresentationBlock {
 	return terminalexperience.PresentationBlock{Role: role, Text: text}
 }

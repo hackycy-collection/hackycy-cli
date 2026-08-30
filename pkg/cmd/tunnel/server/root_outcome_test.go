@@ -23,7 +23,7 @@ func TestRootConfiguresDiagnosticsBeforeTunnelServerValidation(t *testing.T) {
 		},
 		Environment:       func(string) string { return "" },
 		EnvironmentLookup: func(string) (string, bool) { return "", false },
-		Session:           terminal.Session{Kind: terminal.Automation},
+		Capabilities:      terminal.Capabilities{Interaction: terminal.Automation},
 	})
 	runtime := logging.NewRuntime(logging.Options{Writer: stderr})
 	factory.Logging = runtime

@@ -45,7 +45,7 @@ func runAdd(options *Options) error {
 	if options == nil || options.Store == nil || options.Terminal == nil {
 		return errors.New("config cm add options are incomplete")
 	}
-	if options.Terminal.Session().Kind == terminal.Automation {
+	if options.Terminal.Capabilities().Interaction == terminal.Automation {
 		return errConfigCMAddRequiresInteractive
 	}
 	writer, err := options.Store()
@@ -54,7 +54,7 @@ func runAdd(options *Options) error {
 	}
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	adapter := newTerminalCMAddAdapter(run, options.Terminal.Session())
+	adapter := newTerminalCMAddAdapter(run)
 	module, err := NewAdd(AddDependencies{Prompter: adapter, Writer: writer, Presenter: adapter})
 	if err != nil {
 		return err

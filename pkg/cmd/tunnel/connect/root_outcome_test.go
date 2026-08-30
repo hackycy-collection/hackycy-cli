@@ -30,7 +30,7 @@ func TestRootConfiguresDiagnosticsBeforeTunnelConnectValidation(t *testing.T) {
 			return ""
 		},
 		EnvironmentLookup: func(string) (string, bool) { return "", false },
-		Session:           terminal.Session{Kind: terminal.Automation},
+		Capabilities:      terminal.Capabilities{Interaction: terminal.Automation},
 	})
 	store, err := appconfig.New(appconfig.Dependencies{
 		Environment: func(key string) string {

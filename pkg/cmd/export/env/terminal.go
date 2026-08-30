@@ -12,7 +12,7 @@ var errExportEnvRequiresInteractive = errors.New("export env requires an interac
 func runEnv(options *Options) error {
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	adapter := newTerminalExportEnvAdapter(run, options.Terminal.Session())
+	adapter := newTerminalExportEnvAdapter(run, options.Terminal.Capabilities().Interaction == terminalexperience.Automation)
 	module, err := New(Dependencies{
 		WorkingDirectory: options.WorkingDirectory,
 		Selector:         adapter,
@@ -33,16 +33,16 @@ func runEnv(options *Options) error {
 }
 
 type terminalExportEnvAdapter struct {
-	run     terminalexperience.ExperienceRun
-	session terminalexperience.Session
+	run        terminalexperience.ExperienceRun
+	automation bool
 }
 
-func newTerminalExportEnvAdapter(run terminalexperience.ExperienceRun, session terminalexperience.Session) *terminalExportEnvAdapter {
-	return &terminalExportEnvAdapter{run: run, session: session}
+func newTerminalExportEnvAdapter(run terminalexperience.ExperienceRun, automation bool) *terminalExportEnvAdapter {
+	return &terminalExportEnvAdapter{run: run, automation: automation}
 }
 
 func (adapter *terminalExportEnvAdapter) SelectEnvironment(message string, choices []EnvironmentChoice) (string, bool, error) {
-	if adapter.session.Kind == terminalexperience.Automation && len(choices) == 1 {
+	if adapter.automation && len(choices) == 1 {
 		return choices[0].Value, false, nil
 	}
 	answer, err := adapter.run.Ask(terminalexperience.InteractionRequest{
@@ -64,15 +64,15 @@ func (adapter *terminalExportEnvAdapter) SelectEnvironment(message string, choic
 }
 
 func (adapter *terminalExportEnvAdapter) Outro(message string) {
-	_ = adapter.run.Present(terminalExportEnvDocument(adapter.session, message, terminalexperience.VisualRoleMuted))
+	_ = adapter.run.Result(terminalExportEnvDocument(message, terminalexperience.VisualRoleMuted))
 }
 
 func (adapter *terminalExportEnvAdapter) Print(value string) {
-	_ = adapter.run.Present(terminalExportEnvDocument(adapter.session, value, terminalexperience.VisualRolePlain))
+	_ = adapter.run.Result(terminalExportEnvDocument(value, terminalexperience.VisualRolePlain))
 }
 
 func (adapter *terminalExportEnvAdapter) Cancel(message string) {
-	_ = adapter.run.Present(terminalExportEnvDocument(adapter.session, message, terminalexperience.VisualRoleWarning))
+	_ = adapter.run.Result(terminalExportEnvDocument(message, terminalexperience.VisualRoleWarning))
 }
 
 func exportEnvInteractionOptions(choices []EnvironmentChoice) []terminalexperience.InteractionOption {
@@ -83,9 +83,6 @@ func exportEnvInteractionOptions(choices []EnvironmentChoice) []terminalexperien
 	return options
 }
 
-func terminalExportEnvDocument(session terminalexperience.Session, text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
-	if session.Kind != terminalexperience.RichInteractive {
-		role = terminalexperience.VisualRolePlain
-	}
+func terminalExportEnvDocument(text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
 }

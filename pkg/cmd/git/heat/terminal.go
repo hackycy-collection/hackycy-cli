@@ -39,17 +39,11 @@ func runHeat(options *Options) error {
 	}
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	return run.Present(terminalGitHeatDocument(options.Terminal.Session(), result))
+	return run.Result(terminalGitHeatDocument(result))
 }
 
-func terminalGitHeatDocument(session terminalexperience.Session, result Result) terminalexperience.PresentationDocument {
+func terminalGitHeatDocument(result Result) terminalexperience.PresentationDocument {
 	report := result.Report
-	if session.Kind != terminalexperience.RichInteractive {
-		return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
-			Role: terminalexperience.VisualRolePlain,
-			Text: terminalGitHeatPlainText(report, result.Now),
-		}}}
-	}
 	if report.IsEmpty() {
 		return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
 			Role: terminalexperience.VisualRoleWarning,
@@ -83,7 +77,7 @@ func terminalGitHeatDocument(session terminalexperience.Session, result Result) 
 		Role: terminalexperience.VisualRoleMuted,
 		Text: terminalGitHeatLegend,
 	})
-	return terminalexperience.PresentationDocument{ClearBefore: true, Blocks: blocks}
+	return terminalexperience.PresentationDocument{Blocks: blocks}
 }
 
 func terminalGitHeatPlainText(report Report, now time.Time) string {

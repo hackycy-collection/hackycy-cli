@@ -19,7 +19,7 @@ func newTerminalDiscoveryAdapter(experience terminalexperience.Experience) Disco
 func (adapter terminalDiscoveryAdapter) PresentDiscovery(ctx context.Context, document DiscoveryDocument) {
 	run := adapter.experience.Open(ctx)
 	defer run.Close()
-	_ = run.Present(terminalDiscoveryDocument(document))
+	_ = run.Result(terminalDiscoveryDocument(document))
 }
 
 func terminalDiscoveryDocument(document DiscoveryDocument) terminalexperience.PresentationDocument {

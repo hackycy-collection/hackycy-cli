@@ -52,7 +52,7 @@ func runAdd(options *Options) error {
 	if options == nil || options.Store == nil || options.Terminal == nil {
 		return errors.New("config fork add options are incomplete")
 	}
-	if options.Terminal.Session().Kind == terminal.Automation {
+	if options.Terminal.Capabilities().Interaction == terminal.Automation {
 		return errConfigForkAddRequiresInteractive
 	}
 	writer, err := options.Store()
@@ -61,7 +61,7 @@ func runAdd(options *Options) error {
 	}
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	adapter := newTerminalForkAddAdapter(run, options.Terminal.Session())
+	adapter := newTerminalForkAddAdapter(run)
 	module, err := NewAdd(AddDependencies{
 		Prompter:  adapter,
 		Writer:    writer,

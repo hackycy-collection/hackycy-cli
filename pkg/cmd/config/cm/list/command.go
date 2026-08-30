@@ -63,7 +63,7 @@ func runList(options *Options) error {
 	}
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	return run.Present(terminalCMListDocument(options.Terminal.Session(), result))
+	return run.Result(terminalCMListDocument(result))
 }
 
 var _ Reader = (*appconfig.Store)(nil)

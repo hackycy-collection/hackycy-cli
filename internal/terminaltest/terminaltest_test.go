@@ -46,7 +46,8 @@ func TestRecordingRunCapturesSemanticOperationOrder(t *testing.T) {
 	if answer := run.Ask("choose project"); answer.Value != "selected" || answer.Cancelled || answer.Err != nil {
 		t.Fatalf("first answer = %#v", answer)
 	}
-	run.Present("project report")
+	run.Notice("project context")
+	run.Result("project report")
 	run.Track("scan")
 	if answer := run.Ask("confirm"); !answer.Cancelled {
 		t.Fatalf("second answer = %#v", answer)
@@ -55,7 +56,8 @@ func TestRecordingRunCapturesSemanticOperationOrder(t *testing.T) {
 
 	want := []Operation{
 		{Kind: AskOperation, Value: "choose project"},
-		{Kind: PresentOperation, Value: "project report"},
+		{Kind: NoticeOperation, Value: "project context"},
+		{Kind: ResultOperation, Value: "project report"},
 		{Kind: TrackOperation, Value: "scan"},
 		{Kind: AskOperation, Value: "confirm"},
 		{Kind: CloseOperation},

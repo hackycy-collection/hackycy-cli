@@ -115,10 +115,10 @@ func TestExecuteCMComposesTheProductionAdaptersForNoChanges(t *testing.T) {
 	output := &bytes.Buffer{}
 	diagnostics := &bytes.Buffer{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
-		Session:     terminalexperience.Session{Kind: terminalexperience.PlainInteractive},
-		Input:       strings.NewReader(""),
-		Output:      output,
-		Diagnostics: diagnostics,
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader(""),
+		Output:       output,
+		Diagnostics:  diagnostics,
 	})
 
 	result, err := executeCMForTest(context.Background(), experience, Input{})

@@ -6,13 +6,14 @@ import (
 
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/pkg/cmdutil"
+	"golang.org/x/term"
 )
 
 // ProcessFacts are the inherited process streams and terminal capability used
 // to construct the command Factory. The values are captured once per process.
 type ProcessFacts struct {
-	IOStreams cmdutil.IOStreams
-	Session   terminalexperience.Session
+	IOStreams    cmdutil.IOStreams
+	Capabilities terminalexperience.Capabilities
 }
 
 // CurrentProcessFacts captures the real standard streams and environment.
@@ -29,7 +30,7 @@ func NewProcessFacts(input, output, diagnostics *os.File, lookup terminalexperie
 			Out:    output,
 			ErrOut: diagnostics,
 		},
-		Session: terminalexperience.Classify(terminalexperience.Facts{
+		Capabilities: terminalexperience.Classify(terminalexperience.Facts{
 			Stdin:     terminalexperience.StreamFacts{Terminal: terminal(input)},
 			Stdout:    terminalexperience.StreamFacts{Terminal: terminal(output)},
 			Stderr:    terminalexperience.StreamFacts{Terminal: terminal(diagnostics)},
@@ -39,6 +40,5 @@ func NewProcessFacts(input, output, diagnostics *os.File, lookup terminalexperie
 }
 
 func isTerminal(file *os.File) bool {
-	info, err := file.Stat()
-	return err == nil && info.Mode()&os.ModeCharDevice != 0
+	return file != nil && term.IsTerminal(int(file.Fd()))
 }
