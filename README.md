@@ -1,6 +1,6 @@
 # ycy
 
-`ycy` 是正在从 Bun 迁移到 Go 的命令行工具。当前开发构建版本为 `0.0.0-dev`；活动代码是 CGO-free Go CLI，`legacy/bun/` 仅保留为行为兼容的只读参考，不能作为当前开发入口。
+`ycy` 是正在从 Bun 迁移到 Go 的命令行工具。当前开发构建版本为 `0.0.0-dev`；活动代码是 CGO-free Go CLI，`legacy/bun/` 仅保留为行为兼容的只读参考，不能作为当前开发入口。仓库结构契约见[项目结构文档](docs/project-layout.md)。
 
 ## 开始运行
 

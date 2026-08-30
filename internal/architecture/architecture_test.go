@@ -1,12 +1,18 @@
 package architecture
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -14,10 +20,71 @@ import (
 
 const modulePath = "github.com/hackycy/hackycy-cli"
 
+var approvedPackageInventory = []string{
+	"cmd/ycy",
+	"internal/appconfig",
+	"internal/architecture",
+	"internal/filesession",
+	"internal/fsthumbnail",
+	"internal/gitprocess",
+	"internal/logging",
+	"internal/sevenzipmanifest",
+	"internal/sevenzipruntime",
+	"internal/terminal",
+	"internal/terminaltest",
+	"internal/tunnelruntime",
+	"internal/updater",
+	"internal/windowsacl",
+	"internal/ycycmd",
+	"pkg/cmd/config",
+	"pkg/cmd/config/cm",
+	"pkg/cmd/config/cm/add",
+	"pkg/cmd/config/cm/list",
+	"pkg/cmd/config/cm/remove",
+	"pkg/cmd/config/cm/set",
+	"pkg/cmd/config/cm/test",
+	"pkg/cmd/config/cm/use",
+	"pkg/cmd/config/fork",
+	"pkg/cmd/config/fork/add",
+	"pkg/cmd/config/fork/list",
+	"pkg/cmd/config/fork/remove",
+	"pkg/cmd/diff",
+	"pkg/cmd/export",
+	"pkg/cmd/export/env",
+	"pkg/cmd/factory",
+	"pkg/cmd/fs",
+	"pkg/cmd/git",
+	"pkg/cmd/git/cm",
+	"pkg/cmd/git/fork",
+	"pkg/cmd/git/heat",
+	"pkg/cmd/git/pulse",
+	"pkg/cmd/rm",
+	"pkg/cmd/root",
+	"pkg/cmd/run",
+	"pkg/cmd/tunnel",
+	"pkg/cmd/tunnel/connect",
+	"pkg/cmd/tunnel/server",
+	"pkg/cmd/upgrade",
+	"pkg/cmd/zip",
+	"pkg/cmdutil",
+	"tools/check-no-bun",
+	"tools/hookctl",
+	"tools/prepare-sevenzip",
+	"tools/release-artifacts",
+	"tools/web-browser-harness",
+	"web",
+}
+
+var approvedAcceptancePackages = []string{
+	"acceptance",
+	"acceptance/web",
+}
+
 func TestActiveArchitecture(t *testing.T) {
 	root := repositoryRoot(t)
 	assertThinBinaryEntry(t, root)
 	assertNoRootHandlerTransition(t, root)
+	assertFinalPaths(t, root)
 	var violations []string
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -47,6 +114,247 @@ func TestActiveArchitecture(t *testing.T) {
 	if len(violations) > 0 {
 		t.Fatalf("active architecture violations:\n%s", strings.Join(violations, "\n"))
 	}
+}
+
+func TestApprovedPackageInventory(t *testing.T) {
+	root := repositoryRoot(t)
+	assertGoPackageInventory(t, root, "", approvedPackageInventory)
+	wantAcceptance := append(append([]string(nil), approvedPackageInventory...), approvedAcceptancePackages...)
+	assertGoPackageInventory(t, root, "acceptance", wantAcceptance)
+}
+
+func TestApprovedDependencyDirection(t *testing.T) {
+	root := repositoryRoot(t)
+	for _, tags := range []string{"", "acceptance"} {
+		graph, err := loadPackageGraph(root, tags)
+		if err != nil {
+			t.Fatalf("load package graph (tags=%q): %v", tags, err)
+		}
+		violations := auditPackageGraph(graph)
+		if len(violations) > 0 {
+			t.Fatalf("package dependency violations (tags=%q):\n%s", tags, strings.Join(violations, "\n"))
+		}
+	}
+}
+
+func assertFinalPaths(t *testing.T, root string) {
+	t.Helper()
+	for _, relative := range []string{"internal/cliapp", "internal/commands"} {
+		if _, err := os.Lstat(filepath.Join(root, filepath.FromSlash(relative))); err == nil {
+			t.Fatalf("obsolete package path is present: %s", relative)
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("inspect obsolete package path %s: %v", relative, err)
+		}
+	}
+	rootDirectory := filepath.Join(root, "pkg", "cmd", "root")
+	for _, name := range []string{
+		"config.go", "configcm.go", "configfork.go", "exportenv.go",
+		"gitcm.go", "gitfork.go", "githeat.go", "gitpulse.go", "tunnel.go",
+		"diff.go", "fs.go", "rm.go", "run.go", "upgrade.go", "zip.go",
+	} {
+		if _, err := os.Lstat(filepath.Join(rootDirectory, name)); err == nil {
+			t.Fatalf("obsolete flat root command file is present: pkg/cmd/root/%s", name)
+		} else if !os.IsNotExist(err) {
+			t.Fatalf("inspect flat root command file %s: %v", name, err)
+		}
+	}
+}
+
+type packageGraph struct {
+	production map[string]map[string]bool
+	tests      map[string]map[string]bool
+}
+
+type packageDescription struct {
+	ImportPath   string
+	ForTest      string
+	Imports      []string
+	TestImports  []string
+	XTestImports []string
+}
+
+func assertGoPackageInventory(t *testing.T, root, tags string, want []string) {
+	t.Helper()
+	args := []string{"list"}
+	if tags != "" {
+		args = append(args, "-tags="+tags)
+	}
+	args = append(args, "./...")
+	command := exec.Command("go", args...)
+	command.Dir = root
+	command.Env = pinnedGoEnvironment()
+	output, err := command.CombinedOutput()
+	if err != nil {
+		t.Fatalf("go %s: %v\n%s", strings.Join(args, " "), err, output)
+	}
+	got := make([]string, 0)
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, modulePath+"/") {
+			t.Fatalf("go %s returned non-module package %q", strings.Join(args, " "), line)
+		}
+		got = append(got, strings.TrimPrefix(line, modulePath+"/"))
+	}
+	sort.Strings(got)
+	want = append([]string(nil), want...)
+	sort.Strings(want)
+	if !sameStrings(got, want) {
+		t.Fatalf("go %s package inventory = %v, want %v", strings.Join(args, " "), got, want)
+	}
+}
+
+func loadPackageGraph(root, tags string) (packageGraph, error) {
+	args := []string{"list"}
+	if tags != "" {
+		args = append(args, "-tags="+tags)
+	}
+	args = append(args, "-json", "-deps", "-test", "./...")
+	command := exec.Command("go", args...)
+	command.Dir = root
+	command.Env = pinnedGoEnvironment()
+	output, err := command.CombinedOutput()
+	if err != nil {
+		return packageGraph{}, fmt.Errorf("go %s: %w\n%s", strings.Join(args, " "), err, output)
+	}
+	graph := packageGraph{
+		production: make(map[string]map[string]bool),
+		tests:      make(map[string]map[string]bool),
+	}
+	decoder := json.NewDecoder(bytes.NewReader(output))
+	for {
+		var description packageDescription
+		err := decoder.Decode(&description)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return packageGraph{}, fmt.Errorf("decode go list output: %w", err)
+		}
+		source, ok := relativeModulePackage(description.ImportPath)
+		if !ok || description.ForTest != "" || strings.HasSuffix(source, ".test") {
+			continue
+		}
+		for _, imported := range description.Imports {
+			if target, ok := relativeModulePackage(imported); ok {
+				addGraphEdge(graph.production, source, target)
+			}
+		}
+		for _, imported := range append(append([]string(nil), description.TestImports...), description.XTestImports...) {
+			if target, ok := relativeModulePackage(imported); ok {
+				addGraphEdge(graph.tests, source, target)
+			}
+		}
+	}
+	return graph, nil
+}
+
+func addGraphEdge(graph map[string]map[string]bool, source, target string) {
+	if graph[source] == nil {
+		graph[source] = make(map[string]bool)
+	}
+	graph[source][target] = true
+}
+
+func auditPackageGraph(graph packageGraph) []string {
+	violations := make([]string, 0)
+	for source, targets := range graph.production {
+		for target := range targets {
+			violations = append(violations, auditDependencyEdge(source, target, false)...)
+		}
+	}
+	for source, targets := range graph.tests {
+		for target := range targets {
+			violations = append(violations, auditDependencyEdge(source, target, true)...)
+		}
+	}
+	sort.Strings(violations)
+	return violations
+}
+
+func auditDependencyEdge(source, imported string, testOnly bool) []string {
+	if obsoletePackage(imported) {
+		return []string{source + " imports obsolete package " + imported}
+	}
+	if testOnly {
+		return nil
+	}
+	if source == "cmd/ycy" && imported != "internal/ycycmd" {
+		return []string{source + " imports outside the thin entry boundary: " + imported}
+	}
+	if source == "internal/ycycmd" && !allowedYcycmdImport(imported) {
+		return []string{source + " imports outside the composition boundary: " + imported}
+	}
+	if isInternalPackage(source) && source != "internal/ycycmd" && strings.HasPrefix(imported, "pkg/cmd") {
+		return []string{source + " imports command package " + imported}
+	}
+	if source == "pkg/cmdutil" && strings.HasPrefix(imported, "pkg/cmd") {
+		return []string{source + " imports command package " + imported}
+	}
+	if source == "pkg/cmd/factory" && strings.HasPrefix(imported, "pkg/cmd/") && imported != "pkg/cmdutil" {
+		return []string{source + " imports command package " + imported}
+	}
+	if source == "pkg/cmd/root" && strings.HasPrefix(imported, "pkg/cmd/") && !isTopLevelCommandPackage(imported) {
+		return []string{source + " imports non-top-level command package " + imported}
+	}
+	if strings.HasPrefix(source, "pkg/cmd/") {
+		return validateTargetCommandImport(source, source, imported)
+	}
+	if strings.HasPrefix(source, "tools/") && strings.HasPrefix(imported, "pkg/cmd") {
+		return []string{source + " imports command package " + imported}
+	}
+	return nil
+}
+
+func obsoletePackage(path string) bool {
+	return path == "internal/cliapp" || path == "internal/commands" ||
+		strings.HasPrefix(path, "internal/cliapp/") || strings.HasPrefix(path, "internal/commands/")
+}
+
+func relativeModulePackage(path string) (string, bool) {
+	if path == modulePath {
+		return "", true
+	}
+	prefix := modulePath + "/"
+	if !strings.HasPrefix(path, prefix) {
+		return "", false
+	}
+	return strings.TrimPrefix(path, prefix), true
+}
+
+func pinnedGoEnvironment() []string {
+	want := map[string]string{
+		"GOTOOLCHAIN": "go1.26.7",
+		"GOWORK":      "off",
+		"CGO_ENABLED": "0",
+	}
+	environment := make([]string, 0, len(os.Environ())+len(want))
+	for _, value := range os.Environ() {
+		key, _, ok := strings.Cut(value, "=")
+		if ok {
+			if _, replace := want[key]; replace {
+				continue
+			}
+		}
+		environment = append(environment, value)
+	}
+	for key, value := range want {
+		environment = append(environment, key+"="+value)
+	}
+	return environment
+}
+
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for index := range left {
+		if left[index] != right[index] {
+			return false
+		}
+	}
+	return true
 }
 
 func assertNoRootHandlerTransition(t *testing.T, root string) {
@@ -148,6 +456,11 @@ func isSelectorCall(call *ast.CallExpr, packageName, functionName string) bool {
 	}
 	identifier, ok := selector.X.(*ast.Ident)
 	return ok && identifier.Name == packageName
+}
+
+func isTopLevelCommandPackage(path string) bool {
+	parts := strings.Split(path, "/")
+	return len(parts) == 3 && parts[0] == "pkg" && parts[1] == "cmd"
 }
 
 func inspectGoFile(root, path string) []string {
@@ -308,7 +621,7 @@ func allowedCurrentBinaryImport(imported string) bool {
 }
 
 func allowedYcycmdImport(imported string) bool {
-	return strings.HasPrefix(imported, "pkg/cmd/") || imported == "pkg/cmdutil" || strings.HasPrefix(imported, "internal/") || imported == "web"
+	return imported == "pkg/cmd/root" || imported == "pkg/cmd/factory" || imported == "pkg/cmd/upgrade" || imported == "pkg/cmdutil" || strings.HasPrefix(imported, "internal/") || imported == "web"
 }
 
 func allowedWebassetsConsumer(path string) bool {

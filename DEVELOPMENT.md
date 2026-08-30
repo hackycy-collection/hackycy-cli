@@ -1,6 +1,6 @@
 # ycy 开发指南
 
-本文面向已经装好项目工具链、正在熟悉 Go 的开发者。所有命令都从仓库根目录执行。
+本文面向已经装好项目工具链、正在熟悉 Go 的开发者。所有命令都从仓库根目录执行。目录职责和依赖方向以[项目结构文档](docs/project-layout.md)为准。
 
 ## 先跑起来
 
@@ -86,13 +86,13 @@ pnpm --dir web dev:fs
 pnpm --dir web dev:diff
 ```
 
-Vite 提供前端热更新，但不会替你重启 Go 后端。修改 Go 代码后，停止终端 A、重新执行 `make build`，再重新启动对应命令。`tunnel-server` 的 Vite 外壳已保留在 `web/`，但当前 Go CLI 尚未注册 Tunnel 命令，不能把它当作可用的本地服务。
+Vite 提供前端热更新，但不会替你重启 Go 后端。修改 Go 代码后，停止终端 A、重新执行 `make build`，再重新启动对应命令。Tunnel 由 `./build/ycy tunnel server` 和 `./build/ycy tunnel connect` 提供；`web/tunnel-server` 是它的嵌入式管理界面资源，不是独立的本地服务入口。
 
 ## 调试 Go
 
 仓库的 [`.vscode/launch.json`](../.vscode/launch.json) 已提供 `ycy: debug command`。使用它之前至少完成过一次 `make build`，以生成 Go 编译时必须嵌入的 `web/dist` 和 7-Zip 资源。
 
-1. 在 VS Code 打开仓库，在 `cmd/ycy/main.go`、`internal/cliapp/app.go` 或目标命令的 `run.go` 处设置断点。
+1. 在 VS Code 打开仓库，在 `cmd/ycy/main.go`、`internal/ycycmd/main.go`、`pkg/cmd/root/app.go` 或目标命令的 `run.go` 处设置断点。
 2. 打开 “Run and Debug”，选择 `ycy: debug command`，按 F5。默认参数是 `--help`，可以验证命令树的创建过程。
 3. 要跟踪具体命令时，将 `launch.json` 中该配置的 `args` 改为需要的参数，例如 `["git", "heat"]` 或 `["fs", ".", "--port", "1204"]`，再次按 F5。
 4. 长时间运行的 `fs`、`diff` 服务可用调试器的 Stop 按钮或终端的 `Ctrl+C` 结束。
@@ -102,9 +102,9 @@ Vite 提供前端热更新，但不会替你重启 Go 后端。修改 Go 代码�
 调试测试通常更快：在 Go 测试函数上使用 VS Code 的 `Run Test`/`Debug Test`，或在终端缩小范围：
 
 ```sh
-go test ./cmd/ycy -run TestDiff -v
-go test ./internal/commands/diff -run Test -v
-go test ./internal/commands/fs -run Test -v
+go test ./internal/ycycmd -run Test -v
+go test ./pkg/cmd/diff -run Test -v
+go test ./pkg/cmd/fs -run Test -v
 ```
 
 测试名称和包路径以正在修改的命令为准。改动完成后执行 `make check`；提交前的 hook 只覆盖快速检查，不能替代它。
@@ -115,9 +115,10 @@ go test ./internal/commands/fs -run Test -v
 
 ```text
 命令行参数
-  -> cmd/ycy                 组装进程依赖、信号和退出码
-  -> internal/cliapp         Cobra 命令树、参数与日志配置
-  -> internal/commands/<x>   命令业务逻辑
+  -> cmd/ycy                 注入版本并交给唯一的进程出口
+  -> internal/ycycmd         进程事实、信号、启动路由和组合
+  -> pkg/cmd/root             Cobra 根命令、参数与诊断配置
+  -> pkg/cmd/<domain>/<leaf>  命令语法、业务逻辑与呈现
   -> web/                    diff/fs 等命令嵌入的 Vite/React 资源
 ```
 
@@ -125,20 +126,20 @@ go test ./internal/commands/fs -run Test -v
 
 | 想了解的内容 | 先看 | 接着看 |
 | --- | --- | --- |
-| 命令名称、flags、参数 | `internal/cliapp/<命令>.go` | `cmd/ycy/<命令>.go` |
-| 命令业务与可测试边界 | `internal/commands/<命令>/` | 同目录的 `*_test.go` |
-| 本地配置 | `internal/appconfig/` | `cmd/ycy/config*.go` |
+| 命令名称、flags、参数 | `pkg/cmd/root/` 或对应叶子目录的 `command.go` | 同目录的 `command_test.go` |
+| 命令业务与可测试边界 | `pkg/cmd/<domain>/<leaf>/` | 同目录的 `*_test.go` |
+| 本地配置 | `internal/appconfig/` | `pkg/cmd/config/` 下的对应叶子 |
 | Web 页面与代理端口 | `web/vite.config.ts` | `web/diff/`、`web/fs/` |
 
-例如跟踪 `diff` 时依次阅读 `internal/cliapp/diff.go`、`cmd/ycy/diff.go`、`internal/commands/diff/run.go` 和同目录测试；跟踪 `fs` 时采用同样顺序。`cmd/ycy` 是组合根，尽量不要把业务逻辑堆回这里。
+例如跟踪 `diff` 时依次阅读 `internal/ycycmd/main.go`、`pkg/cmd/root/app.go`、`pkg/cmd/diff/command.go`、`pkg/cmd/diff/run.go` 和同目录测试；跟踪 `fs` 时采用同样顺序。`cmd/ycy` 只有薄入口，进程组合放在 `internal/ycycmd`，命令业务不要回填到入口目录。
 
 ## 验证层级
 
 按改动范围选择最小充分的检查，然后在交付前运行完整检查：
 
 ```sh
-go test ./internal/commands/diff/...  # 只改 Diff 业务逻辑
-go test ./cmd/ycy                     # 只改 CLI 组装或参数
+go test ./pkg/cmd/diff/...            # 只改 Diff 业务逻辑
+go test ./internal/ycycmd ./pkg/cmd/root # 只改 CLI 组装或参数
 pnpm --dir web run test               # 只改 React 逻辑
 make check-web                        # 改 Web 的完整本地检查
 make check                            # 准备提交或评审
