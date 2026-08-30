@@ -114,7 +114,8 @@ func TestWorkspaceRetainsPublishedSnapshotWhenRootIdentityChanges(t *testing.T) 
 	}
 	original := refreshWorkspace(t, workspace)
 
-	if err := os.RemoveAll(target); err != nil {
+	retiredTarget := target + "-retired"
+	if err := os.Rename(target, retiredTarget); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(target, 0o755); err != nil {
