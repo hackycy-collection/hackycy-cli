@@ -180,12 +180,9 @@ func assertGoPackageInventory(t *testing.T, root, tags string, want []string) {
 		args = append(args, "-tags="+tags)
 	}
 	args = append(args, "./...")
-	command := exec.Command("go", args...)
-	command.Dir = root
-	command.Env = pinnedGoEnvironment()
-	output, err := command.CombinedOutput()
+	output, stderr, err := runPinnedGoCommand(root, args...)
 	if err != nil {
-		t.Fatalf("go %s: %v\n%s", strings.Join(args, " "), err, output)
+		t.Fatalf("go %s: %v\n%s", strings.Join(args, " "), err, stderr)
 	}
 	got := make([]string, 0)
 	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
@@ -211,12 +208,9 @@ func loadPackageGraph(root, tags string) (packageGraph, error) {
 		args = append(args, "-tags="+tags)
 	}
 	args = append(args, "-json", "-deps", "-test", "./...")
-	command := exec.Command("go", args...)
-	command.Dir = root
-	command.Env = pinnedGoEnvironment()
-	output, err := command.CombinedOutput()
+	output, stderr, err := runPinnedGoCommand(root, args...)
 	if err != nil {
-		return packageGraph{}, fmt.Errorf("go %s: %w\n%s", strings.Join(args, " "), err, output)
+		return packageGraph{}, fmt.Errorf("go %s: %w\n%s", strings.Join(args, " "), err, stderr)
 	}
 	graph := packageGraph{
 		production: make(map[string]map[string]bool),
@@ -321,6 +315,16 @@ func relativeModulePackage(path string) (string, bool) {
 		return "", false
 	}
 	return strings.TrimPrefix(path, prefix), true
+}
+
+func runPinnedGoCommand(root string, args ...string) ([]byte, []byte, error) {
+	command := exec.Command("go", args...)
+	command.Dir = root
+	command.Env = pinnedGoEnvironment()
+	var stderr bytes.Buffer
+	command.Stderr = &stderr
+	stdout, err := command.Output()
+	return stdout, stderr.Bytes(), err
 }
 
 func pinnedGoEnvironment() []string {
