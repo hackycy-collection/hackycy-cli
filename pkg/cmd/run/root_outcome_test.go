@@ -106,7 +106,7 @@ func newRunRootApp(t *testing.T, input io.Reader, output, diagnostics *bytes.Buf
 		},
 		Session: session,
 	})
-	app, err := rootcommand.New(factory, rootcommand.Dependencies{})
+	app, err := rootcommand.New(factory)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

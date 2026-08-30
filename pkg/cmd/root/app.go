@@ -11,24 +11,18 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/hackycy/hackycy-cli/internal/terminal"
 	configcommand "github.com/hackycy/hackycy-cli/pkg/cmd/config"
+	diffcommand "github.com/hackycy/hackycy-cli/pkg/cmd/diff"
 	exportcommand "github.com/hackycy/hackycy-cli/pkg/cmd/export"
+	fscommand "github.com/hackycy/hackycy-cli/pkg/cmd/fs"
 	gitcommand "github.com/hackycy/hackycy-cli/pkg/cmd/git"
 	rmcommand "github.com/hackycy/hackycy-cli/pkg/cmd/rm"
 	runcommand "github.com/hackycy/hackycy-cli/pkg/cmd/run"
+	tunnelcommand "github.com/hackycy/hackycy-cli/pkg/cmd/tunnel"
+	upgradecommand "github.com/hackycy/hackycy-cli/pkg/cmd/upgrade"
 	zipcommand "github.com/hackycy/hackycy-cli/pkg/cmd/zip"
 	"github.com/hackycy/hackycy-cli/pkg/cmdutil"
 	"github.com/spf13/cobra"
 )
-
-// Dependencies are the temporary unmigrated command handlers supplied by the
-// composition root. Process facts belong exclusively to cmdutil.Factory.
-type Dependencies struct {
-	Diff          DiffHandler
-	FS            FSHandler
-	TunnelServer  TunnelServerHandler
-	TunnelConnect TunnelConnectHandler
-	Upgrade       UpgradeHandler
-}
 
 // Outcome leaves process exit ownership with cmd/ycy.
 type Outcome struct {
@@ -38,16 +32,11 @@ type Outcome struct {
 
 // App owns Cobra, global options, diagnostics, and fresh root-tree construction.
 type App struct {
-	factory       *cmdutil.Factory
-	diff          DiffHandler
-	fs            FSHandler
-	tunnelServer  TunnelServerHandler
-	tunnelConnect TunnelConnectHandler
-	upgrade       UpgradeHandler
+	factory *cmdutil.Factory
 }
 
-// New creates the lifted root with the bounded Factory and current temporary handlers.
-func New(factory *cmdutil.Factory, dependencies Dependencies) (*App, error) {
+// New creates the lifted root with the bounded Factory.
+func New(factory *cmdutil.Factory) (*App, error) {
 	if factory == nil {
 		return nil, errors.New("command Factory is required")
 	}
@@ -57,14 +46,7 @@ func New(factory *cmdutil.Factory, dependencies Dependencies) (*App, error) {
 	if factory.IOStreams.Out == nil || factory.Terminal == nil || factory.Logging == nil || factory.Environment == nil || factory.EnvironmentLookup == nil {
 		return nil, errors.New("command Factory is incomplete")
 	}
-	return &App{
-		factory:       factory,
-		diff:          dependencies.Diff,
-		fs:            dependencies.FS,
-		tunnelServer:  dependencies.TunnelServer,
-		tunnelConnect: dependencies.TunnelConnect,
-		upgrade:       dependencies.Upgrade,
-	}, nil
+	return &App{factory: factory}, nil
 }
 
 func (app *App) output() io.Writer {
@@ -149,7 +131,8 @@ func (app *App) rootCommandWithDiagnosticControls(controls diagnosticControls) *
 	root.SetErr(app.diagnostics())
 	root.PersistentPreRunE = func(command *cobra.Command, _ []string) error {
 		switch command.CommandPath() {
-		case "ycy rm", "ycy export env", "ycy run", "ycy zip",
+		case "ycy diff", "ycy fs", "ycy rm", "ycy export env", "ycy run", "ycy zip", "ycy tunnel server", "ycy tunnel connect",
+			"ycy upgrade",
 			"ycy git heat", "ycy git pulse", "ycy git fork", "ycy git cm",
 			"ycy config fork list", "ycy config fork add", "ycy config fork remove",
 			"ycy config cm list", "ycy config cm add", "ycy config cm use",
@@ -170,18 +153,10 @@ func (app *App) rootCommandWithDiagnosticControls(controls diagnosticControls) *
 	root.AddCommand(runcommand.NewCmdRun(app.factory, nil))
 	root.AddCommand(zipcommand.NewCmdZIP(app.factory, nil))
 	root.AddCommand(gitcommand.NewCmdGit(app.factory))
-	if app.diff != nil {
-		app.registerDiff(root, configureDiagnostics)
-	}
-	if app.fs != nil {
-		app.registerFS(root, configureDiagnostics)
-	}
-	if app.tunnelServer != nil || app.tunnelConnect != nil {
-		app.registerTunnel(root, configureDiagnostics)
-	}
-	if app.upgrade != nil {
-		app.registerUpgrade(root, configureDiagnostics)
-	}
+	root.AddCommand(diffcommand.NewCmdDiff(app.factory, nil))
+	root.AddCommand(fscommand.NewCmdFS(app.factory, nil))
+	root.AddCommand(tunnelcommand.NewCmdTunnel(app.factory))
+	root.AddCommand(upgradecommand.NewCmdUpgrade(app.factory, nil))
 	if app.factory.Terminal.Session().Kind == terminal.RichInteractive {
 		discovery := newTerminalDiscoveryAdapter(app.factory.Terminal)
 		root.SetHelpFunc(func(command *cobra.Command, _ []string) {

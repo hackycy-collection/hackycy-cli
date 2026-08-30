@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 
-	fscommand "github.com/hackycy/hackycy-cli/internal/commands/fs"
+	"github.com/hackycy/hackycy-cli/internal/fsthumbnail"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 	commandfactory "github.com/hackycy/hackycy-cli/pkg/cmd/factory"
 	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
@@ -25,8 +25,8 @@ func main() {
 		return
 	}
 
-	if fscommand.IsThumbnailWorkerInvocation(arguments) {
-		if err := fscommand.RunThumbnailWorker(os.Stdin, os.Stdout); err != nil {
+	if fsthumbnail.IsThumbnailWorkerInvocation(arguments) {
+		if err := fsthumbnail.RunThumbnailWorker(os.Stdin, os.Stdout); err != nil {
 			_, _ = fmt.Fprintf(os.Stderr, "thumbnail worker error: %s\n", err)
 			os.Exit(1)
 		}
@@ -59,26 +59,7 @@ func main() {
 
 	ctx, stop := newYcySignalContext(context.Background())
 	defer stop()
-	runtime := commandFactory.Logging
-	diffHandler, err := newDiffHandler(terminalRoot.experience)
-	if err != nil {
-		_, _ = fmt.Fprintln(terminalRoot.output)
-		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
-		os.Exit(1)
-	}
-	fsHandler, err := newFSHandler(terminalRoot.experience)
-	if err != nil {
-		_, _ = fmt.Fprintln(terminalRoot.output)
-		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)
-		os.Exit(1)
-	}
-	app, err := rootcommand.New(commandFactory, rootcommand.Dependencies{
-		Diff:          diffHandler,
-		FS:            fsHandler,
-		TunnelServer:  newTunnelServerHandler(runtime.Logger("tunnel.server")),
-		TunnelConnect: newTunnelConnectHandler(terminalRoot.experience, runtime.Logger("tunnel.client"), version),
-		Upgrade:       newUpgradeHandler(terminalRoot.experience, version),
-	})
+	app, err := rootcommand.New(commandFactory)
 	if err != nil {
 		_, _ = fmt.Fprintln(terminalRoot.output)
 		_, _ = fmt.Fprintf(normalDiagnostics, "error: %s\n", err)

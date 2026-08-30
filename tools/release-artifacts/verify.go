@@ -12,8 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/hackycy/hackycy-cli/internal/commands/tunnel"
-	"github.com/hackycy/hackycy-cli/internal/commands/upgrade"
+	"github.com/hackycy/hackycy-cli/internal/tunnelruntime"
+	"github.com/hackycy/hackycy-cli/internal/updater"
 )
 
 const releaseVersion = "0.1.0"
@@ -60,11 +60,11 @@ func verifyReleaseCandidate(directory, sourceRoot string) error {
 }
 
 func verifyChecksumManifest(directory string, artifacts []releaseArtifact) error {
-	contents, err := os.ReadFile(filepath.Join(directory, upgrade.ChecksumManifest))
+	contents, err := os.ReadFile(filepath.Join(directory, updater.ChecksumManifest))
 	if err != nil {
 		return fmt.Errorf("read checksum manifest: %w", err)
 	}
-	checksums, err := upgrade.ParseChecksumManifest(string(contents))
+	checksums, err := updater.ParseChecksumManifest(string(contents))
 	if err != nil {
 		return fmt.Errorf("parse checksum manifest: %w", err)
 	}
@@ -239,7 +239,7 @@ func verifyEmbeddedWeb(binary []byte, sourceRoot, artifactName string) error {
 }
 
 func verifyEmbeddedSevenZip(binary []byte, sourceRoot string, artifact releaseArtifact) error {
-	payloadRoot := filepath.Join(sourceRoot, "internal", "commands", "fs", "sevenzipruntime", "payload")
+	payloadRoot := filepath.Join(sourceRoot, "internal", "sevenzipruntime", "payload")
 	target := artifact.goos + "-" + artifact.goarch
 	expectedDirectory := filepath.Join(payloadRoot, target)
 	expected, err := payloadContents(expectedDirectory)
@@ -307,7 +307,7 @@ func containsPayload(payload map[string][]byte, candidate []byte) bool {
 }
 
 func verifyFRPManifest(binary []byte, artifactName string) error {
-	for _, artifact := range tunnel.FRPArtifacts() {
+	for _, artifact := range tunnelruntime.FRPArtifacts() {
 		for _, value := range []string{
 			artifact.Description.Archive,
 			artifact.Description.SHA256,
@@ -323,7 +323,7 @@ func verifyFRPManifest(binary []byte, artifactName string) error {
 }
 
 func verifyNoEmbeddedFRP(sourceRoot string) error {
-	root := filepath.Join(sourceRoot, "internal", "commands", "tunnel")
+	root := filepath.Join(sourceRoot, "internal", "tunnelruntime")
 	return filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return walkErr

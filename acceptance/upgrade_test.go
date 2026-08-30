@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	upgrade "github.com/hackycy/hackycy-cli/internal/commands/upgrade"
+	updater "github.com/hackycy/hackycy-cli/internal/updater"
 )
 
 func TestDetachedGoToGoStandaloneReplacementRollbackAndSelfCheck(t *testing.T) {
@@ -31,24 +31,24 @@ func TestDetachedGoToGoStandaloneReplacementRollbackAndSelfCheck(t *testing.T) {
 	target := nativeTestExecutablePath(filepath.Join(directory, "ycy"))
 	staged := expectedTransactionPath(target, ".new.", "success")
 	backup := expectedTransactionPath(target, ".backup.", "success")
-	updater := expectedUpdaterPath(directory, "success")
+	updaterPath := expectedUpdaterPath(directory, "success")
 	copyUpgradeFile(t, first, target)
 	copyUpgradeFile(t, second, staged)
-	copyUpgradeFile(t, first, updater)
+	copyUpgradeFile(t, first, updaterPath)
 	parentPID := exitedUpgradeParent(t)
-	success := upgrade.UpdateTransaction{
+	success := updater.UpdateTransaction{
 		TransactionID: "success-success-success-success-successsuccess",
 		ParentPID:     parentPID, TargetPath: target, StagedPath: staged, BackupPath: backup,
 		ExpectedHash: mustUpgradeFileHash(t, staged), ExpectedVersion: "2.0.0",
-		StatePath: upgrade.StatePath(target), UpdaterPath: updater,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: upgrade.StatusPending,
+		StatePath: updater.StatePath(target), UpdaterPath: updaterPath,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: updater.StatusPending,
 	}
-	if err := upgrade.WriteState(success); err != nil {
+	if err := updater.WriteState(success); err != nil {
 		t.Fatal(err)
 	}
-	runUpgradeUpdater(t, updater, upgrade.InternalUpdateArgs(success))
-	state, err := upgrade.ReadState(success.StatePath)
-	if err != nil || state == nil || state.Status != upgrade.StatusSucceeded {
+	runUpgradeUpdater(t, updaterPath, updater.InternalUpdateArgs(success))
+	state, err := updater.ReadState(success.StatePath)
+	if err != nil || state == nil || state.Status != updater.StatusSucceeded {
 		t.Fatalf("success state = %#v, %v", state, err)
 	}
 	assertUpgradeVersion(t, target, "2.0.0")
@@ -63,24 +63,24 @@ func TestDetachedGoToGoStandaloneReplacementRollbackAndSelfCheck(t *testing.T) {
 	copyUpgradeFile(t, second, rollbackTarget)
 	copyUpgradeFile(t, first, rollbackStaged)
 	copyUpgradeFile(t, second, rollbackUpdater)
-	failure := upgrade.UpdateTransaction{
+	failure := updater.UpdateTransaction{
 		TransactionID: "failure-failure-failure-failure-failurefailure",
 		ParentPID:     exitedUpgradeParent(t), TargetPath: rollbackTarget, StagedPath: rollbackStaged, BackupPath: rollbackBackup,
 		ExpectedHash: mustUpgradeFileHash(t, rollbackStaged), ExpectedVersion: "2.0.0",
-		StatePath: upgrade.StatePath(rollbackTarget), UpdaterPath: rollbackUpdater,
-		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: upgrade.StatusPending,
+		StatePath: updater.StatePath(rollbackTarget), UpdaterPath: rollbackUpdater,
+		CreatedAt: time.Now().UTC().Format(time.RFC3339Nano), Status: updater.StatusPending,
 	}
-	if err := upgrade.WriteState(failure); err != nil {
+	if err := updater.WriteState(failure); err != nil {
 		t.Fatal(err)
 	}
-	failedCommand := exec.Command(rollbackUpdater, upgrade.InternalUpdateArgs(failure)...)
+	failedCommand := exec.Command(rollbackUpdater, updater.InternalUpdateArgs(failure)...)
 	if output, runErr := failedCommand.CombinedOutput(); runErr == nil {
 		t.Fatal("failed updater unexpectedly succeeded")
 	} else if len(output) > 0 {
 		t.Logf("failed updater output: %s", output)
 	}
-	state, err = upgrade.ReadState(failure.StatePath)
-	if err != nil || state == nil || state.Status != upgrade.StatusFailed {
+	state, err = updater.ReadState(failure.StatePath)
+	if err != nil || state == nil || state.Status != updater.StatusFailed {
 		t.Fatalf("failure state = %#v, %v", state, err)
 	}
 	assertUpgradeVersion(t, rollbackTarget, "2.0.0")

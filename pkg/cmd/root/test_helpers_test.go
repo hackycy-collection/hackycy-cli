@@ -21,11 +21,6 @@ type testDependencies struct {
 	EnvironmentLookup func(string) (string, bool)
 	Logging           *logging.Runtime
 	Session           terminal.Session
-	Diff              DiffHandler
-	FS                FSHandler
-	TunnelServer      TunnelServerHandler
-	TunnelConnect     TunnelConnectHandler
-	Upgrade           UpgradeHandler
 }
 
 func newTestApp(build BuildInfo, dependencies testDependencies) (*App, error) {
@@ -42,11 +37,5 @@ func newTestApp(build BuildInfo, dependencies testDependencies) (*App, error) {
 	if dependencies.Logging != nil {
 		factory.Logging = dependencies.Logging
 	}
-	return New(factory, Dependencies{
-		Diff:          dependencies.Diff,
-		FS:            dependencies.FS,
-		TunnelServer:  dependencies.TunnelServer,
-		TunnelConnect: dependencies.TunnelConnect,
-		Upgrade:       dependencies.Upgrade,
-	})
+	return New(factory)
 }

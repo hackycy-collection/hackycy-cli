@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hackycy/hackycy-cli/internal/commands/upgrade"
+	"github.com/hackycy/hackycy-cli/internal/updater"
 )
 
 func TestWriteChecksumManifestUsesEveryFixedArtifactExactlyOnce(t *testing.T) {
@@ -26,11 +26,11 @@ func TestWriteChecksumManifestUsesEveryFixedArtifactExactlyOnce(t *testing.T) {
 	if err := writeChecksumManifest(directory); err != nil {
 		t.Fatal(err)
 	}
-	contents, err := os.ReadFile(filepath.Join(directory, upgrade.ChecksumManifest))
+	contents, err := os.ReadFile(filepath.Join(directory, updater.ChecksumManifest))
 	if err != nil {
 		t.Fatal(err)
 	}
-	checksums, err := upgrade.ParseChecksumManifest(string(contents))
+	checksums, err := updater.ParseChecksumManifest(string(contents))
 	if err != nil {
 		t.Fatal(err)
 	}

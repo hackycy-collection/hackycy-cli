@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/hackycy/hackycy-cli/internal/commands/upgrade"
+	"github.com/hackycy/hackycy-cli/internal/updater"
 )
 
 var artifactTargets = [][2]string{
@@ -45,7 +45,7 @@ func writeChecksumManifest(directory string) error {
 	if err != nil {
 		return err
 	}
-	manifest := filepath.Join(directory, upgrade.ChecksumManifest)
+	manifest := filepath.Join(directory, updater.ChecksumManifest)
 	if _, err := os.Lstat(manifest); err == nil {
 		return fmt.Errorf("checksum manifest already exists: %s", manifest)
 	} else if !os.IsNotExist(err) {
@@ -89,7 +89,7 @@ func releaseArtifacts(directory string, requireChecksumManifest bool) ([]release
 		if !entry.Type().IsRegular() {
 			return nil, fmt.Errorf("release directory contains a non-file entry: %s", entry.Name())
 		}
-		if entry.Name() == upgrade.ChecksumManifest {
+		if entry.Name() == updater.ChecksumManifest {
 			if !requireChecksumManifest {
 				return nil, fmt.Errorf("checksum manifest already exists: %s", entry.Name())
 			}
@@ -106,7 +106,7 @@ func releaseArtifacts(directory string, requireChecksumManifest bool) ([]release
 	}
 
 	if requireChecksumManifest && !foundChecksumManifest {
-		return nil, fmt.Errorf("release directory is missing checksum manifest: %s", upgrade.ChecksumManifest)
+		return nil, fmt.Errorf("release directory is missing checksum manifest: %s", updater.ChecksumManifest)
 	}
 	artifacts := make([]releaseArtifact, 0, len(expected))
 	for _, expectedArtifact := range expected {
@@ -123,7 +123,7 @@ func expectedArtifacts() ([]releaseArtifact, error) {
 	expected := make([]releaseArtifact, 0, len(artifactTargets))
 	seen := make(map[string]bool, len(artifactTargets))
 	for _, target := range artifactTargets {
-		artifact, err := upgrade.ArtifactFor(target[0], target[1])
+		artifact, err := updater.ArtifactFor(target[0], target[1])
 		if err != nil {
 			return nil, err
 		}

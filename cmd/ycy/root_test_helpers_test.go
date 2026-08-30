@@ -15,11 +15,6 @@ type rootTestDependencies struct {
 	Environment       func(string) string
 	EnvironmentLookup func(string) (string, bool)
 	Logging           *logging.Runtime
-	Diff              rootcommand.DiffHandler
-	FS                rootcommand.FSHandler
-	TunnelServer      rootcommand.TunnelServerHandler
-	TunnelConnect     rootcommand.TunnelConnectHandler
-	Upgrade           rootcommand.UpgradeHandler
 }
 
 func newRootCommandForTest(version string, dependencies rootTestDependencies) (*rootcommand.App, error) {
@@ -35,11 +30,5 @@ func newRootCommandForTest(version string, dependencies rootTestDependencies) (*
 	if dependencies.Logging != nil {
 		factory.Logging = dependencies.Logging
 	}
-	return rootcommand.New(factory, rootcommand.Dependencies{
-		Diff:          dependencies.Diff,
-		FS:            dependencies.FS,
-		TunnelServer:  dependencies.TunnelServer,
-		TunnelConnect: dependencies.TunnelConnect,
-		Upgrade:       dependencies.Upgrade,
-	})
+	return rootcommand.New(factory)
 }

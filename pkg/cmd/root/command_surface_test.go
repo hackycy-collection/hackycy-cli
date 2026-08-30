@@ -14,9 +14,6 @@ import (
 	"strings"
 	"testing"
 
-	diffcommand "github.com/hackycy/hackycy-cli/internal/commands/diff"
-	fscommand "github.com/hackycy/hackycy-cli/internal/commands/fs"
-	tunnelcommand "github.com/hackycy/hackycy-cli/internal/commands/tunnel"
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -310,26 +307,11 @@ func newSurfaceApp() (*App, error) {
 }
 
 func newSurfaceAppWithOutput(output, errOutput io.Writer) (*App, error) {
-	noDiff := func(context.Context, diffcommand.Input) (diffcommand.Result, error) {
-		return diffcommand.Result{}, nil
-	}
-	noFS := func(context.Context, fscommand.Input) (fscommand.Result, error) {
-		return fscommand.Result{}, nil
-	}
-	noTunnelServer := func(context.Context, tunnelcommand.ServerConfig) error { return nil }
-	noTunnelConnect := func(context.Context, tunnelcommand.ClientOptionInput) error { return nil }
-	noUpgrade := func(context.Context) error { return nil }
-
 	return newTestApp(BuildInfo{Version: commandSurfaceVersion}, testDependencies{
 		Out:               output,
 		Err:               errOutput,
 		Environment:       func(string) string { return "" },
 		EnvironmentLookup: func(string) (string, bool) { return "", false },
 		Logging:           logging.NewRuntime(logging.Options{Writer: errOutput}),
-		Diff:              noDiff,
-		FS:                noFS,
-		TunnelServer:      noTunnelServer,
-		TunnelConnect:     noTunnelConnect,
-		Upgrade:           noUpgrade,
 	})
 }

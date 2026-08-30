@@ -111,7 +111,7 @@ func newRootApp(t *testing.T, input io.Reader, output, diagnostics *bytes.Buffer
 	})
 	runtime := logging.NewRuntime(logging.Options{Writer: diagnostics})
 	factory.Logging = runtime
-	app, err := rootcommand.New(factory, rootcommand.Dependencies{})
+	app, err := rootcommand.New(factory)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

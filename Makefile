@@ -7,10 +7,10 @@ RELEASE_DIR := release/$(RELEASE_VERSION)
 
 GO_FIND = find cmd internal pkg tools/hookctl tools/check-no-bun tools/release-artifacts tools/web-browser-harness web -path '*/node_modules' -prune -o -type f -name '*.go'
 
-.PHONY: help bootstrap hooks-install hooks-doctor hooks-uninstall fmt check check-web check-go check-locks check-no-bun acceptance command-surface command-surface-update build cross-build release-clean release-candidate release-untracked web-browser-harness ensure-web-deps ensure-web-dist prepare-7zip prepare-7zip-all
+.PHONY: help bootstrap hooks-install hooks-doctor hooks-uninstall fmt check check-web check-go check-locks check-no-bun acceptance acceptance-web command-surface command-surface-update build cross-build release-clean release-candidate release-untracked web-browser-harness ensure-web-deps ensure-web-dist prepare-7zip prepare-7zip-all
 
 help:
-	@printf '%s\n' 'Targets: bootstrap, hooks-install, hooks-doctor, hooks-uninstall, fmt, check, acceptance, command-surface, command-surface-update, build, cross-build, release-candidate, web-browser-harness'
+	@printf '%s\n' 'Targets: bootstrap, hooks-install, hooks-doctor, hooks-uninstall, fmt, check, acceptance, acceptance-web, command-surface, command-surface-update, build, cross-build, release-candidate, web-browser-harness'
 
 bootstrap:
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) $(GO) version
@@ -71,6 +71,9 @@ check: check-locks check-no-bun check-go
 acceptance:
 	@GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 -tags=acceptance ./acceptance/...
 
+acceptance-web: check-web prepare-7zip
+	@GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 -tags=acceptance ./acceptance/web
+
 command-surface:
 	@GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 ./pkg/cmd/root -run '^TestCommandSurface$$'
 
@@ -92,7 +95,7 @@ cross-build: check-web prepare-7zip-all
 
 release-clean:
 	@test "$(RELEASE_VERSION)" = "0.1.0" || { printf '%s\n' 'release-candidate requires RELEASE_VERSION=0.1.0'; exit 1; }
-	@for candidate in web/dist web/node_modules build .cache .tmp release internal/commands/fs/sevenzipruntime/payload tools/lefthook/bin; do \
+	@for candidate in web/dist web/node_modules build .cache .tmp release internal/sevenzipruntime/payload tools/lefthook/bin; do \
 		test ! -e "$$candidate" || { printf '%s\n' "release-candidate requires a clean checkout; found $$candidate"; exit 1; }; \
 	done
 
@@ -112,7 +115,7 @@ release-candidate: release-clean
 	@$(MAKE) release-untracked
 
 release-untracked:
-	@tracked="$$(git ls-files -- web/dist web/node_modules build .cache .tmp release internal/commands/fs/sevenzipruntime/payload tools/lefthook/bin)"; test -z "$$tracked" || { printf '%s\n%s\n' 'generated candidate output is tracked:' "$$tracked"; exit 1; }
+	@tracked="$$(git ls-files -- web/dist web/node_modules build .cache .tmp release internal/sevenzipruntime/payload tools/lefthook/bin)"; test -z "$$tracked" || { printf '%s\n%s\n' 'generated candidate output is tracked:' "$$tracked"; exit 1; }
 
 web-browser-harness: check-web
 	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 $(GO) run ./tools/web-browser-harness

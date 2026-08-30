@@ -23,7 +23,7 @@ playwright-report/
 test-results/
 
 # Generated target-specific 7-Zip embedding payloads
-/internal/commands/fs/sevenzipruntime/payload/
+/internal/sevenzipruntime/payload/
 
 # Pinned development-tool binary and local caches
 /tools/lefthook/bin/

@@ -70,7 +70,7 @@ func TestRootConfiguresDiagnosticsBeforeGitFork(t *testing.T) {
 	})
 	runtime = logging.NewRuntime(logging.Options{Writer: stderr})
 	factory.Logging = runtime
-	app, err := rootcommand.New(factory, rootcommand.Dependencies{})
+	app, err := rootcommand.New(factory)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}

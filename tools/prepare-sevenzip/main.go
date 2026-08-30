@@ -47,7 +47,7 @@ func main() {
 }
 
 func prepare(artifact sevenzipmanifest.Artifact) error {
-	target := filepath.Join("internal", "commands", "fs", "sevenzipruntime", "payload", artifact.Target)
+	target := filepath.Join("internal", "sevenzipruntime", "payload", artifact.Target)
 	if validPayload(target, artifact) {
 		return nil
 	}
@@ -157,7 +157,7 @@ func windowsExtractor() (string, error) {
 		}
 	}
 	if artifact, found := sevenzipmanifest.Current(); found && artifact.Format == "tar.xz" {
-		candidate := filepath.Join("internal", "commands", "fs", "sevenzipruntime", "payload", artifact.Target, "7zz")
+		candidate := filepath.Join("internal", "sevenzipruntime", "payload", artifact.Target, "7zz")
 		if info, err := os.Stat(candidate); err == nil && info.Mode().IsRegular() && info.Mode().Perm()&0o111 != 0 {
 			return candidate, nil
 		}

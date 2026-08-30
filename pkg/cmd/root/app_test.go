@@ -64,48 +64,42 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 		wantLevel   logging.Level
 		wantFormat  logging.RecordFormat
 		wantError   string
-		wantCall    bool
 	}{
 		{
 			name:        "environment config applies to executing command",
 			environment: map[string]string{"YCY_LOG_LEVEL": "warn", "YCY_LOG_FORMAT": "json"},
-			arguments:   []string{"upgrade"},
+			arguments:   []string{"rm", "missing"},
 			wantLevel:   logging.Warn,
 			wantFormat:  logging.JSONFormat,
-			wantCall:    true,
 		},
 		{
 			name:        "explicit level wins over environment",
 			environment: map[string]string{"YCY_LOG_LEVEL": "warn", "YCY_LOG_FORMAT": "json"},
-			arguments:   []string{"--log-level", "debug", "upgrade"},
+			arguments:   []string{"--log-level", "debug", "rm", "missing"},
 			wantLevel:   logging.Debug,
 			wantFormat:  logging.JSONFormat,
-			wantCall:    true,
 		},
 		{
 			name:       "explicit format reaches runtime",
-			arguments:  []string{"--log-format", "json", "upgrade"},
+			arguments:  []string{"--log-format", "json", "rm", "missing"},
 			wantLevel:  logging.Info,
 			wantFormat: logging.JSONFormat,
-			wantCall:   true,
 		},
 		{
 			name:       "verbose selects debug",
-			arguments:  []string{"--verbose", "upgrade"},
+			arguments:  []string{"--verbose", "rm", "missing"},
 			wantLevel:  logging.Debug,
 			wantFormat: logging.TextFormat,
-			wantCall:   true,
 		},
 		{
 			name:       "quiet selects error",
-			arguments:  []string{"-q", "upgrade"},
+			arguments:  []string{"-q", "rm", "missing"},
 			wantLevel:  logging.Error,
 			wantFormat: logging.TextFormat,
-			wantCall:   true,
 		},
 		{
 			name:       "conflicting controls stop before effect",
-			arguments:  []string{"--log-level", "info", "--quiet", "upgrade"},
+			arguments:  []string{"--log-level", "info", "--quiet", "rm", "missing"},
 			wantCode:   1,
 			wantLevel:  logging.Info,
 			wantFormat: logging.TextFormat,
@@ -113,7 +107,7 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 		},
 		{
 			name:       "invalid format stops before effect",
-			arguments:  []string{"--log-format", "yaml", "upgrade"},
+			arguments:  []string{"--log-format", "yaml", "rm", "missing"},
 			wantCode:   1,
 			wantLevel:  logging.Info,
 			wantFormat: logging.TextFormat,
@@ -125,24 +119,19 @@ func TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery(t *testing
 			output := &bytes.Buffer{}
 			errors := &bytes.Buffer{}
 			runtime := logging.NewRuntime(logging.Options{Writer: errors})
-			called := false
 			app, err := newTestApp(BuildInfo{Version: "0.0.0-dev"}, testDependencies{
 				Out:         output,
 				Err:         errors,
 				Environment: func(key string) string { return test.environment[key] },
 				Logging:     runtime,
-				Upgrade: func(context.Context) error {
-					called = true
-					return nil
-				},
 			})
 			if err != nil {
 				t.Fatalf("New returned an error: %v", err)
 			}
 
 			outcome := app.Execute(context.Background(), test.arguments)
-			if outcome.Code != test.wantCode || errors.String() != test.wantError || called != test.wantCall || runtime.Level() != test.wantLevel || runtime.Format() != test.wantFormat {
-				t.Fatalf("outcome = %#v, stderr = %q, called = %t, level = %v, format = %q", outcome, errors.String(), called, runtime.Level(), runtime.Format())
+			if outcome.Code != test.wantCode || errors.String() != test.wantError || runtime.Level() != test.wantLevel || runtime.Format() != test.wantFormat {
+				t.Fatalf("outcome = %#v, stderr = %q, level = %v, format = %q", outcome, errors.String(), runtime.Level(), runtime.Format())
 			}
 		})
 	}
@@ -198,15 +187,10 @@ func TestRichTerminalDiscoveryPreservesVersionAndRawCompletion(t *testing.T) {
 func TestParserRecoveryUsesOneActionableErrorLine(t *testing.T) {
 	output := &bytes.Buffer{}
 	errors := &bytes.Buffer{}
-	called := false
 	app, err := newTestApp(BuildInfo{Version: "0.0.0-dev"}, testDependencies{
 		Out:     output,
 		Err:     errors,
 		Logging: logging.NewRuntime(logging.Options{Writer: errors}),
-		Upgrade: func(context.Context) error {
-			called = true
-			return nil
-		},
 	})
 	if err != nil {
 		t.Fatalf("New returned an error: %v", err)
@@ -241,10 +225,9 @@ func TestParserRecoveryUsesOneActionableErrorLine(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			output.Reset()
 			errors.Reset()
-			called = false
 			outcome := app.Execute(context.Background(), testCase.arguments)
-			if outcome.Code != 1 || errors.String() != testCase.want || output.Len() != 0 || called {
-				t.Fatalf("outcome = %#v, stdout = %q, stderr = %q, called = %t", outcome, output.String(), errors.String(), called)
+			if outcome.Code != 1 || errors.String() != testCase.want || output.Len() != 0 {
+				t.Fatalf("outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
 			}
 		})
 	}
@@ -257,15 +240,12 @@ func TestParserRecoveryLeavesCommandErrorsUntouched(t *testing.T) {
 		Out:     output,
 		Err:     errors,
 		Logging: logging.NewRuntime(logging.Options{Writer: errors}),
-		Upgrade: func(context.Context) error {
-			return stderrors.New("command validation failed")
-		},
 	})
 	if err != nil {
 		t.Fatalf("New returned an error: %v", err)
 	}
 
-	outcome := app.Execute(context.Background(), []string{"upgrade"})
+	outcome := app.execute(func() error { return stderrors.New("command validation failed") })
 	if outcome.Code != 1 || errors.String() != "error: command validation failed\n" || output.Len() != 0 {
 		t.Fatalf("outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
 	}
@@ -284,29 +264,34 @@ func TestConfigParentExposesMigratedForkGroup(t *testing.T) {
 	}
 }
 
-func TestFSFoundationDoesNotExposeACommand(t *testing.T) {
+func TestFSLeafIsAlwaysRegistered(t *testing.T) {
 	app, output, errors, _ := testApp(t, nil)
 
-	if outcome := app.Execute(context.Background(), []string{"--help"}); outcome.Code != 0 || strings.Contains(output.String(), "\n  fs") {
+	if outcome := app.Execute(context.Background(), []string{"--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "\n  fs") {
 		t.Fatalf("help outcome = %#v, stdout = %q", outcome, output.String())
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"fs"}); outcome.Code != 1 || errors.String() != "error: unknown command 'fs'; did you mean 'rm'? Run 'ycy rm --help' for usage.\n" {
-		t.Fatalf("fs outcome = %#v, stderr = %q", outcome, errors.String())
+	if outcome := app.Execute(context.Background(), []string{"fs", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "Browse a directory in a browser") || errors.Len() != 0 {
+		t.Fatalf("fs help outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
 	}
 }
 
-func TestTunnelFoundationDoesNotExposeACommand(t *testing.T) {
+func TestTunnelLeafIsAlwaysRegistered(t *testing.T) {
 	app, output, errors, _ := testApp(t, nil)
 
-	if outcome := app.Execute(context.Background(), []string{"--help"}); outcome.Code != 0 || strings.Contains(output.String(), "\n  tunnel") {
+	if outcome := app.Execute(context.Background(), []string{"--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "\n  tunnel") {
 		t.Fatalf("help outcome = %#v, stdout = %q", outcome, output.String())
 	}
 	output.Reset()
 	errors.Reset()
-	if outcome := app.Execute(context.Background(), []string{"tunnel"}); outcome.Code != 1 || errors.String() != "error: unknown command 'tunnel'; Run 'ycy --help' for usage.\n" {
-		t.Fatalf("tunnel outcome = %#v, stderr = %q", outcome, errors.String())
+	if outcome := app.Execute(context.Background(), []string{"tunnel", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "server") || !strings.Contains(output.String(), "connect") || errors.Len() != 0 {
+		t.Fatalf("tunnel help outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
+	}
+	output.Reset()
+	errors.Reset()
+	if outcome := app.Execute(context.Background(), []string{"tunnel", "connect", "--help"}); outcome.Code != 0 || !strings.Contains(output.String(), "--server") || !strings.Contains(output.String(), "--token") || strings.Contains(output.String(), "--control-port") || !strings.Contains(output.String(), "Global Flags:") || !strings.Contains(output.String(), "--log-level") || !strings.Contains(output.String(), "--log-format") || !strings.Contains(output.String(), "--quiet") || !strings.Contains(output.String(), "--verbose") || errors.Len() != 0 {
+		t.Fatalf("tunnel connect help outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
 	}
 }
 

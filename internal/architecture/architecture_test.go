@@ -6,13 +6,10 @@ import (
 	"go/token"
 	"os"
 	"path/filepath"
-	"reflect"
 	"runtime"
 	"strconv"
 	"strings"
 	"testing"
-
-	rootcommand "github.com/hackycy/hackycy-cli/pkg/cmd/root"
 )
 
 const modulePath = "github.com/hackycy/hackycy-cli"
@@ -22,33 +19,18 @@ const modulePath = "github.com/hackycy/hackycy-cli"
 // the owning slice must delete its entry before its checkpoint passes. This is
 // not a package-wide exemption and must never be widened to include pkg.
 var transitionAllowlist = map[string]string{
-	"cmd/ycy":           "temporary process composition root and adapters",
-	"internal/commands": "unmigrated command Modules (removed by their leaf slices)",
+	"cmd/ycy": "temporary process composition root and adapters",
 }
 
 // rootCommandImportAllowlist records the handler Modules still owned by the
 // lifted root. Each migrated leaf removes its corresponding entry instead of
 // broadening the command-package transition.
-var rootCommandImportAllowlist = map[string]string{
-	"internal/commands/diff":   "unmigrated Diff handler",
-	"internal/commands/fs":     "unmigrated FS handler",
-	"internal/commands/tunnel": "unmigrated Tunnel handlers",
-}
-
-// rootHandlerAllowlist is the complete, shrinking set of temporary handler
-// capabilities. Process facts must remain in cmdutil.Factory.
-var rootHandlerAllowlist = map[string]string{
-	"Diff":          "unmigrated Diff handler",
-	"FS":            "unmigrated FS handler",
-	"TunnelServer":  "unmigrated Tunnel server handler",
-	"TunnelConnect": "unmigrated Tunnel connect handler",
-	"Upgrade":       "unmigrated Upgrade handler",
-}
+var rootCommandImportAllowlist = map[string]string{}
 
 func TestActiveArchitecture(t *testing.T) {
 	root := repositoryRoot(t)
 	assertTransitionAllowlist(t, root)
-	assertRootHandlerAllowlist(t)
+	assertNoRootHandlerTransition(t, root)
 	var violations []string
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
 		if walkErr != nil {
@@ -80,16 +62,43 @@ func TestActiveArchitecture(t *testing.T) {
 	}
 }
 
-func assertRootHandlerAllowlist(t *testing.T) {
+func assertNoRootHandlerTransition(t *testing.T, root string) {
 	t.Helper()
-	dependencies := reflect.TypeFor[rootcommand.Dependencies]()
-	if dependencies.NumField() != len(rootHandlerAllowlist) {
-		t.Fatalf("root Dependencies fields = %d, allowlist = %d", dependencies.NumField(), len(rootHandlerAllowlist))
+	fileSet := token.NewFileSet()
+	file, err := parser.ParseFile(fileSet, filepath.Join(root, "pkg", "cmd", "root", "app.go"), nil, 0)
+	if err != nil {
+		t.Fatalf("parse root app: %v", err)
 	}
-	for index := 0; index < dependencies.NumField(); index++ {
-		field := dependencies.Field(index)
-		if _, ok := rootHandlerAllowlist[field.Name]; !ok {
-			t.Fatalf("root Dependencies field %q is outside the transition allowlist", field.Name)
+	for _, declaration := range file.Decls {
+		if function, ok := declaration.(*ast.FuncDecl); ok && function.Name.Name == "registerUpgrade" {
+			t.Fatal("root retains Upgrade registration transition")
+		}
+		general, ok := declaration.(*ast.GenDecl)
+		if !ok || general.Tok != token.TYPE {
+			continue
+		}
+		for _, specification := range general.Specs {
+			typeSpec, ok := specification.(*ast.TypeSpec)
+			if !ok {
+				continue
+			}
+			if typeSpec.Name.Name == "Dependencies" || typeSpec.Name.Name == "UpgradeHandler" {
+				t.Fatalf("root retains transitional type %q", typeSpec.Name.Name)
+			}
+			if typeSpec.Name.Name != "App" {
+				continue
+			}
+			structure, ok := typeSpec.Type.(*ast.StructType)
+			if !ok {
+				continue
+			}
+			for _, field := range structure.Fields.List {
+				for _, name := range field.Names {
+					if name.Name == "upgrade" {
+						t.Fatal("root App retains Upgrade handler field")
+					}
+				}
+			}
 		}
 	}
 }
@@ -97,8 +106,7 @@ func assertRootHandlerAllowlist(t *testing.T) {
 func assertTransitionAllowlist(t *testing.T, root string) {
 	t.Helper()
 	want := map[string]string{
-		"cmd/ycy":           "temporary process composition root and adapters",
-		"internal/commands": "unmigrated command Modules (removed by their leaf slices)",
+		"cmd/ycy": "temporary process composition root and adapters",
 	}
 	if len(transitionAllowlist) != len(want) {
 		t.Fatalf("transition allowlist has %d entries, want %d", len(transitionAllowlist), len(want))
@@ -306,7 +314,7 @@ func isInternalPackage(path string) bool {
 }
 
 func allowedCurrentBinaryImport(imported string) bool {
-	if strings.HasPrefix(imported, "internal/") || imported == "pkg/cmd/factory" || imported == "pkg/cmd/root" || imported == "pkg/cmdutil" || imported == "web" {
+	if strings.HasPrefix(imported, "internal/") || imported == "pkg/cmd/factory" || imported == "pkg/cmd/root" || imported == "pkg/cmd/upgrade" || imported == "pkg/cmdutil" || imported == "web" {
 		return true
 	}
 	return false
@@ -317,7 +325,7 @@ func allowedYcycmdImport(imported string) bool {
 }
 
 func allowedWebassetsConsumer(path string) bool {
-	return path == "cmd/ycy" || path == "internal/ycycmd" || path == "internal/commands/diff" || path == "internal/commands/fs" || path == "internal/commands/tunnel" || path == "pkg/cmd/diff" || path == "pkg/cmd/fs" || path == "pkg/cmd/tunnel" || path == "tools/web-browser-harness"
+	return path == "cmd/ycy" || path == "internal/ycycmd" || path == "pkg/cmd/diff" || path == "pkg/cmd/fs" || path == "pkg/cmd/tunnel/server" || path == "tools/web-browser-harness"
 }
 
 func repositoryRoot(t *testing.T) string {

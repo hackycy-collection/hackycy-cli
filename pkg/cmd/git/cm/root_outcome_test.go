@@ -70,7 +70,7 @@ func TestRootConfiguresDiagnosticsBeforeGitCM(t *testing.T) {
 		Session: terminal.Session{Kind: terminal.Automation},
 	})
 	factory.Logging = runtime
-	app, err := rootcommand.New(factory, rootcommand.Dependencies{})
+	app, err := rootcommand.New(factory)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
@@ -94,7 +94,7 @@ func TestRootNormalizesGitCMOptionalRemoteArgument(t *testing.T) {
 		},
 		Session: terminal.Session{Kind: terminal.Automation},
 	})
-	app, err := rootcommand.New(factory, rootcommand.Dependencies{})
+	app, err := rootcommand.New(factory)
 	if err != nil {
 		t.Fatalf("New() error = %v", err)
 	}
