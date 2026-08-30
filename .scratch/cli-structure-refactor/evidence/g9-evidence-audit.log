@@ -1,0 +1,20 @@
+commit=e916cb1ad5b7b5ef5a5b949647e0145208adb167
+evidence-files=
+.scratch/cli-structure-refactor/evidence/g9-00-commit-and-darwin-snapshot.md
+.scratch/cli-structure-refactor/evidence/g9-cross-build.log
+.scratch/cli-structure-refactor/evidence/g9-darwin-acceptance.log
+.scratch/cli-structure-refactor/evidence/g9-darwin-ordinary.log
+.scratch/cli-structure-refactor/evidence/g9-evidence-audit.log
+.scratch/cli-structure-refactor/evidence/g9-linux-acceptance-web.log
+.scratch/cli-structure-refactor/evidence/g9-linux-acceptance.log
+.scratch/cli-structure-refactor/evidence/g9-linux-docker-preflight-e916cb1.md
+.scratch/cli-structure-refactor/evidence/g9-linux-ordinary.log
+.scratch/cli-structure-refactor/evidence/g9-linux-workspace-preparation-e916cb1.md
+.scratch/cli-structure-refactor/evidence/g9-linux-workspace-preparation.log
+.scratch/cli-structure-refactor/evidence/g9-release-candidate.log
+explicit-recorded-commit-values=
+e916cb1ad5b7b5ef5a5b949647e0145208adb167
+status=
+ M .scratch/cli-structure-refactor/goal-runbook.md
+?? .scratch/cli-structure-refactor/evidence/
+result=pass

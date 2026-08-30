@@ -1,0 +1,62 @@
+started=2026-08-30T05:49:14Z
+commit-before=e916cb1ad5b7b5ef5a5b949647e0145208adb167
+Darwin 25.5.0
+arm64
+go version go1.26.7 darwin/arm64
+command=GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 ./...
+?   	github.com/hackycy/hackycy-cli/cmd/ycy	[no test files]
+ok  	github.com/hackycy/hackycy-cli/internal/appconfig	2.346s
+ok  	github.com/hackycy/hackycy-cli/internal/architecture	2.336s
+ok  	github.com/hackycy/hackycy-cli/internal/filesession	1.986s
+ok  	github.com/hackycy/hackycy-cli/internal/fsthumbnail	1.671s
+ok  	github.com/hackycy/hackycy-cli/internal/gitprocess	23.435s
+ok  	github.com/hackycy/hackycy-cli/internal/logging	2.330s
+ok  	github.com/hackycy/hackycy-cli/internal/sevenzipmanifest	2.789s
+ok  	github.com/hackycy/hackycy-cli/internal/sevenzipruntime	3.557s
+ok  	github.com/hackycy/hackycy-cli/internal/terminal	9.346s
+ok  	github.com/hackycy/hackycy-cli/internal/terminaltest	4.258s
+ok  	github.com/hackycy/hackycy-cli/internal/tunnelruntime	38.649s
+ok  	github.com/hackycy/hackycy-cli/internal/updater	22.620s
+?   	github.com/hackycy/hackycy-cli/internal/windowsacl	[no test files]
+ok  	github.com/hackycy/hackycy-cli/internal/ycycmd	4.354s
+?   	github.com/hackycy/hackycy-cli/pkg/cmd/config	[no test files]
+?   	github.com/hackycy/hackycy-cli/pkg/cmd/config/cm	[no test files]
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/config/cm/add	4.652s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/config/cm/list	4.978s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/config/cm/remove	5.638s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/config/cm/set	5.705s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/config/cm/test	5.698s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/config/cm/use	5.176s
+?   	github.com/hackycy/hackycy-cli/pkg/cmd/config/fork	[no test files]
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/config/fork/add	5.003s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/config/fork/list	4.491s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/config/fork/remove	4.442s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/diff	5.043s
+?   	github.com/hackycy/hackycy-cli/pkg/cmd/export	[no test files]
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/export/env	4.678s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/factory	5.106s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/fs	33.170s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/git	5.404s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/git/cm	31.084s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/git/fork	23.180s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/git/heat	26.633s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/git/pulse	23.857s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/rm	6.241s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/root	6.550s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/run	27.370s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/tunnel	6.755s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/tunnel/connect	6.025s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/tunnel/server	66.567s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/upgrade	6.117s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmd/zip	5.888s
+ok  	github.com/hackycy/hackycy-cli/pkg/cmdutil	6.172s
+ok  	github.com/hackycy/hackycy-cli/tools/check-no-bun	5.026s
+ok  	github.com/hackycy/hackycy-cli/tools/hookctl	5.516s
+ok  	github.com/hackycy/hackycy-cli/tools/prepare-sevenzip	3.807s
+ok  	github.com/hackycy/hackycy-cli/tools/release-artifacts	3.864s
+?   	github.com/hackycy/hackycy-cli/tools/web-browser-harness	[no test files]
+ok  	github.com/hackycy/hackycy-cli/web	4.572s
+finished=2026-08-30T05:50:41Z
+status-after=
+ M .scratch/cli-structure-refactor/goal-runbook.md
+?? .scratch/cli-structure-refactor/evidence/

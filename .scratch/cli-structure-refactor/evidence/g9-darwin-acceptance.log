@@ -1,0 +1,12 @@
+started=2026-08-30T05:51:24Z
+commit-before=e916cb1ad5b7b5ef5a5b949647e0145208adb167
+Darwin 25.5.0
+arm64
+go version go1.26.7 darwin/arm64
+command=make acceptance
+ok  	github.com/hackycy/hackycy-cli/acceptance	76.718s
+ok  	github.com/hackycy/hackycy-cli/acceptance/web	7.990s
+finished=2026-08-30T05:52:41Z
+status-after=
+ M .scratch/cli-structure-refactor/goal-runbook.md
+?? .scratch/cli-structure-refactor/evidence/
