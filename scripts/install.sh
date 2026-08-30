@@ -113,7 +113,7 @@ fetch_expected_hash() {
 
   checksums_content=$(curl -fsSL "$checksums_url")
 
-  EXPECTED_HASH=$(printf '%s\n' "$checksums_content" | awk -v artifact="$ARTIFACT_NAME" '$1 ~ /^[A-Fa-f0-9]{64}$/ { name=$2; sub(/^\*/, "", name); if (name == artifact) print tolower($1) }' | tail -n 1)
+  EXPECTED_HASH=$(printf '%s\n' "$checksums_content" | awk -v artifact="$ARTIFACT_NAME" 'length($1) == 64 && $1 ~ /^[A-Fa-f0-9]+$/ { name=$2; sub(/^\*/, "", name); if (name == artifact) print tolower($1) }' | tail -n 1)
 
   if [ -z "$EXPECTED_HASH" ]; then
     error "Failed to find checksum for ${ARTIFACT_NAME}."
