@@ -3,8 +3,8 @@ package terminal
 import (
 	"strings"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/huh"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/huh/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -44,8 +44,8 @@ func (form *richHuhForm) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return form, command
 }
 
-func (form *richHuhForm) View() string {
-	return form.form.View()
+func (form *richHuhForm) View() tea.View {
+	return tea.NewView(form.form.View())
 }
 
 func (form *richHuhForm) configure(width, height int, showHelp bool) {
@@ -119,7 +119,7 @@ func (form *richListForm) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		form.ensureVisible()
 		return form, nil
 	}
-	key, ok := message.(tea.KeyMsg)
+	key, ok := message.(tea.KeyPressMsg)
 	if !ok {
 		return form, nil
 	}
@@ -137,8 +137,8 @@ func (form *richListForm) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				form.applyFilter()
 			}
 		default:
-			if key.Type == tea.KeyRunes {
-				form.filter += string(key.Runes)
+			if key.Text != "" {
+				form.filter += key.Text
 				form.applyFilter()
 			}
 		}
@@ -175,7 +175,7 @@ func (form *richListForm) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		if form.multi {
 			form.toggleAll()
 		}
-	case " ", "x":
+	case "space", " ", "x":
 		if form.multi {
 			form.toggleCurrent()
 		}
@@ -194,7 +194,7 @@ func (form *richListForm) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return form, nil
 }
 
-func (form *richListForm) View() string {
+func (form *richListForm) View() tea.View {
 	lines := make([]string, 0, form.height)
 	lines = append(lines, splitRichListLine(form.request.Message, form.width)...)
 	if form.request.Description != "" {
@@ -241,7 +241,7 @@ func (form *richListForm) View() string {
 		}
 		lines = append(lines, truncateRichListLine("up/down move | / filter | "+command+" | esc cancel", form.width))
 	}
-	return strings.Join(lines, "\n")
+	return tea.NewView(strings.Join(lines, "\n"))
 }
 
 func (form *richListForm) configure(width, height int, showHelp bool) {

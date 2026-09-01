@@ -7,8 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	tea "github.com/charmbracelet/bubbletea"
-	"github.com/charmbracelet/lipgloss"
+	tea "charm.land/bubbletea/v2"
 	"golang.org/x/term"
 )
 
@@ -44,15 +43,12 @@ func (controller *richController) start() error {
 		width,
 		height,
 		controller.runtime.capabilities.Stderr.Color,
-		controller.runtime.diagnosticTerminal,
 	)
 	controller.program = tea.NewProgram(
 		controller.model,
 		tea.WithInput(controller.runtime.inputTerminal),
 		tea.WithOutput(controller.runtime.diagnosticTerminal),
-		tea.WithAltScreen(),
 		tea.WithoutSignalHandler(),
-		tea.WithoutBracketedPaste(),
 	)
 	go func() {
 		_, runErr := controller.program.Run()
@@ -180,11 +176,10 @@ const (
 )
 
 type richRootModel struct {
-	width    int
-	height   int
-	color    bool
-	renderer *lipgloss.Renderer
-	mode     richMode
+	width  int
+	height int
+	color  bool
+	mode   richMode
 
 	notices  []PresentationDocument
 	formID   uint64
@@ -194,12 +189,11 @@ type richRootModel struct {
 	track    *trackedState
 }
 
-func newRichRootModel(width, height int, color bool, output io.Writer) *richRootModel {
+func newRichRootModel(width, height int, color bool) *richRootModel {
 	return &richRootModel{
-		width:    width,
-		height:   height,
-		color:    color,
-		renderer: lipgloss.NewRenderer(output),
+		width:  width,
+		height: height,
+		color:  color,
 	}
 }
 
@@ -283,7 +277,7 @@ func (model *richRootModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		close(value.ack)
 		return model, nil
-	case tea.KeyMsg:
+	case tea.KeyPressMsg:
 		if model.mode == richTrackMode && model.track != nil {
 			switch value.String() {
 			case "ctrl+c":
@@ -314,9 +308,9 @@ func (model *richRootModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	return model, nil
 }
 
-func (model *richRootModel) View() string {
+func (model *richRootModel) View() tea.View {
 	if model.width <= 0 || model.height <= 0 {
-		return ""
+		return tea.View{AltScreen: true, DisableBracketedPasteMode: true}
 	}
 	parts := make([]string, 0, 2)
 	if notices := model.noticeView(); notices != "" {
@@ -328,17 +322,21 @@ func (model *richRootModel) View() string {
 	switch model.mode {
 	case richFormMode:
 		if model.form != nil {
-			active = model.form.View()
+			active = model.form.View().Content
 		}
 	case richTrackMode:
 		if model.track != nil {
-			active = model.track.view(model.width, richStyles(model.renderer, model.color))
+			active = model.track.view(model.width, richStyles(model.color))
 		}
 	}
 	if active != "" {
 		parts = append(parts, takeFirstLines(active, activeHeight))
 	}
-	return takeFirstLines(strings.Join(parts, "\n"), model.height)
+	return tea.View{
+		Content:                   takeFirstLines(strings.Join(parts, "\n"), model.height),
+		AltScreen:                 true,
+		DisableBracketedPasteMode: true,
+	}
 }
 
 func (model *richRootModel) configureForm() {
@@ -374,7 +372,7 @@ func (model *richRootModel) noticeView() string {
 func (model *richRootModel) renderNotices() string {
 	parts := make([]string, 0, len(model.notices))
 	for _, document := range model.notices {
-		rendered := strings.TrimSuffix(renderRich(model.renderer, document, RichOptions{
+		rendered := strings.TrimSuffix(renderRich(document, RichOptions{
 			Width: model.width,
 			Color: model.color,
 		}), "\n")

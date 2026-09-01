@@ -343,11 +343,19 @@ func respondToHuhTerminalQueries(t *testing.T, process *terminaltest.PTYProcess,
 
 func assertRichCleanup(t *testing.T, output, marker string) {
 	t.Helper()
-	if !strings.Contains(output, marker) {
+	markerAt := strings.LastIndex(output, marker)
+	if markerAt < 0 {
 		t.Fatalf("PTY output missing %q: %q", marker, output)
 	}
-	if !strings.Contains(output, "\x1b[?25h") || !strings.Contains(output, "\x1b[?2004l") {
-		t.Fatalf("Rich cleanup bytes missing from PTY output: %q", output)
+	if !strings.Contains(output, "\x1b[?25h") {
+		t.Fatalf("Rich cleanup did not restore the cursor: %q", output)
+	}
+	exitAt := -1
+	for _, code := range []string{"\x1b[?1049l", "\x1b[?1047l", "\x1b[?47l"} {
+		exitAt = max(exitAt, strings.LastIndex(output, code))
+	}
+	if exitAt < 0 || exitAt > markerAt {
+		t.Fatalf("Rich cleanup did not restore the primary screen before %q: %q", marker, output)
 	}
 }
 

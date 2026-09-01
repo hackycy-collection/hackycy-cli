@@ -31,7 +31,6 @@ func TestRichRuntimeLongListsStayVisibleAcrossNavigationAndResize(t *testing.T) 
 	waitForTrackedPrompt(t, output, "Choose one")
 
 	writeRichPTYInput(t, process, "G")
-	waitForTrackedPrompt(t, output, "item-180")
 	waitForTrackedPrompt(t, output, "item-199")
 	for _, size := range [][2]uint16{{28, 7}, {44, 12}, {100, 30}, {80, 24}} {
 		if err := process.Resize(size[0], size[1]); err != nil {
@@ -50,7 +49,7 @@ func TestRichRuntimeLongListsStayVisibleAcrossNavigationAndResize(t *testing.T) 
 	writeRichPTYInput(t, process, "\x1b")
 	time.Sleep(50 * time.Millisecond)
 	writeRichPTYInput(t, process, "\r")
-	waitForTrackedPrompt(t, output, "Choose many")
+	waitForRichPromptReplacement(t, output, "Choose one", "\x1b[2;8Hmany")
 
 	writeRichPTYInput(t, process, "\x01")
 	time.Sleep(50 * time.Millisecond)
@@ -62,7 +61,7 @@ func TestRichRuntimeLongListsStayVisibleAcrossNavigationAndResize(t *testing.T) 
 	finishRichPTYTest(t, process, readDone, output)
 
 	text := output.String()
-	for _, expected := range []string{"item-199", "item-173", "Choose many", "select=item-173", "multi=200"} {
+	for _, expected := range []string{"item-199", "item-173", "select=item-173", "multi=200"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("PTY output missing %q: %q", expected, text)
 		}
@@ -340,4 +339,17 @@ func writeRichPTYInput(t *testing.T, process *terminaltest.PTYProcess, value str
 	if _, err := io.WriteString(process.Terminal(), value); err != nil {
 		t.Fatalf("write PTY input: %v", err)
 	}
+}
+
+func waitForRichPromptReplacement(t *testing.T, output *promptBuffer, previous, update string) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		text := output.String()
+		if strings.LastIndex(text, previous) >= 0 && strings.LastIndex(text, update) > strings.LastIndex(text, previous) {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatalf("PTY output did not render %q through differential update %q: %q", previous, update, output.String())
 }

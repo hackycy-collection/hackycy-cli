@@ -5,7 +5,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 )
 
 func (run *runtimeRun) trackPlain(output io.Writer, operation TrackedOperation) error {

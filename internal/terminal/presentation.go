@@ -4,7 +4,7 @@ import (
 	"io"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
+	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -38,14 +38,13 @@ type RichOptions struct {
 
 // WriteRich writes a durable Rich Interactive Command Result to stdout.
 func WriteRich(output io.Writer, document PresentationDocument, options RichOptions) error {
-	renderer := lipgloss.NewRenderer(output)
-	_, err := io.WriteString(output, renderRich(renderer, document, options))
+	_, err := io.WriteString(output, renderRich(document, options))
 	return err
 }
 
-func renderRich(renderer *lipgloss.Renderer, document PresentationDocument, options RichOptions) string {
+func renderRich(document PresentationDocument, options RichOptions) string {
 	var output strings.Builder
-	styles := richStyles(renderer, options.Color)
+	styles := richStyles(options.Color)
 	for index, block := range document.Blocks {
 		if index > 0 && output.Len() > 0 && !strings.HasSuffix(output.String(), "\n") {
 			output.WriteByte('\n')
@@ -59,8 +58,8 @@ func renderRich(renderer *lipgloss.Renderer, document PresentationDocument, opti
 	return output.String()
 }
 
-func richStyles(renderer *lipgloss.Renderer, color bool) map[VisualRole]lipgloss.Style {
-	plain := renderer.NewStyle()
+func richStyles(color bool) map[VisualRole]lipgloss.Style {
+	plain := lipgloss.NewStyle()
 	styles := map[VisualRole]lipgloss.Style{
 		VisualRolePlain:   plain,
 		VisualRoleTitle:   plain,

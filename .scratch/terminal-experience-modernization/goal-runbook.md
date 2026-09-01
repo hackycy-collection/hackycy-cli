@@ -64,8 +64,8 @@
 
 | Gate | Status | Depends on | Plan contract | Unlock evidence |
 | --- | --- | --- | --- | --- |
-| G0: Baseline and dependency lock | active | none | `implementation-plan.md` -> `G0: Baseline and dependency lock` | no predecessor |
-| G1: Shared semantic terminal foundation | planned | G0 | `implementation-plan.md` -> `G1: Shared semantic terminal foundation` | G0 pending |
+| G0: Baseline and dependency lock | passed | none | `implementation-plan.md` -> `G0: Baseline and dependency lock` | no predecessor |
+| G1: Shared semantic terminal foundation | active | G0 | `implementation-plan.md` -> `G1: Shared semantic terminal foundation` | G0 passed |
 | G2: Logging and root boundary | planned | G1 | `implementation-plan.md` -> `G2: Logging and root boundary` | G1 pending |
 | G3: Low-risk finite command slices | planned | G2 | `implementation-plan.md` -> `G3: Low-risk finite command slices` | G2 pending |
 | G4: External-read and service-startup slices | planned | G3 | `implementation-plan.md` -> `G4: External-read and service-startup slices` | G3 pending |
@@ -79,10 +79,58 @@
 ### G0: Baseline and dependency lock
 
 - 2026-09-01: initialized as `active`; implementation has not started.
+- 2026-09-01: completed slice `baseline capture` (root/help and all 11
+  inventory command-family entries). Added `baselines/README.md`,
+  `baselines/manifest.json`, and the command-surface/baseline test evidence
+  under `evidence/`. The frozen command surface remains 35 paths with manifest
+  SHA-256 `885373a338983bb3dd71810f9ec668bf7273587c0a17de5e1ecddf86a6f11a6c`.
+  Directed evidence records streams, exits/signals, side effects, state files,
+  permissions, process boundaries, and redaction; the representative package
+  test matrix passed. Risk: probe output is semantic and tokenized, so it does
+  not assert raw dynamic bytes; the cited package and acceptance tests remain
+  the executable contract. Next: replace the v1 Charm requirements/imports
+  with the approved v2 module boundary as an independent dependency slice.
+- 2026-09-01: completed slice `dependency/import lock`. Replaced the active
+  Charm v1 requirements and `internal/terminal` imports with the approved five
+  v2 modules, migrated the necessary Bubble Tea v2 view/key/terminal-mode and
+  pure Lip Gloss style APIs, and added architecture checks for the exact module
+  graph and direct Charm/Log imports from `pkg/cmd/**`. Updated the long-list
+  PTY assertion to interpret Bubble Tea v2's cursor-position differential
+  update rather than a contiguous stale-frame byte string; no command runner,
+  durable result, or command-package behavior changed. Directed verification
+  passed: `go mod verify`, exact `go list -m all` output, architecture test,
+  terminal package test, and the PTY regression twice; details are in
+  `evidence/g0-dependency-import-directed.log`. Risk: the PTY check verifies
+  semantic terminal state from v2's expected differential output rather than a
+  raw full-frame snapshot. Next: run G0 Repository verification in its declared
+  order and record final Exit-condition evidence.
+- 2026-09-01: all G0 Exit conditions passed; Gate marked `passed`.
+  1. Baselines exist for root/help and every inventory family in
+     `baselines/README.md` and `baselines/manifest.json`; the frozen surface
+     remains 35 paths at SHA-256
+     `885373a338983bb3dd71810f9ec668bf7273587c0a17de5e1ecddf86a6f11a6c`.
+  2. The resolved graph contains exactly the approved direct Charm v2 modules:
+     Bubbles `v2.2.1`, Bubble Tea `v2.0.9`, Huh `v2.0.3`, Lip Gloss `v2.0.6`,
+     and Log `v2.0.0`; `go mod verify` passed and no legacy product module was
+     found. See `evidence/g0-dependency-import-directed.log`.
+  3. `go test ./internal/architecture` passed, including the direct
+     Charm/Log-import rejection for `pkg/cmd/**`.
+  4. Final repository checks passed in declared order: `make command-surface`,
+     `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+     ./internal/architecture ./internal/logging ./internal/terminal`, and
+     `git diff --check`; supplemental `gofmt -d` and `go vet` also passed.
+     See `evidence/g0-final-repository-verification.log`.
+  Changed files are limited to the G0 module lock, `internal/terminal` v2 API
+  adaptation/tests, architecture boundary test, and G0 baseline/evidence/runbook
+  artifacts. Residual risk: the long-list PTY test intentionally models v2
+  differential terminal updates semantically rather than comparing an invalid
+  contiguous full-frame byte sequence. Next: G1 is activated but is outside
+  this Goal and has not been inspected or implemented.
 
 ### G1: Shared semantic terminal foundation
 
 - 2026-09-01: initialized as `planned`; no implementation evidence.
+- 2026-09-01: activated as `active`; 尚未开始实施。
 
 ### G2: Logging and root boundary
 

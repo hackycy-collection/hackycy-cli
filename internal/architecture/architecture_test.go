@@ -98,7 +98,7 @@ func TestActiveArchitecture(t *testing.T) {
 		relative = filepath.ToSlash(relative)
 		if entry.IsDir() {
 			switch relative {
-			case ".git", "legacy", ".scratch", "mock", "node_modules", "web/node_modules", "web/dist", "tools":
+			case ".git", "legacy", ".scratch", "mock", "node_modules", "web/node_modules", "web/dist", "tools", "internal/terminal/prototype-vivid":
 				return filepath.SkipDir
 			}
 			return nil
@@ -122,6 +122,93 @@ func TestApprovedPackageInventory(t *testing.T) {
 	assertGoPackageInventory(t, root, "", approvedPackageInventory)
 	wantAcceptance := append(append([]string(nil), approvedPackageInventory...), approvedAcceptancePackages...)
 	assertGoPackageInventory(t, root, "acceptance", wantAcceptance)
+}
+
+func TestApprovedCharmV2ModuleGraph(t *testing.T) {
+	root := repositoryRoot(t)
+	output, stderr, err := runPinnedGoCommand(root, "list", "-m", "-json", "all")
+	if err != nil {
+		t.Fatalf("go list -m -json all: %v\n%s", err, stderr)
+	}
+
+	approved := map[string]string{
+		"charm.land/bubbles/v2":   "v2.2.1",
+		"charm.land/bubbletea/v2": "v2.0.9",
+		"charm.land/huh/v2":       "v2.0.3",
+		"charm.land/lipgloss/v2":  "v2.0.6",
+		"charm.land/log/v2":       "v2.0.0",
+	}
+	found := make(map[string]string, len(approved))
+	var violations []string
+	decoder := json.NewDecoder(bytes.NewReader(output))
+	for {
+		var module moduleDescription
+		err := decoder.Decode(&module)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("decode go list -m output: %v", err)
+		}
+		if want, ok := approved[module.Path]; ok {
+			found[module.Path] = module.Version
+			if module.Version != want {
+				violations = append(violations, module.Path+" version "+module.Version+", want "+want)
+			}
+			continue
+		}
+		if legacyCharmModule(module.Path) {
+			violations = append(violations, "unapproved Charm module "+module.Path+"@"+module.Version)
+		}
+	}
+	for path, version := range approved {
+		if found[path] == "" {
+			violations = append(violations, "missing approved Charm module "+path+"@"+version)
+		}
+	}
+	if len(violations) > 0 {
+		sort.Strings(violations)
+		t.Fatalf("Charm v2 module graph violations:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
+func TestCommandPackagesDoNotImportCharmOrLog(t *testing.T) {
+	root := repositoryRoot(t)
+	commandRoot := filepath.Join(root, "pkg", "cmd")
+	var violations []string
+	err := filepath.WalkDir(commandRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if entry.IsDir() || filepath.Ext(path) != ".go" {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			return err
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		for _, imported := range file.Imports {
+			pathValue, err := strconv.Unquote(imported.Path.Value)
+			if err != nil {
+				return fmt.Errorf("parse import in %s: %w", relative, err)
+			}
+			if directCharmOrLogImport(pathValue) {
+				violations = append(violations, filepath.ToSlash(relative)+": command package imports "+pathValue)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("inspect command package imports: %v", err)
+	}
+	if len(violations) > 0 {
+		sort.Strings(violations)
+		t.Fatalf("command package Charm/Log import violations:\n%s", strings.Join(violations, "\n"))
+	}
 }
 
 func TestApprovedDependencyDirection(t *testing.T) {
@@ -172,6 +259,28 @@ type packageDescription struct {
 	Imports      []string
 	TestImports  []string
 	XTestImports []string
+}
+
+type moduleDescription struct {
+	Path    string
+	Version string
+}
+
+func legacyCharmModule(path string) bool {
+	return path == "github.com/charmbracelet/bubbles" ||
+		path == "github.com/charmbracelet/bubbletea" ||
+		path == "github.com/charmbracelet/huh" ||
+		path == "github.com/charmbracelet/lipgloss" ||
+		path == "github.com/charmbracelet/log" ||
+		strings.HasPrefix(path, "charm.land/bubbles/") ||
+		strings.HasPrefix(path, "charm.land/bubbletea/") ||
+		strings.HasPrefix(path, "charm.land/huh/") ||
+		strings.HasPrefix(path, "charm.land/lipgloss/") ||
+		strings.HasPrefix(path, "charm.land/log/")
+}
+
+func directCharmOrLogImport(path string) bool {
+	return strings.HasPrefix(path, "charm.land/") || strings.HasPrefix(path, "github.com/charmbracelet/")
 }
 
 func assertGoPackageInventory(t *testing.T, root, tags string, want []string) {

@@ -1,22 +1,25 @@
 package terminal
 
 import (
-	"bytes"
 	"strings"
 	"testing"
 
-	tea "github.com/charmbracelet/bubbletea"
+	tea "charm.land/bubbletea/v2"
 )
 
 func TestTrackedTeaModelUsesTheCurrentPhaseOnNarrowTerminals(t *testing.T) {
 	cancellations := 0
-	model := newRichRootModel(40, 20, false, &bytes.Buffer{})
+	model := newRichRootModel(40, 20, false)
 	model.mode = richTrackMode
 	model.track = &trackedState{label: "Git Pulse", requestStop: func() { cancellations++ }}
 	model.track.applyPhase(OperationPhase{Name: "Scanning repositories", Detail: "workspace/project", State: PhaseCompleted})
 	model.track.applyPhase(OperationPhase{Name: "Fetching commits", Detail: "workspace/project", State: PhaseActive})
 
-	view := model.View()
+	rendered := model.View()
+	if !rendered.AltScreen || !rendered.DisableBracketedPasteMode {
+		t.Fatalf("v2 rich view terminal mode = %#v", rendered)
+	}
+	view := rendered.Content
 	if !strings.Contains(view, "Git Pulse") || !strings.Contains(view, "Fetching commits") || !strings.Contains(view, "workspace/project") {
 		t.Fatalf("narrow view = %q", view)
 	}
@@ -24,15 +27,15 @@ func TestTrackedTeaModelUsesTheCurrentPhaseOnNarrowTerminals(t *testing.T) {
 		t.Fatalf("narrow view retained completed phase: %q", view)
 	}
 
-	_, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if cancellations != 0 || !strings.Contains(model.View(), "Press Esc again to cancel") {
-		t.Fatalf("first Esc = cancellations=%d, view=%q", cancellations, model.View())
+	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if cancellations != 0 || !strings.Contains(model.View().Content, "Press Esc again to cancel") {
+		t.Fatalf("first Esc = cancellations=%d, view=%q", cancellations, model.View().Content)
 	}
-	_, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
-	if cancellations != 1 || !strings.Contains(model.View(), "Cancelling...") {
-		t.Fatalf("second Esc = cancellations=%d, view=%q", cancellations, model.View())
+	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})
+	if cancellations != 1 || !strings.Contains(model.View().Content, "Cancelling...") {
+		t.Fatalf("second Esc = cancellations=%d, view=%q", cancellations, model.View().Content)
 	}
-	_, _ = model.Update(tea.KeyMsg{Type: tea.KeyCtrlC})
+	_, _ = model.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
 	if cancellations != 1 {
 		t.Fatalf("Ctrl-C requested cancellation more than once: %d", cancellations)
 	}
