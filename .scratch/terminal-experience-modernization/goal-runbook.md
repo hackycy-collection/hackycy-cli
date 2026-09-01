@@ -66,8 +66,8 @@
 | --- | --- | --- | --- | --- |
 | G0: Baseline and dependency lock | passed | none | `implementation-plan.md` -> `G0: Baseline and dependency lock` | no predecessor |
 | G1: Shared semantic terminal foundation | passed | G0 | `implementation-plan.md` -> `G1: Shared semantic terminal foundation` | G0 passed |
-| G2: Logging and root boundary | active | G1 | `implementation-plan.md` -> `G2: Logging and root boundary` | G1 passed |
-| G3: Low-risk finite command slices | planned | G2 | `implementation-plan.md` -> `G3: Low-risk finite command slices` | G2 pending |
+| G2: Logging and root boundary | passed | G1 | `implementation-plan.md` -> `G2: Logging and root boundary` | G1 passed |
+| G3: Low-risk finite command slices | active | G2 | `implementation-plan.md` -> `G3: Low-risk finite command slices` | G2 passed |
 | G4: External-read and service-startup slices | planned | G3 | `implementation-plan.md` -> `G4: External-read and service-startup slices` | G3 pending |
 | G5: Mutating, destructive, and archive slices | planned | G4 | `implementation-plan.md` -> `G5: Mutating, destructive, and archive slices` | G4 pending |
 | G6: Git mutation and process handoff | planned | G5 | `implementation-plan.md` -> `G6: Git mutation and process handoff` | G5 pending |
@@ -362,10 +362,132 @@
 
 - 2026-09-01: initialized as `planned`; no implementation evidence.
 - 2026-09-01: activated as `active`; 尚未开始实施。
+- 2026-09-01: completed slice `private Log v2 text adapter`. Added the
+  text-only adapter inside `internal/logging`; Runtime still samples the
+  timestamp, filters levels, merges and recursively redacts context, owns the
+  JSON/NDJSON serializer, renders one complete Log v2 text record into a
+  private buffer, then performs one write to the injected lease-aware
+  diagnostic writer. Text retains timestamp, complete level, scope, message,
+  and normalized context; JSON/NDJSON bytes remain covered by exact snapshots.
+  Added an architecture check requiring every direct `charm.land/log/v2`
+  import to remain under `internal/logging`. The required transitive module
+  checksums were locked in `go.mod` and `go.sum`. Directed verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/logging
+  ./internal/architecture -count=1`. Risk: Log v2 text bytes intentionally
+  differ from the old handwritten renderer, while the machine JSON/NDJSON
+  contract is unchanged. Next: prove atomic redacted writes and FIFO ordering
+  through an active renderer lease.
+- 2026-09-01: completed slice `redaction and atomic lease-aware writes`.
+  Added an integration regression around the real
+  `terminal.LeaseAwareDiagnosticWriter`: while a renderer lease is active,
+  Runtime contributes no destination writes; release flushes two FIFO records,
+  each as exactly one complete line and without message or context secrets.
+  This proves Log v2's internal rendering stays private to the buffer and does
+  not split Runtime's serialized diagnostic write. Focused directed verification
+  passed: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./internal/logging -run '^TestRuntimeBuffersRedactedRecordsForLeaseAwareFIFO$'
+  -count=1`. Risk: the test covers sequential Runtime calls; mutual exclusion
+  remains owned by Runtime and the terminal writer's existing concurrency
+  tests. Next: migrate the root discovery/help presenter so write failures
+  propagate without changing durable stdout semantics.
+- 2026-09-01: completed slice `root discovery/help result propagation`.
+  The root discovery adapter now completes one semantic run with
+  `Finish(Succeeded)`, closes it, and joins both presentation and cleanup
+  errors. The fresh Cobra tree used by each invocation captures a help-callback
+  presentation failure and routes it through the existing single root-error
+  path; no-argument discovery uses the same error-returning presenter. Added
+  regressions for the Finish/Close operation order and for a failing stdout
+  writer (one write attempt, one stderr diagnostic, code 1). Focused directed
+  verification passed: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/root -run
+  '^(TestTerminalDiscoveryPresenterTranslatesAndClosesOneExperienceRun|TestDiscoveryWriteFailureBecomesOneRootDiagnostic)$'
+  -count=1`. Risk: Cobra owns the void help callback API, so the per-tree
+  capture stays deliberately local to `App.Execute`. Next: prove version and
+  completion continue to bypass discovery styling and invalid diagnostic
+  controls.
+- 2026-09-01: completed slice `root version and completion bypass` without
+  production changes. Existing root behavior already keeps `--version` as the
+  exact version plus newline and Cobra completion as raw stdout, independent of
+  Rich terminal capability and invalid same-invocation diagnostic controls.
+  Focused directed verification passed: `GOTOOLCHAIN=go1.26.7 GOWORK=off
+  CGO_ENABLED=0 go test ./pkg/cmd/root -run
+  '^(TestGlobalLogPrecedenceAndVersionBypass|TestDiagnosticConfigurationRunsBeforeEffectsAndBypassesDiscovery|TestRichTerminalDiscoveryPreservesVersionAndRawCompletion)$'
+  -count=1`. Risk: raw completion compatibility is additionally guarded by
+  the frozen command-surface suite, to be run in repository verification.
+  Next: make parser and root error projections redacted, control-free,
+  single-line diagnostics while preserving error ownership and exits.
+- 2026-09-01: completed slice `parser and root-error safe projection`.
+  Added `logging.RedactDiagnostic` for control-free single-line diagnostic
+  text and a root-owned 1024-rune bound with `[truncated]` omission marker.
+  Normal root errors and panic summaries now remove ANSI/C1 controls and CR/LF,
+  redact credential-shaped text, and preserve the original error chain in
+  `Outcome.Err`; debug stack behavior is unchanged. Existing parser recovery
+  wording, one-line stderr ownership, exits, and panic mapping remain intact.
+  Focused directed verification passed: `GOTOOLCHAIN=go1.26.7 GOWORK=off
+  CGO_ENABLED=0 go test ./pkg/cmd/root -run
+  '^(TestRootDiagnosticProjectionIsRedactedControlFreeAndBounded|TestParserRecoveryUsesOneActionableErrorLine|TestParserRecoveryLeavesCommandErrorsUntouched|TestPanicMappingRedactsAndAddsDebugStack)$'
+  -count=1`. Risk: diagnostic presentation now deliberately collapses unusual
+  whitespace; ordinary parser and command wording remains unchanged. Next: run
+  the full G2 Directed logging/root/architecture suites before repository
+  verification.
+- 2026-09-01: completed G2 Directed verification. `GOTOOLCHAIN=go1.26.7
+  GOWORK=off CGO_ENABLED=0 go test ./internal/logging ./pkg/cmd/root
+  ./internal/architecture -count=1` passed. This covers Log v2 text records,
+  exact JSON/NDJSON records, dynamic level/format changes, recursive redaction,
+  injected/lease-aware writers, architecture privacy, and root
+  help/discovery/version/completion/parser recovery including the frozen
+  command-surface comparison. Risk: none beyond the intentional text-only Log
+  v2 visual byte change; machine-facing JSON/NDJSON and raw root machine
+  outputs remain exact. Next: run the declared G2 Repository verification in
+  order.
+- 2026-09-01: completed corrective slice `Log v2 lifecycle-log assertion`.
+  The first `make check` after the terminal short-write slice exposed one
+  related, stale text-format assertion in `pkg/cmd/tunnel/server/run_test.go`:
+  it expected the retired `[tunnel.server]` decoration even though the tested
+  Runtime path correctly emitted the required scope and all lifecycle messages
+  as `tunnel.server:` through the approved Log v2 text adapter. The test now
+  independently asserts the scope and all three lifecycle messages, preserving
+  service behavior coverage without treating a plan-authorized human-text
+  delimiter as a machine contract. Focused verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/tunnel/server -run
+  '^TestRunServerOwnsTheForegroundUntilContextCancellation$' -count=1`.
+  Risk: no production behavior changed; Repository verification must be
+  restarted in its declared order after this related-test correction. Next:
+  rerun all G2 Repository checks, then record per-condition evidence if they
+  pass.
+- 2026-09-01: all G2 Exit conditions passed; Gate marked `passed`.
+  1. Log v2 remains private behind `internal/logging.Runtime`: the private
+     buffered text adapter receives only complete normalized/redacted records,
+     and `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+     ./internal/architecture -count=1` passed with the direct-import boundary
+     enforcement.
+  2. Text and exact JSON/NDJSON logging behavior, dynamic configuration,
+     recursive redaction, injected writers, and lease-aware FIFO/atomic
+     ordering passed in `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+     ./internal/logging -count=1`; the lease-focused regression and the
+     terminal short-write regression also passed. Human text follows the
+     approved Log v2 projection; machine JSON/NDJSON bytes remain exact.
+  3. Root help, discovery, version, completion, parser recovery, safe
+     single-line root diagnostics, error exits, and frozen command-surface
+     behavior passed in `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+     ./pkg/cmd/root -count=1` and `make command-surface`.
+  4. Final Repository verification passed in the declared order:
+     `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+     ./internal/logging ./pkg/cmd/root ./internal/architecture`,
+     `make command-surface`, `make check`, and `git diff --check`.
+     `make check` passed module verification, Web lint/type/tests/build, and
+     all Go packages, including `pkg/cmd/tunnel/server`.
+  Manual acceptance: 无. Residual risk is limited to the intentionally changed
+  human-readable Log v2 text bytes; logging scope, level, timestamp, message,
+  context, redaction, record atomicity, and all machine-facing output contracts
+  are covered by the recorded evidence. Next: G3 is activated but is outside
+  this Goal and has not been inspected, implemented, or verified.
 
 ### G3: Low-risk finite command slices
 
 - 2026-09-01: initialized as `planned`; no implementation evidence.
+- 2026-09-01: activated as `active`; 尚未开始实施。
 
 ### G4: External-read and service-startup slices
 

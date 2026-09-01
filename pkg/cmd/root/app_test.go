@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	stderrors "errors"
+	"io"
 	"strings"
 	"testing"
 
 	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/hackycy/hackycy-cli/internal/terminal"
+	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
 func TestGlobalSurface(t *testing.T) {
@@ -184,6 +186,43 @@ func TestRichTerminalDiscoveryPreservesVersionAndRawCompletion(t *testing.T) {
 	}
 }
 
+func TestDiscoveryWriteFailureBecomesOneRootDiagnostic(t *testing.T) {
+	outputFailure := stderrors.New("discovery output unavailable")
+	output := &failingWriter{err: outputFailure}
+	errors := &bytes.Buffer{}
+	app, err := newTestApp(BuildInfo{Version: "0.0.0-dev"}, testDependencies{
+		Out:     output,
+		Err:     errors,
+		Logging: logging.NewRuntime(logging.Options{Writer: errors}),
+	})
+	if err != nil {
+		t.Fatalf("New returned an error: %v", err)
+	}
+
+	outcome := app.Execute(context.Background(), []string{"--help"})
+	if outcome.Code != 1 || !stderrors.Is(outcome.Err, outputFailure) || errors.String() != "error: discovery output unavailable\n" || output.calls != 1 {
+		t.Fatalf("outcome = %#v, stderr = %q, output calls = %d", outcome, errors.String(), output.calls)
+	}
+}
+
+func TestDiscoveryShortWriteBecomesOneRootDiagnostic(t *testing.T) {
+	output := &shortWriter{}
+	errors := &bytes.Buffer{}
+	app, err := newTestApp(BuildInfo{Version: "0.0.0-dev"}, testDependencies{
+		Out:     output,
+		Err:     errors,
+		Logging: logging.NewRuntime(logging.Options{Writer: errors}),
+	})
+	if err != nil {
+		t.Fatalf("New returned an error: %v", err)
+	}
+
+	outcome := app.Execute(context.Background(), []string{"--help"})
+	if outcome.Code != 1 || !stderrors.Is(outcome.Err, io.ErrShortWrite) || errors.String() != "error: short write\n" || output.calls != 1 {
+		t.Fatalf("outcome = %#v, stderr = %q, output calls = %d", outcome, errors.String(), output.calls)
+	}
+}
+
 func TestParserRecoveryUsesOneActionableErrorLine(t *testing.T) {
 	output := &bytes.Buffer{}
 	errors := &bytes.Buffer{}
@@ -251,6 +290,20 @@ func TestParserRecoveryLeavesCommandErrorsUntouched(t *testing.T) {
 	}
 }
 
+func TestRootDiagnosticProjectionIsRedactedControlFreeAndBounded(t *testing.T) {
+	app, output, diagnostics, _ := testApp(t, nil)
+	original := stderrors.New("token=not-for-output\r\n\x1b[31mvisible\x1b[0m " + strings.Repeat("x", 2048))
+
+	outcome := app.execute(func() error { return original })
+	projected := diagnostics.String()
+	if outcome.Code != 1 || !stderrors.Is(outcome.Err, original) {
+		t.Fatalf("outcome = %#v", outcome)
+	}
+	if output.Len() != 0 || strings.Contains(projected, "not-for-output") || terminaltest.ContainsTerminalControl([]byte(projected)) || strings.Count(projected, "\n") != 1 || !strings.Contains(projected, "visible") || !strings.Contains(projected, "[truncated]") || len(projected) >= len(original.Error()) {
+		t.Fatalf("stdout = %q, stderr = %q", output.String(), projected)
+	}
+}
+
 func TestConfigParentExposesMigratedForkGroup(t *testing.T) {
 	app, output, errors, _ := testApp(t, nil)
 
@@ -303,6 +356,28 @@ func TestPanicMappingRedactsAndAddsDebugStack(t *testing.T) {
 	if outcome.Code != 1 || output.String() != "\n" || strings.Contains(errors.String(), "not-for-output") || !strings.Contains(errors.String(), "token=[REDACTED]") || !strings.Contains(errors.String(), "goroutine") {
 		t.Fatalf("panic outcome = %#v, stdout = %q, stderr = %q", outcome, output.String(), errors.String())
 	}
+}
+
+type failingWriter struct {
+	err   error
+	calls int
+}
+
+func (writer *failingWriter) Write(value []byte) (int, error) {
+	writer.calls++
+	return 0, writer.err
+}
+
+type shortWriter struct {
+	calls int
+}
+
+func (writer *shortWriter) Write(value []byte) (int, error) {
+	writer.calls++
+	if len(value) == 0 {
+		return 0, nil
+	}
+	return len(value) - 1, nil
 }
 
 func testApp(t *testing.T, environment map[string]string) (*App, *bytes.Buffer, *bytes.Buffer, *logging.Runtime) {

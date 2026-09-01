@@ -12,7 +12,7 @@ import (
 func TestTerminalDiscoveryPresenterTranslatesAndClosesOneExperienceRun(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience()
 	presenter := newTerminalDiscoveryAdapter(experience)
-	presenter.PresentDiscovery(context.Background(), DiscoveryDocument{
+	err := presenter.PresentDiscovery(context.Background(), DiscoveryDocument{
 		CommandPath: "ycy config",
 		Summary:     "Manage ycy configuration",
 		Usage:       "ycy config [flags]",
@@ -20,15 +20,22 @@ func TestTerminalDiscoveryPresenterTranslatesAndClosesOneExperienceRun(t *testin
 		Flags:       []DiscoveryFlag{{Name: "log-level", Usage: "Log level"}},
 		Examples:    []string{"ycy config --help"},
 	})
+	if err != nil {
+		t.Fatalf("PresentDiscovery() error = %v", err)
+	}
 
 	operations := experience.Run.Operations()
-	if len(operations) != 2 || operations[0].Kind != terminaltest.ResultOperation || operations[1].Kind != terminaltest.CloseOperation {
+	if len(operations) != 2 || operations[0].Kind != terminaltest.FinishOperation || operations[1].Kind != terminaltest.CloseOperation {
 		t.Fatalf("operations = %#v", operations)
 	}
-	document, ok := operations[0].Value.(terminalexperience.PresentationDocument)
+	finish, ok := operations[0].Value.(terminaltest.Finish)
 	if !ok {
 		t.Fatalf("presented value = %#v", operations[0].Value)
 	}
+	if finish.Outcome != terminalexperience.Succeeded || finish.Document == nil {
+		t.Fatalf("finish = %#v", finish)
+	}
+	document := *finish.Document
 	want := terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
 		{Role: terminalexperience.VisualRoleTitle, Text: "ycy config"},
 		{Role: terminalexperience.VisualRoleMuted, Text: "Manage ycy configuration"},

@@ -61,10 +61,19 @@ func (app *App) Execute(context context.Context, arguments []string) Outcome {
 	arguments = normalizeDiagnosticAliases(arguments)
 	arguments = gitcommand.NormalizeArguments(arguments)
 	controls := collectDiagnosticControls(arguments)
-	root := app.rootCommandWithDiagnosticControls(controls)
+	var presentationErr error
+	root := app.rootCommandWithPresentationError(controls, func(err error) {
+		if err != nil && presentationErr == nil {
+			presentationErr = err
+		}
+	})
 	return app.execute(func() error {
 		root.SetArgs(arguments)
-		return normalizeCobraError(root, arguments, root.ExecuteContext(context))
+		err := root.ExecuteContext(context)
+		if presentationErr != nil {
+			return presentationErr
+		}
+		return normalizeCobraError(root, arguments, err)
 	})
 }
 
@@ -96,11 +105,23 @@ type exitCodedError interface {
 	ExitCode() int
 }
 
+const (
+	rootDiagnosticLimit    = 1024
+	rootDiagnosticOmission = " [truncated]"
+)
+
 func (app *App) rootCommand() *cobra.Command {
-	return app.rootCommandWithDiagnosticControls(diagnosticControls{})
+	return app.rootCommandWithPresentationError(diagnosticControls{}, nil)
 }
 
 func (app *App) rootCommandWithDiagnosticControls(controls diagnosticControls) *cobra.Command {
+	return app.rootCommandWithPresentationError(controls, nil)
+}
+
+func (app *App) rootCommandWithPresentationError(controls diagnosticControls, capturePresentationError func(error)) *cobra.Command {
+	if capturePresentationError == nil {
+		capturePresentationError = func(error) {}
+	}
 	var logLevel string
 	var logFormat string
 	var verbose bool
@@ -108,6 +129,10 @@ func (app *App) rootCommandWithDiagnosticControls(controls diagnosticControls) *
 	var showVersion bool
 	configureDiagnostics := func() error {
 		return app.configureDiagnosticLogging(controls)
+	}
+	discovery := newTerminalDiscoveryAdapter(app.factory.Terminal)
+	presentDiscovery := func(command *cobra.Command) error {
+		return discovery.PresentDiscovery(command.Context(), newDiscoveryDocument(command))
 	}
 	root := &cobra.Command{
 		Use:           "ycy",
@@ -120,7 +145,7 @@ func (app *App) rootCommandWithDiagnosticControls(controls diagnosticControls) *
 				_, _ = fmt.Fprintln(app.output(), app.factory.Version)
 				return nil
 			}
-			if err := command.Help(); err != nil {
+			if err := presentDiscovery(command); err != nil {
 				return err
 			}
 			return errHelpRequested
@@ -156,9 +181,8 @@ func (app *App) rootCommandWithDiagnosticControls(controls diagnosticControls) *
 	root.AddCommand(fscommand.NewCmdFS(app.factory, nil))
 	root.AddCommand(tunnelcommand.NewCmdTunnel(app.factory))
 	root.AddCommand(upgradecommand.NewCmdUpgrade(app.factory, nil))
-	discovery := newTerminalDiscoveryAdapter(app.factory.Terminal)
 	root.SetHelpFunc(func(command *cobra.Command, _ []string) {
-		discovery.PresentDiscovery(command.Context(), newDiscoveryDocument(command))
+		capturePresentationError(presentDiscovery(command))
 	})
 	return root
 }
@@ -180,15 +204,24 @@ func (app *App) configureDiagnosticLogging(controls diagnosticControls) error {
 }
 
 func (app *App) reportError(err error) {
-	_, _ = fmt.Fprintf(app.diagnostics(), "error: %s\n", err)
+	_, _ = fmt.Fprintf(app.diagnostics(), "error: %s\n", rootDiagnostic(err))
 }
 
 func (app *App) reportRuntimeError(err error) {
 	_, _ = fmt.Fprintln(app.output())
-	_, _ = fmt.Fprintf(app.diagnostics(), "error: %s\n", logging.Redact(err.Error()))
+	_, _ = fmt.Fprintf(app.diagnostics(), "error: %s\n", rootDiagnostic(err))
 	if app.debugEnabled() {
 		_, _ = app.diagnostics().Write(debug.Stack())
 	}
+}
+
+func rootDiagnostic(err error) string {
+	value := logging.RedactDiagnostic(err.Error())
+	runes := []rune(value)
+	if len(runes) <= rootDiagnosticLimit {
+		return value
+	}
+	return string(runes[:rootDiagnosticLimit-len(rootDiagnosticOmission)]) + rootDiagnosticOmission
 }
 
 func (app *App) debugEnabled() bool {

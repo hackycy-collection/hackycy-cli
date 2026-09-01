@@ -1,14 +1,20 @@
 package logging
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	charmlog "charm.land/log/v2"
+	"github.com/charmbracelet/colorprofile"
 )
 
 // Level controls which structured messages a Runtime writes.
@@ -163,8 +169,10 @@ func (logger Logger) Log(level Level, message string, fields map[string]any) {
 		context[key] = value
 	}
 
+	loggedAt := logger.runtime.now().UTC()
 	record := diagnosticRecord{
-		timestamp: diagnosticTimestamp(logger.runtime.now()),
+		at:        loggedAt,
+		timestamp: diagnosticTimestamp(loggedAt),
 		level:     level,
 		scope:     logger.scope,
 		message:   Redact(message),
@@ -174,6 +182,7 @@ func (logger Logger) Log(level Level, message string, fields map[string]any) {
 }
 
 type diagnosticRecord struct {
+	at        time.Time
 	timestamp string
 	level     Level
 	scope     string
@@ -189,32 +198,64 @@ func renderRecord(record diagnosticRecord, format RecordFormat, color bool) stri
 	if format == JSONFormat {
 		return renderJSONRecord(record)
 	}
-	return renderTextRecord(record, color)
+	return textAdapter{color: color}.render(record)
 }
 
-func renderTextRecord(record diagnosticRecord, color bool) string {
-	timestamp := record.timestamp
-	label := fmt.Sprintf("%-5s", record.level.String())
-	scope := ""
-	if record.scope != "" {
-		scope = "[" + record.scope + "]"
+// textAdapter is the private Log v2 boundary. Runtime passes it only complete,
+// normalized records, and performs the single write after this buffer is ready.
+type textAdapter struct {
+	color bool
+}
+
+func (adapter textAdapter) render(record diagnosticRecord) string {
+	var output bytes.Buffer
+	logger := charmlog.NewWithOptions(&output, charmlog.Options{
+		Level:           charmlog.DebugLevel,
+		Prefix:          record.scope,
+		ReportTimestamp: true,
+		TimeFormat:      "2006-01-02T15:04:05.000Z",
+		Formatter:       charmlog.TextFormatter,
+	})
+	styles := charmlog.DefaultStyles()
+	for level, label := range map[charmlog.Level]string{
+		charmlog.DebugLevel: "DEBUG",
+		charmlog.InfoLevel:  "INFO",
+		charmlog.WarnLevel:  "WARN",
+		charmlog.ErrorLevel: "ERROR",
+	} {
+		styles.Levels[level] = styles.Levels[level].SetString(label).MaxWidth(len(label))
 	}
-	if color {
-		timestamp = styleTimestamp(timestamp)
-		label = styleLevel(record.level, label)
-		if scope != "" {
-			scope = styleScope(scope)
-		}
+	logger.SetStyles(styles)
+	if adapter.color {
+		logger.SetColorProfile(colorprofile.TrueColor)
+	} else {
+		logger.SetColorProfile(colorprofile.NoTTY)
 	}
-	parts := []string{timestamp, label}
-	if scope != "" {
-		parts = append(parts, scope)
+	entry := slog.NewRecord(record.at, charmLogLevel(record.level), textMessage(record), 0)
+	_ = logger.Handle(context.Background(), entry)
+	return output.String()
+}
+
+func charmLogLevel(level Level) slog.Level {
+	switch level {
+	case Debug:
+		return slog.Level(charmlog.DebugLevel)
+	case Info:
+		return slog.Level(charmlog.InfoLevel)
+	case Warn:
+		return slog.Level(charmlog.WarnLevel)
+	case Error:
+		return slog.Level(charmlog.ErrorLevel)
+	default:
+		return slog.Level(charmlog.ErrorLevel)
 	}
-	parts = append(parts, record.message)
-	if len(record.context) > 0 {
-		parts = append(parts, marshalContext(record.context))
+}
+
+func textMessage(record diagnosticRecord) string {
+	if len(record.context) == 0 {
+		return record.message
 	}
-	return strings.Join(parts, " ") + "\n"
+	return record.message + " " + marshalContext(record.context)
 }
 
 func renderJSONRecord(record diagnosticRecord) string {
@@ -255,27 +296,6 @@ func marshalContext(context map[string]any) string {
 		return `{"logging":"context encoding failed"}`
 	}
 	return string(encoded)
-}
-
-func styleTimestamp(value string) string {
-	return "\x1b[2;90m" + value + "\x1b[0m"
-}
-
-func styleLevel(level Level, value string) string {
-	code := "32"
-	switch level {
-	case Debug:
-		code = "2;90"
-	case Warn:
-		code = "33"
-	case Error:
-		code = "1;31"
-	}
-	return "\x1b[" + code + "m" + value + "\x1b[0m"
-}
-
-func styleScope(value string) string {
-	return "\x1b[36m" + value + "\x1b[0m"
 }
 
 func normalizeRecordFormat(format RecordFormat) RecordFormat {

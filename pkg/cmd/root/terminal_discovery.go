@@ -2,6 +2,7 @@ package root
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -16,10 +17,11 @@ func newTerminalDiscoveryAdapter(experience terminalexperience.Experience) Disco
 	return terminalDiscoveryAdapter{experience: experience}
 }
 
-func (adapter terminalDiscoveryAdapter) PresentDiscovery(ctx context.Context, document DiscoveryDocument) {
+func (adapter terminalDiscoveryAdapter) PresentDiscovery(ctx context.Context, document DiscoveryDocument) error {
 	run := adapter.experience.Open(ctx)
-	defer run.Close()
-	_ = run.Result(terminalDiscoveryDocument(document))
+	presentation := terminalDiscoveryDocument(document)
+	presentErr := run.Finish(terminalexperience.Succeeded, &presentation)
+	return errors.Join(presentErr, run.Close())
 }
 
 func terminalDiscoveryDocument(document DiscoveryDocument) terminalexperience.PresentationDocument {

@@ -8,6 +8,8 @@ import (
 	"regexp"
 	"strings"
 	"unicode"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 const (
@@ -25,6 +27,18 @@ func Redact(value string) string {
 	value = bearerSecret.ReplaceAllString(value, "Bearer "+redactedValue)
 	value = credentialAssignment.ReplaceAllString(value, "${1}${2}"+redactedValue)
 	return strings.ReplaceAll(value, "\n", `\n`)
+}
+
+// RedactDiagnostic projects arbitrary diagnostic text as one control-free line.
+func RedactDiagnostic(value string) string {
+	value = ansi.Strip(value)
+	value = strings.Map(func(character rune) rune {
+		if character == '\r' || character == '\n' || unicode.IsControl(character) {
+			return ' '
+		}
+		return character
+	}, value)
+	return Redact(strings.Join(strings.Fields(value), " "))
 }
 
 func redactContext(context map[string]any) map[string]any {

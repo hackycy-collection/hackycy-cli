@@ -249,10 +249,13 @@ func TestRunServerOwnsTheForegroundUntilContextCancellation(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("RunServer() did not return after cancellation")
 	}
+	if !strings.Contains(diagnostics.String(), "tunnel.server:") {
+		t.Fatalf("Tunnel server diagnostics = %q, missing tunnel.server scope", diagnostics.String())
+	}
 	for _, expected := range []string{
-		"[tunnel.server] Tunnel control plane started",
-		"[tunnel.server] Tunnel server stopping",
-		"[tunnel.server] Tunnel server stopped",
+		"Tunnel control plane started",
+		"Tunnel server stopping",
+		"Tunnel server stopped",
 	} {
 		if !strings.Contains(diagnostics.String(), expected) {
 			t.Fatalf("Tunnel server diagnostics = %q, missing %q", diagnostics.String(), expected)

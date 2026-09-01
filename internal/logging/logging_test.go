@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
@@ -40,7 +41,7 @@ func TestRuntimeFiltersAndRedacts(t *testing.T) {
 	if strings.Contains(line, "top-secret") || strings.Contains(line, "not-for-logs") || strings.Contains(line, "hidden") || strings.Contains(line, `"token":"secret"`) {
 		t.Fatalf("secret leaked in %q", line)
 	}
-	for _, expected := range []string{"2026-08-23T00:00:00.000Z WARN  [cli]", `password=[REDACTED]\ncontinuing`, `"authorization":"[REDACTED]"`, `"count":2`} {
+	for _, expected := range []string{"2026-08-23T00:00:00.000Z WARN cli:", `password=[REDACTED]\ncontinuing`, `"authorization":"[REDACTED]"`, `"count":2`} {
 		if !strings.Contains(line, expected) {
 			t.Fatalf("output %q does not contain %q", line, expected)
 		}
@@ -69,6 +70,41 @@ func TestRuntimeRoutesRedactedDiagnosticsOnlyToInjectedStderr(t *testing.T) {
 	}
 }
 
+func TestRuntimeBuffersRedactedRecordsForLeaseAwareFIFO(t *testing.T) {
+	destination := &recordingWriter{}
+	diagnostics := terminal.NewLeaseAwareDiagnosticWriter(destination)
+	runtime := NewRuntime(Options{
+		Writer: diagnostics,
+		Now:    func() time.Time { return time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC) },
+	})
+	lease := diagnostics.AcquireRendererLease()
+	runtime.Logger("sync").Info("first event token=first-secret", map[string]any{"authorization": "first-header"})
+	runtime.Logger("sync").Warn("second event token=second-secret", map[string]any{"authorization": "second-header"})
+
+	if len(destination.writes) != 0 {
+		t.Fatalf("diagnostics escaped active renderer lease: %#v", destination.writes)
+	}
+	if err := lease.Close(); err != nil {
+		t.Fatalf("release renderer lease: %v", err)
+	}
+	if got := len(destination.writes); got != 2 {
+		t.Fatalf("diagnostic writes = %#v, want two complete records", destination.writes)
+	}
+	for _, secret := range []string{"first-secret", "first-header", "second-secret", "second-header"} {
+		if strings.Contains(strings.Join(destination.writes, ""), secret) {
+			t.Fatalf("deferred diagnostics leaked %q: %#v", secret, destination.writes)
+		}
+	}
+	for _, record := range destination.writes {
+		if strings.Count(record, "\n") != 1 || !strings.HasSuffix(record, "\n") {
+			t.Fatalf("diagnostic write is not one complete record: %q", record)
+		}
+	}
+	if !strings.Contains(destination.writes[0], "first event") || !strings.Contains(destination.writes[1], "second event") {
+		t.Fatalf("deferred diagnostics lost FIFO order: %#v", destination.writes)
+	}
+}
+
 func TestRuntimeReconfiguresExistingLoggerAndColor(t *testing.T) {
 	var output bytes.Buffer
 	runtime := NewRuntime(Options{Writer: &output, Color: true})
@@ -77,12 +113,12 @@ func TestRuntimeReconfiguresExistingLoggerAndColor(t *testing.T) {
 	logger.Warn("not written", nil)
 	logger.Error("written", nil)
 
-	if strings.Contains(output.String(), "not written") || !strings.Contains(output.String(), "\x1b[1;31mERROR") || !strings.Contains(output.String(), "\x1b[36m[scope]") {
+	if strings.Contains(output.String(), "not written") || !strings.Contains(output.String(), "ERROR") || !strings.Contains(output.String(), "scope:") || !strings.Contains(output.String(), "\x1b[") {
 		t.Fatalf("unexpected output %q", output.String())
 	}
 }
 
-func TestRuntimeUsesApprovedRichTextStyleRoles(t *testing.T) {
+func TestRuntimeUsesLogV2TextStyles(t *testing.T) {
 	var output bytes.Buffer
 	runtime := NewRuntime(Options{
 		Writer: &output,
@@ -97,16 +133,18 @@ func TestRuntimeUsesApprovedRichTextStyleRoles(t *testing.T) {
 	logger.Error("error", nil)
 
 	for _, expected := range []string{
-		"\x1b[2;90m2026-08-26T12:34:56.789Z\x1b[0m",
-		"\x1b[2;90mDEBUG\x1b[0m",
-		"\x1b[32mINFO \x1b[0m",
-		"\x1b[33mWARN \x1b[0m",
-		"\x1b[1;31mERROR\x1b[0m",
-		"\x1b[36m[scope]\x1b[0m",
+		"DEBUG",
+		"INFO",
+		"WARN",
+		"ERROR",
+		"scope:",
 	} {
 		if !strings.Contains(output.String(), expected) {
 			t.Fatalf("rich text record %q does not contain %q", output.String(), expected)
 		}
+	}
+	if !strings.Contains(output.String(), "\x1b[") {
+		t.Fatalf("rich text record has no terminal styles: %q", output.String())
 	}
 }
 
@@ -116,7 +154,7 @@ func TestRuntimeFormatsTextAndNDJSONRecords(t *testing.T) {
 	var text bytes.Buffer
 	textRuntime := NewRuntime(Options{Writer: &text, Now: timestamp})
 	textRuntime.Logger("tunnel.server").Info("Tunnel started", map[string]any{"port": 7000})
-	if got, want := text.String(), "2026-08-26T12:34:56.789Z INFO  [tunnel.server] Tunnel started {\"port\":7000}\n"; got != want {
+	if got, want := text.String(), "2026-08-26T12:34:56.789Z INFO tunnel.server: Tunnel started {\"port\":7000}\n"; got != want {
 		t.Fatalf("text record = %q, want %q", got, want)
 	}
 
@@ -249,4 +287,13 @@ func TestRedactRecognizesCredentialTextShapes(t *testing.T) {
 	if got := Redact("project=demo"); got != "project=demo" {
 		t.Fatalf("Redact redacted a non-credential value: %q", got)
 	}
+}
+
+type recordingWriter struct {
+	writes []string
+}
+
+func (writer *recordingWriter) Write(value []byte) (int, error) {
+	writer.writes = append(writer.writes, string(value))
+	return len(value), nil
 }

@@ -211,6 +211,60 @@ func TestCommandPackagesDoNotImportCharmOrLog(t *testing.T) {
 	}
 }
 
+func TestLogV2RemainsPrivateToLogging(t *testing.T) {
+	root := repositoryRoot(t)
+	var violations []string
+	found := false
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		relative, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		relative = filepath.ToSlash(relative)
+		if entry.IsDir() {
+			switch relative {
+			case ".git", ".scratch", "legacy", "mock", "node_modules", "web/node_modules", "web/dist", "tools", "internal/terminal/prototype-vivid":
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if filepath.Ext(path) != ".go" {
+			return nil
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, nil, 0)
+		if err != nil {
+			return err
+		}
+		for _, imported := range file.Imports {
+			pathValue, err := strconv.Unquote(imported.Path.Value)
+			if err != nil {
+				return fmt.Errorf("parse import in %s: %w", relative, err)
+			}
+			if pathValue != "charm.land/log/v2" {
+				continue
+			}
+			found = true
+			if !strings.HasPrefix(relative, "internal/logging/") {
+				violations = append(violations, relative+": imports private Log v2 adapter")
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("inspect Log v2 imports: %v", err)
+	}
+	if !found {
+		t.Fatal("Log v2 is not imported by internal/logging")
+	}
+	if len(violations) > 0 {
+		sort.Strings(violations)
+		t.Fatalf("Log v2 import boundary violations:\n%s", strings.Join(violations, "\n"))
+	}
+}
+
 func TestApprovedDependencyDirection(t *testing.T) {
 	root := repositoryRoot(t)
 	for _, tags := range []string{"", "acceptance"} {

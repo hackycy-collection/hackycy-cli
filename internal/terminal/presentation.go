@@ -31,8 +31,7 @@ func RenderPlain(document PresentationDocument) string {
 
 // WritePlain writes a durable Command Result to its stdout destination.
 func WritePlain(output io.Writer, document PresentationDocument) error {
-	_, err := io.WriteString(output, RenderPlain(document))
-	return err
+	return writeComplete(output, RenderPlain(document))
 }
 
 // RichOptions controls terminal-owned Rich Interactive presentation behavior.
@@ -43,8 +42,18 @@ type RichOptions struct {
 
 // WriteRich writes a durable Rich Interactive Command Result to stdout.
 func WriteRich(output io.Writer, document PresentationDocument, options RichOptions) error {
-	_, err := io.WriteString(output, renderRich(document, options))
-	return err
+	return writeComplete(output, renderRich(document, options))
+}
+
+func writeComplete(output io.Writer, value string) error {
+	written, err := io.WriteString(output, value)
+	if err != nil {
+		return err
+	}
+	if written != len(value) {
+		return io.ErrShortWrite
+	}
+	return nil
 }
 
 func renderRich(document PresentationDocument, options RichOptions) string {

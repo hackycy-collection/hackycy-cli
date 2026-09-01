@@ -9,9 +9,9 @@ import (
 )
 
 // DiscoveryPresenter receives a Cobra-owned command discovery document for
-// terminal-specific Rich presentation.
+// terminal-specific durable presentation.
 type DiscoveryPresenter interface {
-	PresentDiscovery(context.Context, DiscoveryDocument)
+	PresentDiscovery(context.Context, DiscoveryDocument) error
 }
 
 // DiscoveryDocument describes one command without exposing Cobra to a terminal adapter.
