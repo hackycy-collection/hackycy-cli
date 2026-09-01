@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"strings"
 	"sync"
 
@@ -47,7 +48,12 @@ func (controller *richController) start() error {
 	controller.program = tea.NewProgram(
 		controller.model,
 		tea.WithInput(controller.runtime.inputTerminal),
-		tea.WithOutput(controller.runtime.diagnosticTerminal),
+		// Keep the root's writes inside the renderer lease.  This makes the
+		// renderer and the semantic replay share one serialized terminal owner.
+		tea.WithOutput(rendererTerminalWriter{
+			writer:   controller.lease.Writer(),
+			terminal: controller.runtime.diagnosticTerminal,
+		}),
 		tea.WithoutSignalHandler(),
 	)
 	go func() {
@@ -67,7 +73,35 @@ func (controller *richController) start() error {
 	return nil
 }
 
+// rendererTerminalWriter preserves Bubble Tea's terminal capability detection
+// while routing every renderer write through the active diagnostic lease.
+type rendererTerminalWriter struct {
+	writer   io.Writer
+	terminal *os.File
+}
+
+func (writer rendererTerminalWriter) Write(value []byte) (int, error) {
+	return writer.writer.Write(value)
+}
+
+func (writer rendererTerminalWriter) Read(value []byte) (int, error) {
+	return writer.terminal.Read(value)
+}
+
+// Close deliberately leaves the inherited diagnostic terminal open. Bubble Tea
+// only needs the terminal-file shape for capability detection and sizing.
+func (rendererTerminalWriter) Close() error {
+	return nil
+}
+
+func (writer rendererTerminalWriter) Fd() uintptr {
+	return writer.terminal.Fd()
+}
+
 func (controller *richController) ask(ctx context.Context, handler *InteractionHandler, request InteractionRequest) (InteractionAnswer, error) {
+	if err := validateInteractionRequest(request); err != nil {
+		return InteractionAnswer{}, err
+	}
 	controller.next++
 	id := controller.next
 	form, answer, err := newRichForm(handler, request, id)
@@ -104,9 +138,14 @@ func (controller *richController) notice(document PresentationDocument) error {
 	return controller.send(richNoticeMsg{document: document, ack: ack}, ack)
 }
 
-func (controller *richController) startTrack(label string, requestCancel func()) error {
+func (controller *richController) milestone(document PresentationDocument) error {
 	ack := make(chan struct{})
-	return controller.send(richStartTrackMsg{label: label, requestCancel: requestCancel, ack: ack}, ack)
+	return controller.send(richMilestoneMsg{document: document, ack: ack}, ack)
+}
+
+func (controller *richController) startTrack(label string, phases []OperationPhase, requestCancel func() error) error {
+	ack := make(chan struct{})
+	return controller.send(richStartTrackMsg{label: label, phases: phases, requestCancel: requestCancel, ack: ack}, ack)
 }
 
 func (controller *richController) updateTrack(phase OperationPhase) error {
@@ -139,10 +178,37 @@ func (controller *richController) send(message tea.Msg, ack <-chan struct{}) err
 	}
 }
 
-func (controller *richController) close() error {
-	controller.program.Quit()
-	<-controller.done
-	return errors.Join(controller.programErrorOrNil(), controller.releaseLease())
+func (controller *richController) close(ledger *TranscriptLedger) error {
+	return controller.closeWith(ledger, true)
+}
+
+// closeAfterFailure performs the same terminal restoration and replay as a
+// normal close, but leaves the already-returned renderer error to the caller so
+// it is not reported twice.
+func (controller *richController) closeAfterFailure(ledger *TranscriptLedger) error {
+	return controller.closeWith(ledger, false)
+}
+
+func (controller *richController) closeWith(ledger *TranscriptLedger, includeProgramError bool) error {
+	if controller.program != nil {
+		controller.program.Quit()
+		<-controller.done
+	}
+
+	// Bubble Tea has restored the primary screen at this point, while the
+	// lease still owns stderr.  Replay only the bounded semantic ledger; raw
+	// frames and command results are deliberately not copied here.
+	var replayErr error
+	if ledger != nil {
+		if transcript := ledger.Render(); transcript != "" && controller.lease != nil {
+			_, replayErr = io.WriteString(controller.lease.Writer(), transcript)
+		}
+	}
+	var programErr error
+	if includeProgramError {
+		programErr = controller.programErrorOrNil()
+	}
+	return errors.Join(programErr, replayErr, controller.releaseLease())
 }
 
 func (controller *richController) releaseLease() error {
@@ -165,6 +231,18 @@ func (controller *richController) programErrorOrNil() error {
 	controller.mu.Lock()
 	defer controller.mu.Unlock()
 	return controller.err
+}
+
+func (controller *richController) stopped() bool {
+	if controller == nil || controller.done == nil {
+		return false
+	}
+	select {
+	case <-controller.done:
+		return true
+	default:
+		return false
+	}
 }
 
 type richMode uint8
@@ -224,6 +302,14 @@ func (model *richRootModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.mode = richNoticeMode
 		close(value.ack)
 		return model, nil
+	case richMilestoneMsg:
+		model.preserveTrack()
+		if len(value.document.Blocks) > 0 {
+			model.notices = append(model.notices, value.document)
+		}
+		model.mode = richNoticeMode
+		close(value.ack)
+		return model, nil
 	case richShowFormMsg:
 		model.preserveTrack()
 		model.mode = richFormMode
@@ -256,7 +342,13 @@ func (model *richRootModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 	case richStartTrackMsg:
 		model.preserveTrack()
 		model.mode = richTrackMode
-		model.track = &trackedState{label: value.label, requestStop: value.requestCancel}
+		model.track = &trackedState{
+			label:  value.label,
+			phases: append([]OperationPhase(nil), value.phases...),
+			requestStop: func() {
+				_ = value.requestCancel()
+			},
+		}
 		close(value.ack)
 		return model, nil
 	case richTrackPhaseMsg:
@@ -293,7 +385,12 @@ func (model *richRootModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return model, nil
 		}
-		if model.mode == richFormMode && model.form != nil && value.String() == "esc" && !model.form.handlesEscape() {
+		if model.mode == richFormMode && model.form != nil && value.String() == "esc" {
+			if model.form.handlesEscape() {
+				updated, command := model.form.Update(message)
+				model.form = updated.(richFormModel)
+				return model, command
+			}
 			model.response <- richAskResult{err: ErrInteractionCancelled}
 			model.clearForm()
 			return model, nil
@@ -437,6 +534,11 @@ type richNoticeMsg struct {
 	ack      chan struct{}
 }
 
+type richMilestoneMsg struct {
+	document PresentationDocument
+	ack      chan struct{}
+}
+
 type richAskResult struct {
 	answer InteractionAnswer
 	err    error
@@ -461,7 +563,8 @@ type richCancelFormMsg struct {
 
 type richStartTrackMsg struct {
 	label         string
-	requestCancel func()
+	phases        []OperationPhase
+	requestCancel func() error
 	ack           chan struct{}
 }
 

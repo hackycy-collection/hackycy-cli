@@ -12,6 +12,10 @@ const (
 	NoticeOperation OperationKind = "notice"
 	// ResultOperation records a durable presentation request.
 	ResultOperation OperationKind = "result"
+	// MilestoneOperation records an explicit durable checkpoint.
+	MilestoneOperation OperationKind = "milestone"
+	// FinishOperation records a finite command outcome.
+	FinishOperation OperationKind = "finish"
 	// TrackOperation records a tracked-operation request.
 	TrackOperation OperationKind = "track"
 	// CloseOperation records terminal cleanup requested by a caller.

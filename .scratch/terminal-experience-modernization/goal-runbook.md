@@ -65,8 +65,8 @@
 | Gate | Status | Depends on | Plan contract | Unlock evidence |
 | --- | --- | --- | --- | --- |
 | G0: Baseline and dependency lock | passed | none | `implementation-plan.md` -> `G0: Baseline and dependency lock` | no predecessor |
-| G1: Shared semantic terminal foundation | active | G0 | `implementation-plan.md` -> `G1: Shared semantic terminal foundation` | G0 passed |
-| G2: Logging and root boundary | planned | G1 | `implementation-plan.md` -> `G2: Logging and root boundary` | G1 pending |
+| G1: Shared semantic terminal foundation | passed | G0 | `implementation-plan.md` -> `G1: Shared semantic terminal foundation` | G0 passed |
+| G2: Logging and root boundary | active | G1 | `implementation-plan.md` -> `G2: Logging and root boundary` | G1 passed |
 | G3: Low-risk finite command slices | planned | G2 | `implementation-plan.md` -> `G3: Low-risk finite command slices` | G2 pending |
 | G4: External-read and service-startup slices | planned | G3 | `implementation-plan.md` -> `G4: External-read and service-startup slices` | G3 pending |
 | G5: Mutating, destructive, and archive slices | planned | G4 | `implementation-plan.md` -> `G5: Mutating, destructive, and archive slices` | G4 pending |
@@ -131,10 +131,237 @@
 
 - 2026-09-01: initialized as `planned`; no implementation evidence.
 - 2026-09-01: activated as `active`; 尚未开始实施。
+- 2026-09-01: completed slice `outcome ordering`. Added the public
+  `Finish(FinishOutcome, *PresentationDocument)` seam with the three approved
+  outcomes, atomic finished-state commitment, invalid-outcome rejection, and
+  optional one-time stdout emission. `Close` emits no synthetic result and the
+  pre-existing `Result` entry remains available to un-migrated command
+  adapters; the semantic recorder now captures Finish requests. Focused
+  verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/terminal
+  -run '^TestExperienceFinishCommitsOneOutcomeAndNeverSynthesizesAnother$'`.
+  Package verification also passed for `./internal/terminal
+  ./internal/terminaltest`. Risk: the compatibility `Result` path still has
+  legacy multi-write semantics until command migration; it is intentionally
+  outside this slice. Next: implement explicit `Milestone` routing and its
+  Rich/Plain/Automation behavior.
+- 2026-09-01: completed slice `milestones`. Added the semantic
+  `Milestone(PresentationDocument)` operation and recorder support. Plain
+  Interactive emits one control-free diagnostic line, Automation drops the
+  checkpoint without touching its streams, and Rich routes it through the
+  existing single Bubble Tea root; finished or closed runs reject it. Focused
+  verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/terminal
+  -run '^TestExperienceMilestoneRoutesByInteractionCapability$'`; the full
+  terminal and terminaltest package tests also passed. Risk: Rich milestones
+  currently share the Live View notice storage and are not yet replayed as a
+  bounded semantic ledger. Next: implement phase definitions, stable IDs, and
+  transition/drain protocol validation.
+- 2026-09-01: completed slice `Huh interaction adapter`. Rich Text, Secret,
+  Select, MultiSelect, and Confirm all remain Huh v2 child models under the
+  one Bubble Tea root. Select and MultiSelect now use the same native
+  two-step filtering flow (Enter or Escape commits the filter; Enter submits),
+  and the wrapper delegates Escape to Huh whenever Huh reports that filtering
+  is active. Added focused child-model regressions for filter state and
+  submission, then exercised the 200-option PTY flow across navigation,
+  resize, filtering, selection, and final result. Verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/terminal
+  -run '^(TestRichHuhFormLetsHuhEndListFiltering|TestRichHuhFormSequenceEndsListAndSubmits|TestRichRuntimeLongListsStayVisibleAcrossNavigationAndResize)$'`.
+  Risk: PTY assertions intentionally model Huh v2's differential redraws by
+  semantic transition rather than contiguous frame bytes. Next: prove Rich
+  lease teardown ordering with transcript replay, deferred diagnostics, and
+  stdout result tests.
+- 2026-09-01: completed slice `Rich lease/replay ordering`. Added a focused
+  PTY Finish path that proves the sole AltScreen session restores before the
+  semantic checkpoint and outcome replay, then releases deferred diagnostics
+  in FIFO order, and only then emits the durable stdout result. Verification
+  passed: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./internal/terminal -run '^TestRichRuntimeFinishRestoresThenReplaysBeforeDiagnosticsAndResult$'`.
+  Risk: the PTY test observes ordering from the merged inherited terminal
+  stream; redirected-stdout separation remains covered by the existing Rich
+  redirected-output test. Next: audit Automation transcript suppression and
+  phase/transcript contract edges with focused tests.
+- 2026-09-01: completed slice `Automation transcript suppression`. Automation
+  now drops milestones and final tracked phases before they reach the ledger,
+  and `Finish` neither appends nor freezes a Transcript in that mode; command
+  stdout results remain available. Focused verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/terminal
+  -run '^(TestAutomationRunDoesNotRecordInteractionTranscript|TestExperienceMilestoneRoutesByInteractionCapability|TestExperienceTrackValidatesPhaseProtocolAndDrainsUpdates|TestExperienceFinishCommitsOneOutcomeAndNeverSynthesizesAnother)$'`.
+  Risk: the test uses the runtime ledger directly to prove non-emission state,
+  while stream control-free degradation is verified separately. Next: force
+  Plain, Automation, and preflight Rich fallback result rendering through the
+  control-free projection.
+- 2026-09-01: completed slice `single Huh form stack and capability
+  degradation`. Removed the obsolete private `richListForm` implementation now
+  that Huh v2 Select/MultiSelect satisfy the largest-list PTY evidence. Durable
+  results are control-free for Plain and Automation modes (and after a Rich
+  preflight fallback), even if callers provide terminal/color stream flags.
+  Added focused tests for both modes; `internal/terminal` and
+  `internal/terminaltest` package verification passed. Risk: Rich retains its
+  normal styled result only while Rich remains enabled and stdout is a terminal;
+  command-owned result wording is unchanged. Next: complete phase protocol and
+  Transcript edge-case coverage before the repository-wide checks.
+- 2026-09-01: completed slice `Transcript outcome retention`. The bounded
+  ledger now reserves capacity for one truncation marker and the final outcome,
+  keeps event sequence numbers contiguous, and retains the outcome after later
+  events overflow the configured event or byte budget. Focused Transcript
+  truncation verification passed, including the final outcome projection.
+  Risk: deliberately tiny caller-supplied byte budgets may be unable to fit the
+  reserved marker and outcome; no unbounded fallback is introduced. Next: audit
+  phase protocol and interaction edge cases.
+- 2026-09-01: completed slice `MultiSelect selection order`. The Huh v2
+  MultiSelect adapter tracks semantic selection order across deselection and
+  re-selection while preserving Huh's original option values. Focused
+  re-selection verification passed. Risk: order tracking is only applied to
+  Rich Huh MultiSelect answers; Plain parsing retains its established order.
+  Next: audit phase protocol, control-free interaction projections, and Rich
+  renderer recovery boundaries.
+- 2026-09-01: completed slice `phase catalog/update contract`. The phase
+  protocol now rejects conflicting compatibility catalog fields and conflicting
+  update ID aliases while accepting identical aliases and canonicalizing a
+  `PhaseID`-only update. Focused verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/terminal
+  -run '^TestPhaseProtocol'`. Risk: legacy name-based operations remain
+  supported for un-migrated adapters; catalog-backed operations use stable IDs.
+  Next: harden interaction default shapes and control-free prompt projections.
+- 2026-09-01: completed slice `interaction default-shape validation`. Select,
+  MultiSelect, Text, Secret, and Confirm defaults now reject incompatible answer
+  fields and duplicate multi-selections before any input or diagnostic I/O.
+  Focused malformed-request verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/terminal
+  -run '^TestInteractionValidationRejectsMalformedRequestsBeforeIO$'`. Risk:
+  command-owned `ParsePlain` requests may still omit option catalogs for their
+  Plain grammar; Rich construction must continue to reject an empty Huh list.
+  Next: enforce control-free prompt and option projections.
+- 2026-09-01: completed slice `control-free interaction projection`. Plain
+  prompts and Huh titles, descriptions, placeholders, and option labels now
+  strip ANSI/C1 controls while retaining semantic option values unchanged.
+  Focused verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/terminal
+  -run '^(TestInteractionPromptProjectionStripsTerminalControlWithoutChangingValues|TestHuhOptionsPreserveValuesAndProjectDescriptions|TestWritePlainRendersDurableDocumentToStdoutWithoutTerminalControl)$'`.
+  Risk: the shared projection replaces non-line control characters visibly,
+  rather than silently removing business text. Next: exercise Rich renderer
+  failure/recovery and Transcript minimum-limit edges.
+- 2026-09-01: completed slice `cancellation drain safety`. Cancellation
+  callbacks now start asynchronously so an unbuffered producer can publish its
+  cancellation update while the runtime drains through channel closure; the
+  callback remains at-most-once. Focused verification passed, including an
+  unbuffered cancellation producer. Risk: a command cancellation callback must
+  still eventually return; the runtime cannot cancel a callback that blocks
+  independently. Next: exercise Rich renderer recovery and Transcript budget
+  edges.
+- 2026-09-01: completed slice `Transcript minimum limits and empty milestones`.
+  Mandatory truncation/outcome events are preserved under tiny configured
+  budgets, event numbering remains contiguous, events after an outcome are
+  ignored, and empty/control-only milestones are no-ops. Focused Transcript and
+  milestone verification passed. Risk: tiny budgets are normalized upward to
+  accommodate mandatory semantic events. Next: exercise Rich renderer failure
+  recovery.
+- 2026-09-01: completed slice `interaction error and phase projection`.
+  Plain validation feedback and Rich phase labels/details now pass through the
+  shared control-free projection, while semantic answers and phase identity are
+  unchanged. Focused prompt, option, validation-error, and phase-view tests
+  passed. Risk: replacement characters make malformed control bytes visible for
+  diagnosis without allowing terminal interpretation. Next: exercise Rich
+  renderer failure recovery.
+- 2026-09-01: completed slice `Rich renderer failure recovery`. A started Rich
+  controller that exits with a renderer error now restores/replays the bounded
+  safe transcript while its lease is held, releases deferred diagnostics, keeps
+  the original error, and blocks later semantic retries instead of silently
+  repeating interaction or work. Focused recovery verification passed with a
+  stopped-controller fixture; existing Rich PTY teardown tests remain green.
+  Risk: a renderer failure terminates that Experience run, so callers must use
+  their normal error/Close path rather than retrying semantic operations.
+  Next: run the complete directed G1 verification.
+- 2026-09-01: completed Directed verification for G1. The full terminal and
+  terminaltest suites passed with `-count=1`, including Rich PTY lifecycle,
+  five Huh interaction families, phase validation/draining, transcript bounds,
+  lease ordering, capability degradation, and exactly-once result behavior.
+  The same packages also passed `go test -race -count=1`. Risk: manual Signal
+  Rail visual acceptance is still outstanding. Next: run Repository
+  verification in the declared order.
+- 2026-09-01: Repository verification initially exposed a compatibility
+  regression in the shared control projection: converting tabs to spaces
+  changed the existing `git heat` result and the root `fs` help snapshot. The
+  projection was corrected to preserve tabs (and existing line layout) while
+  still removing ANSI/C1 controls; focused `git heat`, root command-surface,
+  and terminal package tests then passed. Risk: redirected result bytes remain
+  a compatibility boundary. Next: rerun `make check` from the declared start.
+- 2026-09-01: `make check` then exposed a second compatibility edge: legacy
+  Plain `ParsePlain` interactions intentionally permit an empty prompt message
+  because the command owns their grammar. Validation was narrowed so only
+  non-parser requests require a visible message; zip cancellation and all
+  previously failing package tests passed afterward. Tabs are preserved in
+  durable projections, so the original `git heat` and root help contracts stay
+  byte-compatible. Next: rerun `make check` to completion.
+- 2026-09-01: Repository verification completed successfully in the declared
+  order after the compatibility fixes. `make check` passed module verification,
+  no-bun/import checks, web lint/typecheck/tests/build and asset verification,
+  Go formatting, `go vet ./...`, and the complete repository test suite;
+  `git diff --check` passed. G1 automated evidence is now complete: (1) all
+  semantic methods and protocol errors have focused tests; (2) Rich, Plain,
+  Automation, redirected streams, and Text/Secret/Select/MultiSelect/Confirm
+  coverage pass; (3) transcript bounds, lease/replay teardown, cancellation
+  draining, renderer recovery, and exactly-once outcome behavior pass. Risk:
+  the required Signal Rail visual review remains a human decision. Next:
+  start the local prototype and record the one-time manual acceptance handoff.
+- 2026-09-01: completed slice `operation identity alias validation`. The
+  phase protocol rejects conflicting `TrackedOperation.ID` and
+  `OperationID` compatibility fields before consuming updates, with focused
+  protocol coverage passing. Risk: existing adapters that omit both fields
+  retain their legacy behavior. Next: rerun final Directed and Repository
+  verification.
+- 2026-09-01: final post-fix Directed verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./internal/terminal ./internal/terminaltest`. Final Repository verification
+  passed in declared order: `make check` completed module, web, vet, and full
+  repository tests, followed by `git diff --check`. No command migration or
+  command-owned wording changed in G1; the only touched production boundaries
+  are shared `internal/terminal` mechanics and their fixtures. Next: launch
+  the Signal Rail prototype and issue the manual acceptance handoff.
+- 2026-09-01: manual acceptance handoff issued for G1; awaiting one explicit
+  human result, and the Gate remains `active`. Acceptance entry from the
+  repository root:
+  `make prototype-terminal` (default Signal Rail success journey). Optional
+  scenarios are `make prototype-terminal PROTOTYPE_ARGS='--variant=signal
+  --outcome=failure'`, `make prototype-terminal
+  PROTOTYPE_ARGS='--variant=signal --outcome=cancel'`, and the same commands
+  with `NO_COLOR=1`; resize the PTY for narrow-dimension review. The entry was
+  started and smoke-exercised in a PTY: the five-step Signal Rail, masked
+  credential field, active spinner/work view, AltScreen lifecycle, and
+  cancellation restoration/transcript were observed successfully.
+  Automated evidence is complete: Directed
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./internal/terminal ./internal/terminaltest` passed; the supplemental
+  package race run passed; Repository `make check` passed module locks,
+  architecture/no-bun checks, web lint/typecheck/tests/build/assets, `go vet
+  ./...`, and the complete repository suite; final `git diff --check` passed.
+  Minimum acceptance checklist: (1) wide and narrow terminal layouts remain
+  legible; (2) colored TTY and `NO_COLOR=1` keep state meaning via symbols and
+  labels; (3) focus, pending/active/completed/warning/error symbols, and loading
+  remain visible; (4) AltScreen exits before the durable transcript; (5) the
+  ordering is transcript, deferred diagnostics, then stdout result; (6) secret
+  values and large command results never appear in the transcript. Expected
+  reply format is exactly `通过` or `未通过: <reason>` (include concise
+  evidence with a failure). Next action: only a new Goal/task carrying that
+  explicit result may continue G1; this Goal performs no waiting or polling.
+  本次 Goal 已结束、Gate 仍为 `active`。
+- 2026-09-01: manual acceptance received with the explicit result `通过`.
+  All G1 Exit conditions are satisfied: (1) focused tests cover shared
+  semantic methods and protocol errors; (2) Rich, Plain, Automation,
+  redirected behavior, and all five Huh form families passed; (3) Transcript,
+  lease/teardown, cancellation, and exactly-once behavior passed; and (4) the
+  recorded Signal Rail visual review was accepted. Final automated evidence:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./internal/terminal ./internal/terminaltest`, its `-race` counterpart,
+  `make check`, and `git diff --check` all passed. G1 is marked `passed`.
+  Its direct successor G2 is activated but has not been inspected,
+  implemented, or verified in this Goal.
 
 ### G2: Logging and root boundary
 
 - 2026-09-01: initialized as `planned`; no implementation evidence.
+- 2026-09-01: activated as `active`; 尚未开始实施。
 
 ### G3: Low-risk finite command slices
 

@@ -45,11 +45,13 @@ func TestRichRuntimeLongListsStayVisibleAcrossNavigationAndResize(t *testing.T) 
 	writeRichPTYInput(t, process, "/")
 	time.Sleep(100 * time.Millisecond)
 	writeRichPTYInput(t, process, "item-173")
-	waitForTrackedPrompt(t, output, "/item-173")
-	writeRichPTYInput(t, process, "\x1b")
+	// Huh v2 redraws the filter input with cursor and style updates between
+	// typed runes. Give the child model one render cycle before committing it.
+	time.Sleep(150 * time.Millisecond)
+	writeRichPTYInput(t, process, "\r")
 	time.Sleep(50 * time.Millisecond)
 	writeRichPTYInput(t, process, "\r")
-	waitForRichPromptReplacement(t, output, "Choose one", "\x1b[2;8Hmany")
+	waitForRichPromptReplacement(t, output, "Choose one", "Choose many")
 
 	writeRichPTYInput(t, process, "\x01")
 	time.Sleep(50 * time.Millisecond)
@@ -144,6 +146,36 @@ func TestRichRuntimeKeepsUIOnStderrWhenStdoutIsRedirected(t *testing.T) {
 	}
 	if countAlternateScreen(text, "h") != 1 || countAlternateScreen(text, "l") != 1 {
 		t.Fatalf("redirected flow did not own exactly one alternate-screen session: %q", text)
+	}
+}
+
+func TestRichRuntimeFinishRestoresThenReplaysBeforeDiagnosticsAndResult(t *testing.T) {
+	const helperEnvironment = "YCY_TERMINAL_FINISH_ORDER_HELPER"
+	if os.Getenv(helperEnvironment) == "1" {
+		runRichFinishOrderHelper(t)
+		return
+	}
+
+	command := exec.Command(os.Args[0], "-test.run=^TestRichRuntimeFinishRestoresThenReplaysBeforeDiagnosticsAndResult$")
+	command.Env = append(richPTYEnvironment(), helperEnvironment+"=1", "TERM=xterm-256color")
+	process, output, readDone := startRichPTYTest(t, command, "checkpoint")
+	defer process.Close()
+	respondToHuhTerminalQueries(t, process, output)
+	finishRichPTYTest(t, process, readDone, output)
+
+	text := output.String()
+	exit := strings.LastIndex(text, "\x1b[?1049l")
+	checkpoint := strings.LastIndex(text, "checkpoint")
+	outcome := strings.LastIndex(text, "succeeded")
+	firstDiagnostic := strings.LastIndex(text, "first deferred diagnostic")
+	secondDiagnostic := strings.LastIndex(text, "second deferred diagnostic")
+	result := strings.LastIndex(text, "finished-result")
+	if exit < 0 || checkpoint < 0 || outcome < 0 || firstDiagnostic < 0 || secondDiagnostic < 0 || result < 0 ||
+		exit > checkpoint || checkpoint > outcome || outcome > firstDiagnostic || firstDiagnostic > secondDiagnostic || secondDiagnostic > result {
+		t.Fatalf("Rich finish ordering = %q", text)
+	}
+	if countAlternateScreen(text, "h") != 1 || countAlternateScreen(text, "l") != 1 {
+		t.Fatalf("finish flow did not own exactly one alternate-screen session: %q", text)
 	}
 }
 
@@ -265,6 +297,30 @@ func runRichRedirectHelper(t *testing.T) {
 	}
 	if err := run.Result(terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{Text: "redirected-result"}}}); err != nil {
 		t.Fatalf("Result() error = %v", err)
+	}
+}
+
+func runRichFinishOrderHelper(t *testing.T) {
+	t.Helper()
+	experience := terminal.NewExperience(terminal.ExperienceOptions{
+		Capabilities: richTestCapabilities(true),
+		Input:        os.Stdin,
+		Output:       os.Stdout,
+		Diagnostics:  os.Stderr,
+	})
+	run := experience.Open(context.Background())
+	defer run.Close()
+	if err := run.Milestone(terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{Text: "checkpoint"}}}); err != nil {
+		t.Fatalf("Milestone() error = %v", err)
+	}
+	if _, err := io.WriteString(experience.DiagnosticWriter(), "first deferred diagnostic\n"); err != nil {
+		t.Fatalf("first diagnostic write = %v", err)
+	}
+	if _, err := io.WriteString(experience.DiagnosticWriter(), "second deferred diagnostic\n"); err != nil {
+		t.Fatalf("second diagnostic write = %v", err)
+	}
+	if err := run.Finish(terminal.Succeeded, &terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{Text: "finished-result"}}}); err != nil {
+		t.Fatalf("Finish() error = %v", err)
 	}
 }
 

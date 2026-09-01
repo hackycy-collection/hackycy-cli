@@ -3,6 +3,7 @@ package terminal
 import (
 	"io"
 	"strings"
+	"unicode"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
@@ -16,7 +17,11 @@ func RenderPlain(document PresentationDocument) string {
 		if index > 0 && output.Len() > 0 && !strings.HasSuffix(output.String(), "\n") {
 			output.WriteByte('\n')
 		}
-		output.WriteString(stripTerminalControl(block.Text))
+		text := block.Text
+		if block.Sensitive {
+			text = "[redacted]"
+		}
+		output.WriteString(stripTerminalControl(text))
 	}
 	if output.Len() > 0 && !strings.HasSuffix(output.String(), "\n") {
 		output.WriteByte('\n')
@@ -49,7 +54,11 @@ func renderRich(document PresentationDocument, options RichOptions) string {
 		if index > 0 && output.Len() > 0 && !strings.HasSuffix(output.String(), "\n") {
 			output.WriteByte('\n')
 		}
-		text := wrapText(stripTerminalControl(block.Text), options.Width)
+		text := block.Text
+		if block.Sensitive {
+			text = "[redacted]"
+		}
+		text = wrapText(stripTerminalControl(text), options.Width)
 		output.WriteString(styles[block.Role].Render(text))
 	}
 	if len(document.Blocks) > 0 && !strings.HasSuffix(output.String(), "\n") {
@@ -143,5 +152,20 @@ func splitWord(word string, width int) []string {
 }
 
 func stripTerminalControl(value string) string {
-	return ansi.Strip(value)
+	value = ansi.Strip(value)
+	var output strings.Builder
+	output.Grow(len(value))
+	for _, character := range value {
+		switch character {
+		case '\n', '\r', '\t':
+			output.WriteRune(character)
+		default:
+			if unicode.IsControl(character) {
+				output.WriteRune('\uFFFD')
+				continue
+			}
+			output.WriteRune(character)
+		}
+	}
+	return output.String()
 }

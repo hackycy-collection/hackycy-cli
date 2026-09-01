@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"errors"
 	"io"
 	"strings"
 	"sync"
@@ -8,75 +9,122 @@ import (
 	"charm.land/lipgloss/v2"
 )
 
-func (run *runtimeRun) trackPlain(output io.Writer, operation TrackedOperation) error {
-	return run.consumeTracked(operation, func(phase OperationPhase) error {
+func (run *runtimeRun) trackPlain(output io.Writer, operation TrackedOperation, protocol *phaseProtocol) error {
+	err := run.consumeTracked(operation, protocol, func(phase OperationPhase) error {
 		return run.presentPhase(output, phase)
-	})
+	}, requestCancellation(operation.RequestCancel), nil)
+	run.recordFinalPhases(protocol)
+	return err
 }
 
-func (run *runtimeRun) trackSilently(operation TrackedOperation) error {
-	return run.consumeTracked(operation, nil)
+func (run *runtimeRun) trackSilently(operation TrackedOperation, protocol *phaseProtocol) error {
+	err := run.consumeTracked(operation, protocol, nil, requestCancellation(operation.RequestCancel), nil)
+	run.recordFinalPhases(protocol)
+	return err
 }
 
-func (run *runtimeRun) consumeTracked(operation TrackedOperation, render func(OperationPhase) error) error {
+func (run *runtimeRun) consumeTracked(
+	operation TrackedOperation,
+	protocol *phaseProtocol,
+	render func(OperationPhase) error,
+	onCancel func() error,
+	onClose func() error,
+) error {
 	if operation.Updates == nil {
-		return nil
+		if onClose == nil {
+			return nil
+		}
+		return onClose()
 	}
 
 	contextDone := run.ctx.Done()
-	cancelled := false
+	var firstErr error
 	for {
 		select {
 		case <-contextDone:
-			if !cancelled && operation.RequestCancel != nil {
-				operation.RequestCancel()
+			if onCancel != nil {
+				firstErr = errors.Join(firstErr, onCancel())
 			}
-			cancelled = true
 			contextDone = nil
 		case phase, open := <-operation.Updates:
 			if !open {
-				return nil
+				if onClose != nil {
+					firstErr = errors.Join(firstErr, onClose())
+				}
+				return firstErr
+			}
+			if firstErr != nil {
+				continue
+			}
+			phase, err := protocol.apply(phase)
+			if err != nil {
+				firstErr = err
+				continue
 			}
 			if render != nil {
 				if err := render(phase); err != nil {
-					return err
+					firstErr = err
 				}
 			}
 		}
 	}
 }
 
-func (run *runtimeRun) trackRich(controller *richController, operation TrackedOperation) error {
+func (run *runtimeRun) trackRich(controller *richController, operation TrackedOperation, protocol *phaseProtocol) error {
 	if operation.Updates == nil {
 		return nil
 	}
-	var cancelOnce sync.Once
-	requestCancel := func() {
-		if operation.RequestCancel != nil {
-			cancelOnce.Do(operation.RequestCancel)
-		}
-	}
-	if err := controller.startTrack(operation.Label, requestCancel); err != nil {
+	requestCancel := requestCancellation(operation.RequestCancel)
+	if err := controller.startTrack(operation.Label, protocol.snapshot(), requestCancel); err != nil {
+		drainTrackedUpdates(operation.Updates)
 		return err
 	}
+	err := run.consumeTracked(
+		operation,
+		protocol,
+		controller.updateTrack,
+		func() error {
+			return errors.Join(requestCancel(), controller.cancelTrack())
+		},
+		controller.finishTrack,
+	)
+	run.recordFinalPhases(protocol)
+	return err
+}
 
-	contextDone := run.ctx.Done()
-	for {
-		select {
-		case <-contextDone:
-			requestCancel()
-			if err := controller.cancelTrack(); err != nil {
-				return err
-			}
-			contextDone = nil
-		case phase, open := <-operation.Updates:
-			if !open {
-				return controller.finishTrack()
-			}
-			if err := controller.updateTrack(phase); err != nil {
-				return err
-			}
+func (run *runtimeRun) recordFinalPhases(protocol *phaseProtocol) {
+	if protocol == nil {
+		return
+	}
+	for _, phase := range protocol.finalSnapshot() {
+		run.recordTranscript(TranscriptEvent{
+			Kind:    TranscriptPhase,
+			Label:   phase.Name,
+			Text:    phase.Detail,
+			PhaseID: phase.ID,
+			State:   phase.State,
+		})
+	}
+}
+
+func requestCancellation(request func()) func() error {
+	var once sync.Once
+	return func() error {
+		if request != nil {
+			// A producer may publish its cancellation phase on an unbuffered
+			// update channel. Start its callback separately so this run can begin
+			// draining that phase instead of waiting on the producer.
+			once.Do(func() { go request() })
 		}
+		return nil
+	}
+}
+
+func drainTrackedUpdates(updates <-chan OperationPhase) {
+	if updates == nil {
+		return
+	}
+	for range updates {
 	}
 }
 
@@ -100,33 +148,47 @@ func (state *trackedState) requestCancellation() {
 
 func (state *trackedState) applyPhase(phase OperationPhase) {
 	for index := len(state.phases) - 1; index >= 0; index-- {
-		if state.phases[index].Name == phase.Name {
+		if (phase.ID != "" && state.phases[index].ID == phase.ID) ||
+			(phase.ID == "" && state.phases[index].Name == phase.Name) {
+			if phase.Name == "" {
+				phase.Name = state.phases[index].Name
+			}
+			if phase.ID == "" {
+				phase.ID = state.phases[index].ID
+			}
+			phase.PhaseID = phase.ID
 			state.phases[index] = phase
 			return
 		}
+	}
+	if phase.ID != "" && phase.Name == "" {
+		phase.PhaseID = phase.ID
 	}
 	state.phases = append(state.phases, phase)
 }
 
 func (state *trackedState) view(width int, styles map[VisualRole]lipgloss.Style) string {
 	lines := make([]string, 0, len(state.phases)*2+3)
-	if state.label != "" {
-		lines = append(lines, styles[VisualRoleTitle].Render(wrapText(state.label, width)))
+	label := stripTerminalControl(state.label)
+	if label != "" {
+		lines = append(lines, styles[VisualRoleTitle].Render(wrapText(label, width)))
 	}
 	if width > 0 && width < 48 {
 		phase := state.currentPhase()
 		if phase.Name != "" {
-			lines = append(lines, styles[phaseRole(phase.State)].Render(wrapText(phase.Name, width)))
-			if phase.Detail != "" {
-				lines = append(lines, styles[VisualRoleMuted].Render(wrapText(phase.Detail, width)))
+			name := stripTerminalControl(phase.Name)
+			lines = append(lines, styles[phaseRole(phase.State)].Render(wrapText(name, width)))
+			if detail := stripTerminalControl(phase.Detail); detail != "" {
+				lines = append(lines, styles[VisualRoleMuted].Render(wrapText(detail, width)))
 			}
 		}
 	} else {
 		for _, phase := range state.phases {
 			role := phaseRole(phase.State)
-			lines = append(lines, styles[role].Render(trackedPhasePrefix(phase.State)+" "+wrapText(phase.Name, width)))
-			if phase.Detail != "" {
-				lines = append(lines, styles[VisualRoleMuted].Render("  "+wrapText(phase.Detail, width)))
+			name := stripTerminalControl(phase.Name)
+			lines = append(lines, styles[role].Render(trackedPhasePrefix(phase.State)+" "+wrapText(name, width)))
+			if detail := stripTerminalControl(phase.Detail); detail != "" {
+				lines = append(lines, styles[VisualRoleMuted].Render("  "+wrapText(detail, width)))
 			}
 		}
 	}

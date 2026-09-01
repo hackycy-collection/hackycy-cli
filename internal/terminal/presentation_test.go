@@ -41,6 +41,21 @@ func TestRenderPlainDoesNotInventOutputForAnEmptyDocument(t *testing.T) {
 	}
 }
 
+func TestWritePlainRedactsSensitiveBlocks(t *testing.T) {
+	var stdout bytes.Buffer
+	document := terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{
+		{Text: "token=secret-value", Sensitive: true},
+		{Text: "safe summary"},
+	}}
+
+	if err := terminal.WritePlain(&stdout, document); err != nil {
+		t.Fatalf("WritePlain() error = %v", err)
+	}
+	if got, want := stdout.String(), "[redacted]\nsafe summary\n"; got != want {
+		t.Fatalf("plain output = %q, want %q", got, want)
+	}
+}
+
 func TestWriteRichWrapsWithoutTruncating(t *testing.T) {
 	var stdout bytes.Buffer
 	document := terminal.PresentationDocument{

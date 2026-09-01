@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"strings"
 	"sync"
 
 	"golang.org/x/term"
@@ -15,6 +16,8 @@ var (
 	ErrExperienceRunClosed = errors.New("terminal experience run is closed")
 	// ErrExperienceRunFinished reports interactive use after the first durable result.
 	ErrExperienceRunFinished = errors.New("terminal experience run has emitted its result")
+	// ErrInvalidFinishOutcome reports a completion request outside the semantic contract.
+	ErrInvalidFinishOutcome = errors.New("terminal finish outcome is invalid")
 )
 
 // ExperienceOptions supplies terminal-owned dependencies for one invocation.
@@ -25,6 +28,7 @@ type ExperienceOptions struct {
 	Diagnostics  io.Writer
 	Width        int
 	Height       int
+	Transcript   TranscriptOptions
 }
 
 // Runtime is the concrete terminal Experience for one invocation.
@@ -38,6 +42,7 @@ type Runtime struct {
 	diagnosticTerminal *os.File
 	width              int
 	height             int
+	transcriptOptions  TranscriptOptions
 }
 
 // NewExperience constructs a terminal Experience from explicit inherited streams.
@@ -49,12 +54,13 @@ func NewExperience(options ExperienceOptions) *Runtime {
 		options.Output = io.Discard
 	}
 	runtime := &Runtime{
-		capabilities: options.Capabilities,
-		input:        options.Input,
-		output:       options.Output,
-		diagnostics:  NewLeaseAwareDiagnosticWriter(options.Diagnostics),
-		width:        options.Width,
-		height:       options.Height,
+		capabilities:      options.Capabilities,
+		input:             options.Input,
+		output:            options.Output,
+		diagnostics:       NewLeaseAwareDiagnosticWriter(options.Diagnostics),
+		width:             options.Width,
+		height:            options.Height,
+		transcriptOptions: options.Transcript,
 	}
 	runtime.inputTerminal, _ = options.Input.(*os.File)
 	runtime.outputTerminal, _ = options.Output.(*os.File)
@@ -80,6 +86,7 @@ func (runtime *Runtime) Open(ctx context.Context) ExperienceRun {
 			Input:        runtime.input,
 			Diagnostics:  runtime.diagnostics,
 		}),
+		ledger: NewTranscriptLedger(runtime.transcriptOptions),
 	}
 }
 
@@ -93,10 +100,13 @@ type runtimeRun struct {
 	ctx          context.Context
 	interactions *InteractionHandler
 
-	operation    sync.Mutex
-	state        runState
-	richDisabled bool
-	controller   *richController
+	operation        sync.Mutex
+	state            runState
+	finishedByFinish bool
+	richDisabled     bool
+	richFailure      error
+	controller       *richController
+	ledger           *TranscriptLedger
 }
 
 type runState uint8
@@ -113,17 +123,27 @@ func (run *runtimeRun) Ask(request InteractionRequest) (InteractionAnswer, error
 	if err := run.interactiveAvailable(); err != nil {
 		return InteractionAnswer{}, err
 	}
+	if err := validateInteractionRequest(request); err != nil {
+		return InteractionAnswer{}, err
+	}
 	if run.richEnabled() {
 		controller, err := run.ensureRich()
 		if err == nil {
-			return controller.ask(run.ctx, run.interactions, request)
+			answer, askErr := controller.ask(run.ctx, run.interactions, request)
+			if askErr != nil && controller.stopped() {
+				askErr = run.recoverRichFailure(askErr)
+			}
+			run.recordInteraction(request, answer, askErr)
+			return answer, askErr
 		}
 		if !errors.Is(err, errRichUnavailable) {
 			return InteractionAnswer{}, err
 		}
 		run.disableRich()
 	}
-	return run.interactions.Ask(run.ctx, request)
+	answer, askErr := run.interactions.Ask(run.ctx, request)
+	run.recordInteraction(request, answer, askErr)
+	return answer, askErr
 }
 
 func (run *runtimeRun) Track(operation TrackedOperation) error {
@@ -132,20 +152,30 @@ func (run *runtimeRun) Track(operation TrackedOperation) error {
 	if err := run.interactiveAvailable(); err != nil {
 		return err
 	}
+	protocol, err := newPhaseProtocol(operation)
+	if err != nil {
+		drainTrackedUpdates(operation.Updates)
+		return err
+	}
 	if run.richEnabled() {
 		controller, err := run.ensureRich()
 		if err == nil {
-			return run.trackRich(controller, operation)
+			err = run.trackRich(controller, operation, protocol)
+			if err != nil && controller.stopped() {
+				return run.recoverRichFailure(err)
+			}
+			return err
 		}
 		if !errors.Is(err, errRichUnavailable) {
+			drainTrackedUpdates(operation.Updates)
 			return err
 		}
 		run.disableRich()
 	}
 	if run.runtime.capabilities.Interaction == Automation {
-		return run.trackSilently(operation)
+		return run.trackSilently(operation, protocol)
 	}
-	return run.trackPlain(run.runtime.diagnostics, operation)
+	return run.trackPlain(run.runtime.diagnostics, operation, protocol)
 }
 
 func (run *runtimeRun) Notice(document PresentationDocument) error {
@@ -160,7 +190,11 @@ func (run *runtimeRun) Notice(document PresentationDocument) error {
 	if run.richEnabled() {
 		controller, err := run.ensureRich()
 		if err == nil {
-			return controller.notice(document)
+			err = controller.notice(document)
+			if err != nil && controller.stopped() {
+				return run.recoverRichFailure(err)
+			}
+			return err
 		}
 		if !errors.Is(err, errRichUnavailable) {
 			return err
@@ -170,11 +204,83 @@ func (run *runtimeRun) Notice(document PresentationDocument) error {
 	return WritePlain(run.runtime.diagnostics, document)
 }
 
+// Milestone publishes one explicit durable checkpoint in the active view.
+func (run *runtimeRun) Milestone(document PresentationDocument) error {
+	run.operation.Lock()
+	defer run.operation.Unlock()
+	if err := run.interactiveAvailable(); err != nil {
+		return err
+	}
+	if strings.TrimSpace(normalizeTranscriptField(document.transcriptText(), run.ledger.maxFieldSize)) == "" {
+		return nil
+	}
+	if run.runtime.capabilities.Interaction == Automation {
+		return nil
+	}
+	if run.richEnabled() {
+		controller, err := run.ensureRich()
+		if err == nil {
+			err = controller.milestone(document)
+			if err != nil && controller.stopped() {
+				return run.recoverRichFailure(err)
+			}
+			if err == nil {
+				run.recordTranscript(TranscriptEvent{Kind: TranscriptMilestone, Text: document.transcriptText()})
+			}
+			return err
+		}
+		if !errors.Is(err, errRichUnavailable) {
+			return err
+		}
+		run.disableRich()
+	}
+	err := WritePlain(run.runtime.diagnostics, document)
+	if err == nil {
+		run.recordTranscript(TranscriptEvent{Kind: TranscriptMilestone, Text: document.transcriptText()})
+	}
+	return err
+}
+
+// Finish commits one finite command outcome and emits its optional result once.
+func (run *runtimeRun) Finish(outcome FinishOutcome, document *PresentationDocument) error {
+	run.operation.Lock()
+	defer run.operation.Unlock()
+	if run.state == runClosed {
+		return ErrExperienceRunClosed
+	}
+	if run.state == runFinished {
+		return ErrExperienceRunFinished
+	}
+	if run.richFailure != nil {
+		return run.richFailure
+	}
+	if !outcome.valid() {
+		return ErrInvalidFinishOutcome
+	}
+
+	run.state = runFinished
+	run.finishedByFinish = true
+	run.recordTranscript(TranscriptEvent{Kind: TranscriptOutcome, Outcome: outcome})
+	run.freezeTranscript()
+	restoreErr := run.stopRich()
+	if document == nil {
+		return restoreErr
+	}
+	return errors.Join(restoreErr, run.writeResult(*document))
+}
+
+// Result is the compatibility durable-result operation used by un-migrated commands.
 func (run *runtimeRun) Result(document PresentationDocument) error {
 	run.operation.Lock()
 	defer run.operation.Unlock()
 	if run.state == runClosed {
 		return ErrExperienceRunClosed
+	}
+	if run.finishedByFinish {
+		return ErrExperienceRunFinished
+	}
+	if run.richFailure != nil {
+		return run.richFailure
 	}
 
 	var restoreErr error
@@ -192,7 +298,34 @@ func (run *runtimeRun) Close() error {
 		return nil
 	}
 	run.state = runClosed
+	run.freezeTranscript()
 	return run.stopRich()
+}
+
+func (run *runtimeRun) recordInteraction(request InteractionRequest, answer InteractionAnswer, err error) {
+	if errors.Is(err, ErrInteractionCancelled) || errors.Is(err, context.Canceled) {
+		run.recordTranscript(TranscriptEvent{Kind: TranscriptAsk, Label: request.TranscriptLabel, Text: "cancelled"})
+		return
+	}
+	if err != nil {
+		return
+	}
+	text := interactionTranscriptText(request, answer)
+	run.recordTranscript(TranscriptEvent{Kind: TranscriptAsk, Label: request.TranscriptLabel, Text: text})
+}
+
+func (run *runtimeRun) recordTranscript(event TranscriptEvent) {
+	if run.runtime.capabilities.Interaction == Automation {
+		return
+	}
+	run.ledger.Append(event)
+}
+
+func (run *runtimeRun) freezeTranscript() {
+	if run.runtime.capabilities.Interaction == Automation {
+		return
+	}
+	run.ledger.Freeze()
 }
 
 func (run *runtimeRun) interactiveAvailable() error {
@@ -202,6 +335,9 @@ func (run *runtimeRun) interactiveAvailable() error {
 	case runClosed:
 		return ErrExperienceRunClosed
 	default:
+		if run.richFailure != nil {
+			return run.richFailure
+		}
 		return nil
 	}
 }
@@ -235,11 +371,28 @@ func (run *runtimeRun) stopRich() error {
 	}
 	controller := run.controller
 	run.controller = nil
-	return controller.close()
+	return controller.close(run.ledger)
+}
+
+func (run *runtimeRun) recoverRichFailure(rendererErr error) error {
+	if rendererErr == nil {
+		return nil
+	}
+	run.richFailure = rendererErr
+	run.disableRich()
+	run.freezeTranscript()
+	if run.controller == nil {
+		return rendererErr
+	}
+	controller := run.controller
+	run.controller = nil
+	return errors.Join(rendererErr, controller.closeAfterFailure(run.ledger))
 }
 
 func (run *runtimeRun) writeResult(document PresentationDocument) error {
-	if !run.runtime.capabilities.Stdout.Terminal {
+	// Only an active Rich run may style a durable result. Plain and Automation
+	// capabilities (including a preflight Rich fallback) must remain control-free.
+	if run.runtime.capabilities.Interaction != RichInteractive || run.richDisabled || !run.runtime.capabilities.Stdout.Terminal {
 		return WritePlain(run.runtime.output, document)
 	}
 	width := run.runtime.width
@@ -275,6 +428,15 @@ func phaseRole(state PhaseState) VisualRole {
 		return VisualRoleActive
 	default:
 		return VisualRolePlain
+	}
+}
+
+func (outcome FinishOutcome) valid() bool {
+	switch outcome {
+	case Succeeded, Cancelled, Failed:
+		return true
+	default:
+		return false
 	}
 }
 

@@ -45,6 +45,12 @@ type RecordingSemanticRun struct {
 	operations []Operation
 }
 
+// Finish records a finite command outcome and its optional result document.
+func (run *RecordingSemanticRun) Finish(outcome terminal.FinishOutcome, document *terminal.PresentationDocument) error {
+	run.record(FinishOperation, Finish{Outcome: outcome, Document: document})
+	return nil
+}
+
 // NewRecordingSemanticRun creates a typed semantic recorder.
 func NewRecordingSemanticRun(answers ...SemanticAnswer) *RecordingSemanticRun {
 	return &RecordingSemanticRun{answers: append([]SemanticAnswer(nil), answers...)}
@@ -66,6 +72,12 @@ func (run *RecordingSemanticRun) Ask(request terminal.InteractionRequest) (termi
 // Notice records transient command context.
 func (run *RecordingSemanticRun) Notice(document terminal.PresentationDocument) error {
 	run.record(NoticeOperation, document)
+	return nil
+}
+
+// Milestone records an explicit durable checkpoint.
+func (run *RecordingSemanticRun) Milestone(document terminal.PresentationDocument) error {
+	run.record(MilestoneOperation, document)
 	return nil
 }
 
@@ -98,4 +110,10 @@ func (run *RecordingSemanticRun) record(kind OperationKind, value any) {
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	run.operations = append(run.operations, Operation{Kind: kind, Value: value})
+}
+
+// Finish is one recorded finite command completion request.
+type Finish struct {
+	Outcome  terminal.FinishOutcome
+	Document *terminal.PresentationDocument
 }

@@ -30,6 +30,94 @@ func TestAutomationAskFailsBeforeReadingOrWriting(t *testing.T) {
 	}
 }
 
+func TestInteractionValidationRejectsMalformedRequestsBeforeIO(t *testing.T) {
+	tests := []struct {
+		name    string
+		request terminal.InteractionRequest
+	}{
+		{name: "unknown kind", request: terminal.InteractionRequest{Kind: terminal.InteractionKind(99), Message: "Choose"}},
+		{name: "missing message", request: terminal.InteractionRequest{Kind: terminal.InteractionText}},
+		{name: "message is only terminal control", request: terminal.InteractionRequest{Kind: terminal.InteractionText, Message: "\x1b[2K"}},
+		{name: "duplicate option value", request: terminal.InteractionRequest{Kind: terminal.InteractionSelect, Message: "Choose", Options: []terminal.InteractionOption{{Label: "One", Value: "same"}, {Label: "Two", Value: "same"}}}},
+		{name: "default outside options", request: terminal.InteractionRequest{Kind: terminal.InteractionSelect, Message: "Choose", Options: []terminal.InteractionOption{{Label: "One", Value: "one"}}, HasDefault: true, Default: terminal.InteractionAnswer{Value: "missing"}}},
+		{name: "select default has multi-select fields", request: terminal.InteractionRequest{Kind: terminal.InteractionSelect, Message: "Choose", Options: []terminal.InteractionOption{{Label: "One", Value: "one"}}, HasDefault: true, Default: terminal.InteractionAnswer{Value: "one", Values: []string{"one"}}}},
+		{name: "multi-select default has scalar field", request: terminal.InteractionRequest{Kind: terminal.InteractionMultiSelect, Message: "Choose", Options: []terminal.InteractionOption{{Label: "One", Value: "one"}}, HasDefault: true, Default: terminal.InteractionAnswer{Value: "one"}}},
+		{name: "multi-select default repeats a value", request: terminal.InteractionRequest{Kind: terminal.InteractionMultiSelect, Message: "Choose", Options: []terminal.InteractionOption{{Label: "One", Value: "one"}}, HasDefault: true, Default: terminal.InteractionAnswer{Values: []string{"one", "one"}}}},
+		{name: "text default has confirmation field", request: terminal.InteractionRequest{Kind: terminal.InteractionText, Message: "Name", HasDefault: true, Default: terminal.InteractionAnswer{Value: "name", Confirmed: true}}},
+		{name: "confirmation default has scalar field", request: terminal.InteractionRequest{Kind: terminal.InteractionConfirm, Message: "Continue", HasDefault: true, Default: terminal.InteractionAnswer{Value: "yes"}}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
+				Capabilities: terminal.Capabilities{Interaction: terminal.PlainInteractive},
+				Input:        panicReader{},
+				Diagnostics:  panicWriter{},
+			})
+			_, err := handler.Ask(context.Background(), test.request)
+			if !errors.Is(err, terminal.ErrInvalidInteractionRequest) {
+				t.Fatalf("Ask() error = %v, want ErrInvalidInteractionRequest", err)
+			}
+		})
+	}
+}
+
+func TestPlainInteractionErrorsAreControlFree(t *testing.T) {
+	var diagnostics bytes.Buffer
+	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
+		Capabilities: terminal.Capabilities{Interaction: terminal.PlainInteractive},
+		Input:        strings.NewReader("\nvalid\n"),
+		Diagnostics:  &diagnostics,
+	})
+	_, err := handler.Ask(context.Background(), terminal.InteractionRequest{
+		Kind:    terminal.InteractionText,
+		Message: "Name",
+		Validate: func(answer terminal.InteractionAnswer) error {
+			if answer.Value == "" {
+				return errors.New("invalid\x1b[31m input")
+			}
+			return nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("Ask() error = %v", err)
+	}
+	if terminaltest.ContainsTerminalControl(diagnostics.Bytes()) || strings.ContainsRune(diagnostics.String(), '\x01') {
+		t.Fatalf("diagnostics contain terminal control: %q", diagnostics.String())
+	}
+	if !strings.Contains(diagnostics.String(), "invalid input") {
+		t.Fatalf("diagnostics = %q, want sanitized validation error", diagnostics.String())
+	}
+}
+
+func TestInteractionTranscriptProjectionRedactsAndUsesOptionLabels(t *testing.T) {
+	var diagnostics bytes.Buffer
+	experience := terminal.NewExperience(terminal.ExperienceOptions{
+		Capabilities: terminal.Capabilities{Interaction: terminal.PlainInteractive},
+		Input:        strings.NewReader("secret\n2\n1 2\ny\n"),
+		Diagnostics:  &diagnostics,
+		Transcript:   terminal.TranscriptOptions{MaxEvents: 16, MaxBytes: 4096},
+	})
+	run := experience.Open(context.Background())
+	if _, err := run.Ask(terminal.InteractionRequest{Kind: terminal.InteractionText, Message: "Token", TranscriptLabel: "Access token", Sensitive: true}); err != nil {
+		t.Fatalf("sensitive Ask() error = %v", err)
+	}
+	if _, err := run.Ask(terminal.InteractionRequest{Kind: terminal.InteractionSelect, Message: "Choose", TranscriptLabel: "Environment", Options: []terminal.InteractionOption{{Label: "Production", Value: "prod"}, {Label: "Development", Value: "dev"}}}); err != nil {
+		t.Fatalf("select Ask() error = %v", err)
+	}
+	if _, err := run.Ask(terminal.InteractionRequest{Kind: terminal.InteractionMultiSelect, Message: "Choose many", TranscriptLabel: "Targets", Options: []terminal.InteractionOption{{Label: "One", Value: "one"}, {Label: "Two", Value: "two"}}}); err != nil {
+		t.Fatalf("multi-select Ask() error = %v", err)
+	}
+	if _, err := run.Ask(terminal.InteractionRequest{Kind: terminal.InteractionConfirm, Message: "Continue", TranscriptLabel: "Confirmation"}); err != nil {
+		t.Fatalf("confirm Ask() error = %v", err)
+	}
+	if err := run.Finish(terminal.Succeeded, nil); err != nil {
+		t.Fatalf("Finish() error = %v", err)
+	}
+	if got := diagnostics.String(); strings.Contains(got, "secret") {
+		t.Fatalf("plain prompts unexpectedly expose secret value: %q", got)
+	}
+}
+
 func TestPlainSecretRejectsNonTerminalInputWithoutReadingOrWriting(t *testing.T) {
 	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
 		Capabilities: terminal.Capabilities{Interaction: terminal.PlainInteractive},
@@ -172,6 +260,36 @@ func TestPlainAskUsesCommandOwnedPromptLayout(t *testing.T) {
 	}
 	if got, want := diagnostics.String(), "Select a clean action\n1) One\n2) Two\n> "; got != want {
 		t.Fatalf("diagnostics = %q, want %q", got, want)
+	}
+}
+
+func TestInteractionPromptProjectionStripsTerminalControlWithoutChangingValues(t *testing.T) {
+	var diagnostics bytes.Buffer
+	handler := terminal.NewInteractionHandler(terminal.InteractionOptions{
+		Capabilities: terminal.Capabilities{Interaction: terminal.PlainInteractive},
+		Input:        strings.NewReader("2\n"),
+		Diagnostics:  &diagnostics,
+	})
+
+	answer, err := handler.Ask(context.Background(), terminal.InteractionRequest{
+		Kind:        terminal.InteractionSelect,
+		Message:     "Choose\x1b[2K\x01",
+		Description: "Visible\tcontext\x1b[31m",
+		PlainLead:   "Lead\x1b[2J",
+		PlainPrompt: "> \x1b[?25l",
+		Options: []terminal.InteractionOption{
+			{Label: "One\x1b[31m", Value: "internal-one", Description: "first\x01"},
+			{Label: "Two\x1b[2K", Value: "internal-two", Description: "second\titem"},
+		},
+	})
+	if err != nil || answer.Value != "internal-two" {
+		t.Fatalf("Ask() = (%#v, %v), want internal-two", answer, err)
+	}
+	if terminaltest.ContainsTerminalControl(diagnostics.Bytes()) || strings.ContainsRune(diagnostics.String(), '\x01') {
+		t.Fatalf("prompt projection contains terminal control: %q", diagnostics.String())
+	}
+	if got, want := diagnostics.String(), "Visible\tcontext\nLead\n1) One - first�\n2) Two - second\titem\n> "; got != want {
+		t.Fatalf("prompt projection = %q, want %q", got, want)
 	}
 }
 

@@ -40,3 +40,22 @@ func TestTrackedTeaModelUsesTheCurrentPhaseOnNarrowTerminals(t *testing.T) {
 		t.Fatalf("Ctrl-C requested cancellation more than once: %d", cancellations)
 	}
 }
+
+func TestTrackedTeaModelSanitizesPhaseText(t *testing.T) {
+	model := newRichRootModel(80, 20, false)
+	model.mode = richTrackMode
+	model.track = &trackedState{label: "Work\x1b[2K"}
+	model.track.applyPhase(OperationPhase{
+		Name:   "Scanning\x1b[31m",
+		Detail: "path\x01\tvalue",
+		State:  PhaseActive,
+	})
+
+	view := model.View().Content
+	if strings.ContainsRune(view, '\x1b') || strings.ContainsRune(view, '\x01') || strings.Contains(view, "\t") {
+		t.Fatalf("phase view contains terminal control: %q", view)
+	}
+	if !strings.Contains(view, "Scanning") || !strings.Contains(view, "path") {
+		t.Fatalf("phase view lost semantic text: %q", view)
+	}
+}
