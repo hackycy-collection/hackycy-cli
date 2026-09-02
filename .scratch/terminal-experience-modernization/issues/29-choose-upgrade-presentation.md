@@ -110,8 +110,8 @@ consumption continues to emit its established startup result before Cobra.
 
 ### Rich, Plain, and Automation projection
 
-Rich owns stderr and one Bubble Tea root. The Live View uses Signal Rail symbols
-and vivid but restrained status colors for active, completed, warning,
+Rich owns stderr and one Bubble Tea root. The Live View uses the Ops Console
+status table, symbol-paired states, and vivid but restrained status colors for active, completed, warning,
 cancelled, and failed phases. Stdout remains empty until the one final durable
 Command Result. On finish, the runtime freezes the ledger, restores the primary
 screen, replays the safe Transcript, flushes deferred diagnostics in order, and

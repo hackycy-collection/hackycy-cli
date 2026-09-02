@@ -81,6 +81,10 @@ func (m *model) renderFocus(width, height int) string {
 }
 
 func (m *model) renderCompact(width int) string {
+	if m.variant == variantConsole {
+		return m.renderCompactConsole(width)
+	}
+
 	s := stylesFor(m.variant, m.dark)
 	content := strings.Join([]string{
 		s.eyebrow.Render("YCY / " + m.variant.name()),
@@ -90,6 +94,59 @@ func (m *model) renderCompact(width int) string {
 		m.renderActive(max(width-4, 24)),
 	}, "\n")
 	return lipgloss.NewStyle().Padding(1, 2).Render(content)
+}
+
+func (m *model) renderCompactConsole(width int) string {
+	s := stylesFor(m.variant, m.dark)
+	inner := max(width-4, 12)
+	bar := s.primary.Render("YCY CONFIGURE") + s.muted.Render(" · ") +
+		s.text.Render(m.profileName()) + s.muted.Render(" · ") +
+		outcomeStyle(s, m.scenario).Render(m.scenario.name())
+	meta := s.muted.Render("workspace ") + s.text.Render(m.values.workspace) +
+		s.muted.Render(" · provider ") + s.text.Render(strings.ToUpper(m.values.provider))
+	status := m.renderCompactConsoleStatus(inner)
+	active := m.renderActive(inner)
+	return lipgloss.NewStyle().Padding(1, 2).Render(strings.Join([]string{
+		bar,
+		meta,
+		status,
+		active,
+	}, "\n"))
+}
+
+func (m *model) renderCompactConsoleStatus(width int) string {
+	s := stylesFor(m.variant, m.dark)
+	rows := []string{s.eyebrow.Render("STATE / PHASE / DETAIL")}
+	appendRow := func(state status, phase, detail string) {
+		glyph, label := statusLabel(state)
+		stateText := statusStyle(s, state).Render(glyph + " " + label)
+		phaseText := s.text.Render(phase)
+		if detail == "" {
+			rows = append(rows, stateText+" · "+phaseText)
+			return
+		}
+		rows = append(rows, stateText+" · "+phaseText+" · "+s.muted.Render(detail))
+	}
+
+	if m.screen == screenForm {
+		steps := []string{"Workspace", "Credential", "Provider", "Capabilities", "Confirm"}
+		current := m.currentStepIndex()
+		for index, step := range steps {
+			state := statusPending
+			if index < m.complete {
+				state = statusSuccess
+			} else if index == current {
+				state = statusActive
+			}
+			appendRow(state, step, formStepDetail(index))
+		}
+		return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
+	}
+
+	for _, phase := range m.phases {
+		appendRow(phase.state, phase.name, phase.detail)
+	}
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
 }
 
 func (m *model) renderActive(width int) string {

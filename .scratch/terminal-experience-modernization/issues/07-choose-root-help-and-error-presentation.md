@@ -22,8 +22,9 @@ starts AltScreen or creates an Interaction Transcript.
 ### Discovery and help
 
 - Root, command groups, and explicit `--help` produce a durable stdout
-  document. On a color-capable TTY it uses the Signal Rail visual vocabulary:
-  a compact `YCY / <command>` eyebrow, command title, summary, and clearly
+  document. On a color-capable TTY it projects the current Ops Console
+  hierarchy without entering a full-screen view: a compact command/status
+  heading, safe metadata context, command title, summary, and clearly
   separated `Usage`, `Commands`, `Options`, and `Examples` sections. The
   existing semantic fields and Cobra order remain intact.
 - Commands list every available direct child with its summary. Options retain

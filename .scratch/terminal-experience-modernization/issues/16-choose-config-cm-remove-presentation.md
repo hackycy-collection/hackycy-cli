@@ -17,8 +17,8 @@ default-profile reassignment behavior?
 with one pre-confirmation read, one default-negative confirmation, and one
 conditional mutation. It keeps the existing argument syntax, validation order,
 confirmation wording, cancellation meaning, exit codes, default reassignment,
-and result text. Rich uses one Bubble Tea root with Huh v2 Confirm and Signal
-Rail phases through the shared Terminal Experience; Plain and Automation retain
+and result text. Rich uses one Bubble Tea root with Huh v2 Confirm and Ops
+Console status-table phases through the shared Terminal Experience; Plain and Automation retain
 their established stream boundaries.
 
 ### Validation and confirmation

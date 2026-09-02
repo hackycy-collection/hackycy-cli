@@ -81,7 +81,8 @@ existing non-interactive execution boundary.
 ### Rich, Plain, and Automation presentation
 
 Rich uses one Bubble Tea root in AltScreen with Huh v2 for the overwrite form
-and the Signal Rail visual system. Loading is always visible while a phase is
+and the Ops Console visual system. Loading is always visible in the status
+table while a phase is
 active. On the final result it uses the eyebrow `YCY / git fork` and title
 `Project acquired`, with a compact result view showing the safe repository and
 provider projection, final ref, `archive` or `clone` acquisition, fallback

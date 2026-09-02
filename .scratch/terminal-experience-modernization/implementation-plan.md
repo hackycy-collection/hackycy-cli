@@ -16,8 +16,9 @@
 - [Charm v2 and logging boundaries](issues/04-choose-charm-v2-and-logging-boundaries.md),
   [vivid visual system](issues/05-prototype-vivid-terminal-visual-system.md),
   and [shared Experience contract](issues/06-choose-shared-terminal-experience-contract.md):
-  define the one renderer stack, semantic phases, Transcript, leases, and stream
-  ordering.
+  define the one renderer stack, the B Ops Console Rich hierarchy, semantic
+  phases, Transcript, leases, and stream ordering. A/C remain prototype-only
+  comparison variants.
 - [Root/help/error presentation](issues/07-choose-root-help-and-error-presentation.md):
   preserves discovery, help, version, completion, diagnostics, and root exits.
 - [Export env](issues/08-choose-export-env-presentation.md), [fork list](issues/09-choose-config-fork-list-presentation.md),
@@ -64,6 +65,11 @@ command-slice boundaries.
   policy, renderer leases, semantic phase mechanics, Transcript storage, and
   stream ordering. Commands own wording, information hierarchy, phase catalogs,
   and result documents.
+- The current Rich visual contract is B Ops Console: a command/status bar,
+  safe metadata row, aligned `STATE / PHASE / DETAIL` table, and active
+  form/result region, with amber primary, cyan accent, symbol-paired states,
+  Huh bottom focus rule, no persistent left rail, and narrow single-column
+  degradation. A/C are comparison-only prototype variants.
 - There is one Bubble Tea v2 root per finite Rich run, no v1 compatibility
   stack, no parallel form implementation, and no long-lived legacy/new UI
   feature flag.
@@ -87,7 +93,7 @@ command-slice boundaries.
 | G0 | Baseline and dependency lock | Start | Behavior baselines and the pinned v2 module boundary are recorded. |
 | G1 | Shared semantic terminal foundation | G0 Exit conditions all satisfied | `Finish`, `Milestone`, phases, Transcript, leases, and capability degradation are production-ready. |
 | G2 | Logging and root boundary | G1 Exit conditions all satisfied | Log v2 is isolated and root/help/discovery preserve their contracts. |
-| G3 | Low-risk finite command slices | G2 Exit conditions all satisfied | Read-only/config-selection commands prove the complete finite Experience path. |
+| G3 | Low-risk finite command slices | G2 Exit conditions all satisfied **and B Ops Console visual re-acceptance has passed and is recorded** | Read-only/config-selection commands prove the complete finite Experience path. |
 | G4 | External-read and service-startup slices | G3 Exit conditions all satisfied | Provider/network reads, `upgrade` parent presentation, and initial `diff`/`fs` logs are covered. |
 | G5 | Mutating, destructive, and archive slices | G4 Exit conditions all satisfied | Configuration changes, `rm`, and `zip` preserve safety and side-effect boundaries. |
 | G6 | Git mutation and process handoff | G5 Exit conditions all satisfied | Git acquisition/commit and `run` release-before-exec are verified. |
@@ -243,16 +249,20 @@ capability degradation. Each slice gets focused tests before the next.
 #### Manual acceptance
 
 Use the local terminal prototype/binary at wide and narrow dimensions with a
-colored TTY and `NO_COLOR`; confirm focus, state symbols, loading visibility,
-AltScreen restoration, Transcript-before-diagnostics-before-stdout ordering,
-and the absence of secret/large-result replay. Record the scenario and explicit
-human response `通过` or `未通过: <reason>`.
+colored TTY and `NO_COLOR`; confirm the B Ops Console command/status bar,
+metadata row, aligned `STATE / PHASE / DETAIL` table, amber/cyan hierarchy,
+symbol-paired states, Huh bottom focus rule, absence of a persistent left rail,
+single-column narrow degradation, AltScreen restoration,
+Transcript-before-diagnostics-before-stdout ordering, and the absence of
+secret/large-result replay. Record the scenario and explicit human response
+`通过` or `未通过: <reason>`.
 
 ### Evidence rule
 
 Directed semantic/PTY tests prove mechanism behavior; repository checks prove
 integration and import stability; the recorded visual review proves the
-human-visible Signal Rail contract.
+human-visible B Ops Console contract. Existing A acceptance is historical and
+does not satisfy the B re-acceptance prerequisite.
 
 ### Stop conditions
 
@@ -271,7 +281,8 @@ dual renderer; commands remain on their pre-migration presentation.
 1. All shared semantic methods and protocol errors have focused tests.
 2. Rich/Plain/Automation/redirected behavior and all five form families pass.
 3. Transcript, lease, teardown, cancellation, and exactly-once behavior pass.
-4. Manual visual review is recorded with explicit acceptance.
+4. B Ops Console manual visual review is recorded with explicit acceptance;
+   the prior A review remains historical evidence only.
 
 ## G2: Logging and root boundary
 
@@ -848,7 +859,10 @@ integration fixes separate from command-owned presentation changes.
   Transcript/redaction checks, Service Log/NDJSON checks, `run` handoff, and
   detached `upgrade` journeys.
 - Complete visual review records for wide/narrow, colored/no-color, loading,
-  wrapping, status symbols, log density, and AltScreen replay.
+  wrapping, Ops Console bar/metadata/table hierarchy, status symbols, bottom
+  focus rule, no-rail behavior, narrow single-column degradation, and
+  AltScreen replay. Service Commands are reviewed separately for linear log
+  density and unchanged NDJSON, never as full-screen Console views.
 
 #### Repository
 

@@ -69,7 +69,7 @@ labels.
 ### Rich, Plain, and Automation forms
 
 Rich uses one Bubble Tea root in AltScreen with Huh v2 Select controls and the
-Signal Rail visual system. The script list keeps package.json order; each item
+Ops Console visual system. The script list keeps package.json order; each item
 shows a safe script name and its command as a bounded description. The manager
 list keeps the calculated order and may show the detected lockfile source or a
 `default order` hint. The Live View identifies the safe project context and

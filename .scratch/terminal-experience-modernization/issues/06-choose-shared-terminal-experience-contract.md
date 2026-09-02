@@ -146,8 +146,10 @@ they use the existing value `logging.Logger` and injected DiagnosticWriter for
 line-oriented Lifecycle Logs, with no custom full-screen model or lifecycle
 DSL. Log v2 is only a private text-only adapter behind logging Runtime; it
 receives normalized/redacted records and does not filter, timestamp, redact,
-choose formats, or write directly. Text logs may gain Signal Rail symbols and
-color, while JSON/NDJSON schema and record boundaries remain exact.
+choose formats, or write directly. Text logs remain line-oriented and use only
+neutral, symbol-paired status markers and level-appropriate colors; they do
+not adopt the full-screen Ops Console. JSON/NDJSON schema and record
+boundaries remain exact.
 
 Every command owns its information hierarchy, wording, phase catalog, prompt
 order, option labels, result document, and command-specific failure/cancel

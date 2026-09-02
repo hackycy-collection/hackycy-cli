@@ -11,7 +11,7 @@ import (
 )
 
 func main() {
-	variantFlag := flag.String("variant", "signal", "signal, console, or focus")
+	variantFlag := flag.String("variant", "console", "console (default), signal, or focus")
 	outcomeFlag := flag.String("outcome", "success", "success, failure, or cancel")
 	flag.Parse()
 

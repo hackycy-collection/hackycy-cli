@@ -148,8 +148,11 @@ effects remain compatible.
 Each Rich or Service slice carries a minimal visual-review record with the
 scenario, input path, capability mode, terminal dimensions, expected semantic
 states, and known differences. Review covers colored and `NO_COLOR`/Plain
-output, Signal Rail hierarchy, symbols, focus, always-visible loading, long
-value wrapping, log density, and post-AltScreen Transcript ordering. Screenshots
+output, the Ops Console command/status bar, metadata row, and the
+`STATE / PHASE / DETAIL` table hierarchy, symbol-paired states, bottom focus
+rule, absence of a persistent rail, narrow single-column degradation,
+always-visible loading, long value wrapping, log density, and post-AltScreen
+Transcript ordering. Screenshots
 and PTY captures are review evidence, not cross-terminal byte contracts.
 Golden changes require a reason and an explicit statement that stdout, exits,
 side effects, and redaction did not change. Command adapters own their visual

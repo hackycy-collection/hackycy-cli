@@ -21,8 +21,9 @@ loading phase, responsive layout primitives, and capability degradation.
 
 ### Loading lifecycle
 
-- Rich TTY starts a compact Signal Rail view immediately and always shows
-  `Loading fork provider instances` with one spinner and no percentage. After
+- Rich TTY starts a compact Ops Console view immediately and always shows
+  `Loading fork provider instances` in the `STATE / PHASE / DETAIL` table with
+  one spinner and no percentage. After
   the read completes, the phase becomes `Completed`, the primary screen is
   restored, and the result is written to stdout.
 - Plain Interactive writes one control-free

@@ -17,7 +17,7 @@ or changing request and exit semantics?
 keeps `config cm test` and `config cm test <profile>`, the existing profile
 selection precedence, OpenAI-compatible request body, timeout calculation,
 response parsing, error wrapping, stdout documents, and exit codes. Rich uses
-one Bubble Tea root and Huh/Signal Rail primitives through the shared Terminal
+one Bubble Tea root and Huh/Ops Console primitives through the shared Terminal
 Experience; Plain and Automation keep their existing stream and scripting
 boundaries.
 

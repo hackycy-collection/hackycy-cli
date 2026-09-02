@@ -15,7 +15,8 @@ changing prompt order, defaults, validation, or overwrite behavior?
 
 `config cm add` is a four-question interactive profile setup followed by one
 conditional persistence phase. It uses one Bubble Tea root with Huh v2 child
-forms and a Signal Rail through the shared Terminal Experience. The command
+forms and the Ops Console status-table layout through the shared Terminal
+Experience. The command
 owns prompt wording, validation, safe projections, overwrite semantics, and
 the result document; the terminal layer owns form rendering, phase mechanics,
 redaction enforcement, and capability degradation. Existing prompt order,
@@ -35,10 +36,11 @@ profile behavior, encryption, and result text remain unchanged.
   `https://api.openai.com/v1`, and `gpt-4.1-mini`; API key has no default or
   placeholder value. No environment variable or existing profile is
   auto-filled.
-- The Signal Rail steps are `Identity`, `Endpoint`, `Model`, and
-  `Credential`. The active step uses `◆`, completed steps `✓`, and pending
-  steps `○`. API key input is always masked and never shows a preview, length,
-  prefix, strength, or echo.
+- The `STATE / PHASE / DETAIL` table rows are `Identity`, `Endpoint`, `Model`,
+  and `Credential`. The active step uses `◆`, completed steps `✓`, and
+  pending steps `○`. The active form uses B's bottom focus rule and there is
+  no persistent left rail. API key input is always masked and never shows a
+  preview, length, prefix, strength, or echo.
 
 ### Validation and safe projections
 
@@ -134,7 +136,8 @@ frames, plaintext/ciphertext API keys, and unsafe URLs never enter the ledger.
 ### Evidence
 
 Acceptance covers Automation's pre-store rejection, Rich PTY title and exact
-four-question order, placeholders/defaults, Signal Rail state transitions,
+four-question order, placeholders/defaults, Ops Console table state
+transitions,
 validation retries, password masking, safe review projections, fast save
 loading/completion, first-default and same-name overwrite behavior,
 field-specific cancellation, save/store/context failures, Transcript ordering

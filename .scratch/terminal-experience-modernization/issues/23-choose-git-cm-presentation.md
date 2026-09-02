@@ -88,7 +88,8 @@ previously successful staging is retained; the command never auto-unstages.
 
 ### Command Result and stream ownership
 
-Rich uses one Bubble Tea root in AltScreen with the Signal Rail presentation,
+Rich uses one Bubble Tea root in AltScreen with the Ops Console status-table
+presentation,
 then restores the primary screen and replays a bounded semantic Transcript to
 stderr. The complete Command Result is submitted to stdout exactly once:
 

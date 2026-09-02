@@ -13,7 +13,7 @@ current branch without contaminating stdout?
 
 ## Answer
 
-`export env` uses a command-owned Signal Rail Live View for finite discovery,
+`export env` uses a command-owned Ops Console Live View for finite discovery,
 selection, parsing, encoding, and optional file writing. The command preserves
 its existing dotenv parsing, merge precedence, output bytes, overwrite
 behavior, and Automation rules. `internal/terminal` supplies forms, phases,

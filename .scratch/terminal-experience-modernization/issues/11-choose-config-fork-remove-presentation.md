@@ -22,7 +22,8 @@ unchanged.
 
 ### Presentation and interaction
 
-- Rich uses one Bubble Tea root with a Signal Rail and Huh v2 child forms. The
+- Rich uses one Bubble Tea root with the Ops Console status-table layout and
+  Huh v2 child forms. The
   eyebrow is `YCY / config fork remove`, the title is `Remove fork provider
   instance`, and the subtitle is `Choose a configured provider connection to
   remove`.

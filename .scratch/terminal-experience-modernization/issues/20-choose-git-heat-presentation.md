@@ -70,7 +70,7 @@ sequences.
   `latest`. Active `M`, `A`, `D`, `R`, and `C` letters receive distinct vivid
   colors; an absent kind remains a muted `-`. Color is never the sole signal.
 - `--query` highlights only the exact matched path substrings using the
-  secondary magenta focus treatment, bold text, and a contrasting background.
+  Ops Console cyan accent treatment, bold text, and a contrasting background.
   Preserve case-insensitive, Unicode-boundary-safe, non-overlapping matching.
   A query never filters, hides, reorders, or changes a row's semantic value;
   no match leaves the complete report unchanged.

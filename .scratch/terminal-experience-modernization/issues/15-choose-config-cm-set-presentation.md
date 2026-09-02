@@ -27,10 +27,11 @@ parsers, or artificial validation/persistence phases.
   `cobra.ExactArgs(3)`. The command passes all three argument values unchanged
   to the writer, preserving profile identity, key case, whitespace, and value
   semantics.
-- Rich uses eyebrow `YCY / config cm set`, title `Update CM profile`, and
-  subtitle `Change one stored provider setting`. Safe profile and key
+- Rich uses the current Ops Console hierarchy with eyebrow `YCY / config cm
+  set`, title `Update CM profile`, and subtitle `Change one stored provider
+  setting`. Safe profile and key
   projections appear only in a bounded detail area so long or hostile
-  arguments cannot resize or corrupt the fixed title and rail.
+  arguments cannot resize or corrupt the fixed title and status table.
 - The Live View shows one spinner with Active detail
   `Validating setting and saving profile`. Before writer success it shows only
   safe profile and key, never value. It does not show existing profile data,

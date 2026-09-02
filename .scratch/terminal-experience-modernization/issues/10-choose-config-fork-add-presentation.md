@@ -15,7 +15,7 @@ changing prompt order, defaults, validation, or overwrite behavior?
 
 `config fork add` is a finite interactive setup flow with five ordered
 questions followed by one persistence phase. It uses one Bubble Tea root with
-Huh v2 child forms and a Signal Rail; the command keeps ownership of prompt
+Huh v2 child forms and the Ops Console status-table layout; the command keeps ownership of prompt
 wording, validation, provider/protocol values, overwrite behavior, and result
 text. Automation remains rejected before configuration access or stdin reads.
 
@@ -41,13 +41,15 @@ text. Automation remains rejected before configuration access or stdin reads.
   a preview, length, prefix, strength, or echo. Its Transcript value is always
   `[redacted]`.
 
-### Signal Rail and Work Phases
+### Ops Console status table and Work Phases
 
-The rail shows six numbered semantic steps: `Identity`, `Host`, `Provider`,
-`Protocol`, `Credential`, and `Save provider instance`. The active field uses
-`◆`, completed fields use `✓`, and pending fields use `○`; the credential step
-never displays its value. Field validation retries stay inside the current
-form and are not separate phases.
+The `STATE / PHASE / DETAIL` table shows six semantic rows: `Identity`,
+`Host`, `Provider`, `Protocol`, `Credential`, and `Save provider instance`.
+The active field uses `◆`, completed fields use `✓`, and pending fields use
+`○`; the credential row never displays its value. The active Huh form sits in
+the content region below the table and uses B's bottom focus rule. Field
+validation retries stay inside the current form and are not separate phases;
+there is no persistent left rail.
 
 The command declares two Work Phases: `Collect provider details` covers the
 five prompts, and `Save provider instance` covers the writer call. The form
@@ -111,7 +113,7 @@ all are control-free. Automation returns
 store, reading stdin, or writing state.
 
 Acceptance must cover Rich PTY prompt order/defaults/descriptions, validation
-retry, password masking, Signal Rail field states, fast-save loading and
+retry, password masking, Ops Console table states, fast-save loading and
 completion, successful/duplicate-alias/cancelled/save-failure journeys,
 primary-screen restoration and Transcript redaction, Plain retry/loading
 ordering, Automation's zero side effects, host safety projection, encrypted
