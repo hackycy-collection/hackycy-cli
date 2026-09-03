@@ -8,6 +8,8 @@ type PhaseKind uint8
 const (
 	PhaseScan PhaseKind = iota
 	PhaseFetch
+	PhasePrepare
+	PhaseBuild
 )
 
 // PhaseState records the command-owned terminal state of one phase update.
@@ -22,12 +24,16 @@ const (
 
 // Phase is one externally meaningful git pulse progress update.
 type Phase struct {
-	Kind       PhaseKind
-	State      PhaseState
-	Root       string
-	Repository string
-	Completed  int
-	Total      int
+	Kind            PhaseKind
+	State           PhaseState
+	Root            string
+	Repository      string
+	Completed       int
+	Total           int
+	Successful      int
+	CommitCount     int
+	RepositoryCount int
+	Detail          string
 }
 
 // PhaseReporter receives typed phase updates for one contiguous work segment.

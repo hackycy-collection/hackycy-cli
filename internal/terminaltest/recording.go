@@ -12,6 +12,8 @@ const (
 	NoticeOperation OperationKind = "notice"
 	// ResultOperation records a durable presentation request.
 	ResultOperation OperationKind = "result"
+	// ResultCheckpointOperation records an identified service result checkpoint.
+	ResultCheckpointOperation OperationKind = "result-checkpoint"
 	// MilestoneOperation records an explicit durable checkpoint.
 	MilestoneOperation OperationKind = "milestone"
 	// FinishOperation records a finite command outcome.
@@ -73,6 +75,11 @@ func (run *RecordingRun) Result(document any) {
 	run.record(ResultOperation, document)
 }
 
+// ResultCheckpoint records an identified service result checkpoint.
+func (run *RecordingRun) ResultCheckpoint(id string, document any) {
+	run.record(ResultCheckpointOperation, Checkpoint{ID: id, Document: document})
+}
+
 // Track records a tracked-operation request.
 func (run *RecordingRun) Track(operation any) {
 	run.record(TrackOperation, operation)
@@ -94,4 +101,10 @@ func (run *RecordingRun) record(kind OperationKind, value any) {
 	run.mu.Lock()
 	defer run.mu.Unlock()
 	run.operations = append(run.operations, Operation{Kind: kind, Value: value})
+}
+
+// Checkpoint is a generic recorded service result checkpoint.
+type Checkpoint struct {
+	ID       string
+	Document any
 }

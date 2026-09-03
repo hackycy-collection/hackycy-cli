@@ -15,15 +15,17 @@ type ServerOptions struct {
 	Port           int
 	ReadOnly       ReadOnlyServerOptions
 	Release        func() error
+	BeforeRelease  func(string, error)
 }
 
 // RunningServer owns the FS listener and the resource-release boundary for
 // one already-constructed runtime.
 type RunningServer struct {
-	listener   net.Listener
-	httpServer *http.Server
-	release    func() error
-	done       chan struct{}
+	listener      net.Listener
+	httpServer    *http.Server
+	release       func() error
+	beforeRelease func(string, error)
+	done          chan struct{}
 
 	mu         sync.RWMutex
 	serveErr   error
@@ -50,9 +52,10 @@ func StartServer(workspace *Workspace, options ServerOptions) (*RunningServer, e
 		return nil, err
 	}
 	server := &RunningServer{
-		listener: listener,
-		release:  options.Release,
-		done:     make(chan struct{}),
+		listener:      listener,
+		release:       options.Release,
+		beforeRelease: options.BeforeRelease,
+		done:          make(chan struct{}),
 	}
 	server.httpServer = &http.Server{Handler: handler}
 	go server.serve()
@@ -118,8 +121,9 @@ func (server *RunningServer) serve() {
 	server.mu.Lock()
 	server.serveErr = err
 	server.mu.Unlock()
-	close(server.done)
+	server.reportReleaseFailure(err)
 	server.releaseResources()
+	close(server.done)
 }
 
 func (server *RunningServer) releaseResources() {
@@ -131,4 +135,23 @@ func (server *RunningServer) releaseResources() {
 		server.releaseErr = server.release()
 		server.mu.Unlock()
 	})
+}
+
+func (server *RunningServer) reportReleaseFailure(serveErr error) {
+	if server == nil || server.beforeRelease == nil {
+		return
+	}
+	if serveErr != nil {
+		server.beforeRelease("serve", serveErr)
+		return
+	}
+	server.mu.RLock()
+	closeErr := server.closeErr
+	server.mu.RUnlock()
+	if errors.Is(closeErr, http.ErrServerClosed) {
+		closeErr = nil
+	}
+	if closeErr != nil {
+		server.beforeRelease("close", closeErr)
+	}
 }

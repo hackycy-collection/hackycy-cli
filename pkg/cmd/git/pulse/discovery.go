@@ -27,16 +27,32 @@ type DirectoryReader interface {
 	ReadDir(string) ([]os.DirEntry, error)
 }
 
+// ScanRepositoryResult keeps normal discovery separate from unreadable child
+// directories. The latter remain non-fatal, but presentation needs a bounded
+// warning without changing repository membership.
+type ScanRepositoryResult struct {
+	Repositories          []string
+	UnreadableDirectories []string
+}
+
 // ScanRepositories finds directories that contain a direct .git directory.
 // It intentionally keeps walking below a discovered repository so nested repositories remain visible.
 func ScanRepositories(ctx context.Context, root string, reader DirectoryReader, onFound func(string), yield func()) ([]string, error) {
+	result, err := ScanRepositoryDetails(ctx, root, reader, onFound, yield)
+	return result.Repositories, err
+}
+
+// ScanRepositoryDetails is ScanRepositories with non-fatal child-read evidence
+// for the terminal presentation layer.
+func ScanRepositoryDetails(ctx context.Context, root string, reader DirectoryReader, onFound func(string), yield func()) (ScanRepositoryResult, error) {
 	repositories := make([]string, 0)
+	unreadable := make([]string, 0)
 	stack := []string{root}
 	scanned := 0
 
 	for len(stack) > 0 {
 		if err := ctx.Err(); err != nil {
-			return nil, err
+			return ScanRepositoryResult{}, err
 		}
 		last := len(stack) - 1
 		current := stack[last]
@@ -45,6 +61,7 @@ func ScanRepositories(ctx context.Context, root string, reader DirectoryReader, 
 
 		entries, err := reader.ReadDir(current)
 		if err != nil {
+			unreadable = append(unreadable, current)
 			continue
 		}
 
@@ -74,5 +91,5 @@ func ScanRepositories(ctx context.Context, root string, reader DirectoryReader, 
 		}
 	}
 
-	return repositories, nil
+	return ScanRepositoryResult{Repositories: repositories, UnreadableDirectories: unreadable}, nil
 }

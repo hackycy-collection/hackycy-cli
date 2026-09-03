@@ -47,9 +47,31 @@ type CandidateOptions struct {
 
 // DownloadCandidate writes a same-directory candidate and verifies it before execution.
 func DownloadCandidate(ctx context.Context, resolution ReleaseResolution, targetPath string, options CandidateOptions) (Candidate, error) {
+	return downloadCandidate(ctx, resolution, targetPath, options, UpgradeObserver{})
+}
+
+func downloadCandidate(ctx context.Context, resolution ReleaseResolution, targetPath string, options CandidateOptions, observer UpgradeObserver) (candidate Candidate, resultErr error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	downloadEvent := UpgradePhaseEvent{CandidateVersion: resolution.Version, ArtifactName: resolution.Artifact.Name}
+	observer.begin(UpgradePhaseDownloadCandidate)
+	downloadCompleted := false
+	defer func() {
+		if !downloadCompleted {
+			if resultErr == nil {
+				observer.complete(UpgradePhaseDownloadCandidate, downloadEvent)
+			} else {
+				observer.end(ctx, UpgradePhaseDownloadCandidate, resultErr, downloadEvent)
+			}
+			return
+		}
+		if resultErr == nil {
+			observer.complete(UpgradePhaseVerifyCandidate, downloadEvent)
+		} else {
+			observer.end(ctx, UpgradePhaseVerifyCandidate, resultErr, downloadEvent)
+		}
+	}()
 	if options.Client == nil {
 		options.Client = http.DefaultClient
 	}
@@ -124,6 +146,9 @@ func DownloadCandidate(ctx context.Context, resolution ReleaseResolution, target
 		return Candidate{}, fmt.Errorf("close staged candidate: %w", err)
 	}
 	actualHash := fmt.Sprintf("%x", hasher.Sum(nil))
+	downloadCompleted = true
+	observer.complete(UpgradePhaseDownloadCandidate, downloadEvent)
+	observer.begin(UpgradePhaseVerifyCandidate)
 	if !strings.EqualFold(actualHash, resolution.ExpectedHash) {
 		return Candidate{}, errors.New("checksum verification failed")
 	}

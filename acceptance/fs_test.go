@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -96,8 +97,95 @@ func TestFSStandaloneBinaryPreservesCLIHTTPAndSignalLifecycle(t *testing.T) {
 	if process.command.ProcessState == nil || !process.command.ProcessState.Success() || !strings.Contains(readFSProcessOutput(process), "File Browser stopped.") {
 		t.Fatalf("SIGINT state = %#v, stdout/stderr = %q / %q", process.command.ProcessState, readFSProcessOutput(process), process.stderr.String())
 	}
-	if process.stderr.Len() != 0 {
-		t.Fatalf("FS lifecycle wrote stderr: %q", process.stderr.String())
+	lifecycle := process.stderr.String()
+	for _, message := range []string{
+		"INFO fs: ●  File Browser started",
+		"INFO fs: ●  Browse root configured",
+		"INFO fs: ●  File Browser capabilities configured",
+		"INFO fs: ●  File Browser authentication configured",
+		"INFO fs: ●  File Browser stopping",
+		"INFO fs: ✓  File Browser stopped",
+	} {
+		if !strings.Contains(lifecycle, message) {
+			t.Fatalf("FS lifecycle omitted %q: %q", message, lifecycle)
+		}
+	}
+	if !strings.Contains(lifecycle, `"bindingAddress":"127.0.0.1"`) || !strings.Contains(lifecycle, `"chunkedUploadsEnabled":true`) || !strings.Contains(lifecycle, `"uploadChunkSizeBytes":4194304`) {
+		t.Fatalf("FS startup lifecycle omitted safe capability fields: %q", lifecycle)
+	}
+	if strings.Index(lifecycle, "File Browser stopping") > strings.Index(lifecycle, "File Browser stopped") || !strings.Contains(lifecycle, `"reason":"context-cancelled"`) {
+		t.Fatalf("FS shutdown lifecycle ordering = %q", lifecycle)
+	}
+	if strings.ContainsAny(lifecycle, "\x1b\r") {
+		t.Fatalf("FS lifecycle contains terminal control: %q", lifecycle)
+	}
+}
+
+func TestFSStandaloneBinaryEmitsNDJSONLifecycle(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signal fixture uses Unix process delivery")
+	}
+	binary := buildDiffStandaloneBinary(t)
+	root := t.TempDir()
+	process := startDiffStandalone(t, binary, root, environmentWith(map[string]string{"HOME": t.TempDir(), "USERPROFILE": ""}), "--log-format=json", "fs", "--address", "127.0.0.1", "--port", "0", root)
+	startup, localURL := waitForFSStartup(t, process)
+	assertFSHTTP(t, localURL, "/api/session", http.StatusOK, "application/json; charset=utf-8")
+	if err := process.command.Process.Signal(os.Interrupt); err != nil {
+		t.Fatalf("send SIGINT: %v", err)
+	}
+	if err := waitForDiffProcess(t, process); err != nil {
+		t.Fatalf("fs NDJSON exit after SIGINT: %v\nstderr:\n%s", err, process.stderr.String())
+	}
+	if !strings.Contains(startup, "File Browser") || !strings.Contains(readFSProcessOutput(process), "File Browser stopped.") {
+		t.Fatalf("FS stdout checkpoints = %q / %q", startup, readFSProcessOutput(process))
+	}
+
+	scanner := bufio.NewScanner(strings.NewReader(process.stderr.String()))
+	var records []struct {
+		Timestamp string         `json:"timestamp"`
+		Level     string         `json:"level"`
+		Scope     string         `json:"scope"`
+		Message   string         `json:"message"`
+		Context   map[string]any `json:"context"`
+	}
+	for scanner.Scan() {
+		var record struct {
+			Timestamp string         `json:"timestamp"`
+			Level     string         `json:"level"`
+			Scope     string         `json:"scope"`
+			Message   string         `json:"message"`
+			Context   map[string]any `json:"context"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			t.Fatalf("decode FS NDJSON %q: %v", scanner.Text(), err)
+		}
+		if record.Timestamp == "" || record.Scope != "fs" || record.Message == "" || strings.ContainsRune(scanner.Text(), '\x1b') {
+			t.Fatalf("FS NDJSON record = %#v", record)
+		}
+		records = append(records, record)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan FS NDJSON: %v", err)
+	}
+	messages := make([]string, 0, len(records))
+	for _, record := range records {
+		messages = append(messages, record.Message)
+	}
+	if got, want := messages, []string{
+		"File Browser started",
+		"Browse root configured",
+		"File Browser capabilities configured",
+		"File Browser authentication configured",
+		"File Browser stopping",
+		"File Browser stopped",
+	}; !slices.Equal(got, want) {
+		t.Fatalf("FS NDJSON messages = %#v, want %#v", got, want)
+	}
+	if records[0].Context["localURL"] != localURL || records[4].Context["reason"] != "context-cancelled" || records[5].Context["cancelledDownloads"] != float64(0) || records[5].Context["cancelledExtractions"] != float64(0) || records[5].Context["removedChunkedUploads"] != float64(0) {
+		t.Fatalf("FS NDJSON lifecycle contexts = %#v / %#v / %#v", records[0].Context, records[4].Context, records[5].Context)
+	}
+	if strings.ContainsRune(process.stderr.String(), '\x1b') {
+		t.Fatalf("FS NDJSON contains ANSI control: %q", process.stderr.String())
 	}
 }
 

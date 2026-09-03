@@ -344,12 +344,12 @@ func TestConfigCMTestStandaloneBinaryUsesOnlyTheLocalProvider(t *testing.T) {
 	})
 
 	successOutput, err := runStandalone(binary, environment, "config", "cm", "test")
-	if err != nil || !strings.Contains(string(successOutput), "Response: ok") || !strings.Contains(string(successOutput), "Done") || strings.Contains(string(successOutput), apiKey) {
+	if err != nil || !strings.Contains(string(successOutput), "Response:\nok") || !strings.Contains(string(successOutput), "Done") || strings.Contains(string(successOutput), apiKey) {
 		t.Fatalf("config cm test success = (%v, %q)", err, successOutput)
 	}
 
 	failureOutput, err := runStandalone(binary, environment, "config", "cm", "test", "failure")
-	if err == nil || !strings.Contains(string(failureOutput), "Provider: failure") || !strings.Contains(string(failureOutput), "Base URL: "+server.URL) || !strings.Contains(string(failureOutput), "Model: failure-model") || !strings.Contains(string(failureOutput), "error: 429 Too Many Requests: {\"error\":\"[REDACTED]\"}") || strings.Contains(string(failureOutput), apiKey) {
+	if err == nil || !strings.Contains(string(failureOutput), "Provider: failure") || !strings.Contains(string(failureOutput), "Base URL: "+server.URL) || !strings.Contains(string(failureOutput), "Model: failure-model") || !strings.Contains(string(failureOutput), "error: 429 Too Many Requests") || strings.Contains(string(failureOutput), "try later") || strings.Contains(string(failureOutput), apiKey) {
 		t.Fatalf("config cm test failure = (%v, %q)", err, failureOutput)
 	}
 

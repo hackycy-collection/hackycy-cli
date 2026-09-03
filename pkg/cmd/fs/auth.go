@@ -44,9 +44,10 @@ type SessionState struct {
 }
 
 type Authentication struct {
-	accounts map[string]Account
-	store    *filesession.Manager
-	closed   bool
+	accounts     map[string]Account
+	store        *filesession.Manager
+	idleLifetime time.Duration
+	closed       bool
 }
 
 type AuthenticationOptions struct {
@@ -59,6 +60,10 @@ type AuthenticationOptions struct {
 func NewAuthentication(specifications []string, options AuthenticationOptions) (*Authentication, error) {
 	if len(specifications) == 0 {
 		return nil, nil
+	}
+	idleLifetime := options.IdleLifetime
+	if idleLifetime == 0 {
+		idleLifetime = 7 * 24 * time.Hour
 	}
 	parsed := make([]Account, 0, len(specifications))
 	seen := make(map[string]struct{}, len(specifications))
@@ -87,7 +92,11 @@ func NewAuthentication(specifications []string, options AuthenticationOptions) (
 	if err != nil {
 		return nil, err
 	}
-	authentication := &Authentication{accounts: make(map[string]Account, len(parsed)), store: store}
+	authentication := &Authentication{
+		accounts:     make(map[string]Account, len(parsed)),
+		store:        store,
+		idleLifetime: idleLifetime,
+	}
 	for _, account := range parsed {
 		revision, err := store.CredentialRevision(account.key + "\x00" + passwordForAccount(specifications, account.Username))
 		if err != nil {
@@ -98,6 +107,15 @@ func NewAuthentication(specifications []string, options AuthenticationOptions) (
 		authentication.accounts[account.key] = account
 	}
 	return authentication, nil
+}
+
+// SessionIdleLifetime reports the configured idle lifetime for safe startup
+// presentation without exposing session-store internals.
+func (authentication *Authentication) SessionIdleLifetime() time.Duration {
+	if authentication == nil {
+		return 0
+	}
+	return authentication.idleLifetime
 }
 
 func parseAccount(specification string) (string, string, error) {

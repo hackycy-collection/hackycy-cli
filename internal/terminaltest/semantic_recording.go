@@ -87,6 +87,12 @@ func (run *RecordingSemanticRun) Result(document terminal.PresentationDocument) 
 	return nil
 }
 
+// ResultCheckpoint records an identified service result checkpoint.
+func (run *RecordingSemanticRun) ResultCheckpoint(id string, document terminal.PresentationDocument) error {
+	run.record(ResultCheckpointOperation, Checkpoint{ID: id, Document: document})
+	return nil
+}
+
 // Track records a tracked operation.
 func (run *RecordingSemanticRun) Track(operation terminal.TrackedOperation) error {
 	run.record(TrackOperation, operation)

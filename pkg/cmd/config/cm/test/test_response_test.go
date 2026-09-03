@@ -1,9 +1,6 @@
 package test
 
-import (
-	"strings"
-	"testing"
-)
+import "testing"
 
 func TestDecodeCMTestProviderResponseReturnsTrimmedContentAndNormalizedUsage(t *testing.T) {
 	result, err := decodeCMTestProviderResponse([]byte(`{
@@ -30,10 +27,10 @@ func TestDecodeCMTestProviderResponsePrefersReportedUsableTotals(t *testing.T) {
 	assertCMTestUsage(t, result.Usage, 3, true, 2, true, 9, true)
 }
 
-func TestDecodeCMTestProviderResponseKeepsOnlyFiniteNumericUsageFields(t *testing.T) {
+func TestDecodeCMTestProviderResponseKeepsOnlyNonNegativeWholeUsageFields(t *testing.T) {
 	result, err := decodeCMTestProviderResponse([]byte(`{
   "choices": [{"message": {"content": "ok"}}],
-  "usage": {"prompt_tokens": 3, "completion_tokens": "2", "total_tokens": null}
+  "usage": {"prompt_tokens": 3, "completion_tokens": -2, "total_tokens": 1.5}
 }`))
 	if err != nil {
 		t.Fatalf("decodeCMTestProviderResponse() returned an error: %v", err)
@@ -41,7 +38,17 @@ func TestDecodeCMTestProviderResponseKeepsOnlyFiniteNumericUsageFields(t *testin
 	assertCMTestUsage(t, result.Usage, 3, true, 0, false, 0, false)
 }
 
-func TestDecodeCMTestProviderResponseRejectsEmptyContentWithBoundedContext(t *testing.T) {
+func TestTerminalCMTestUsageSummaryUsesOnlyNonNegativeWholeTokenCounts(t *testing.T) {
+	prompt, completion, total := 3.0, 2.0, 5.0
+	if got, want := terminalCMTestUsageSummary(&cmTestTokenUsage{PromptTokens: &prompt, CompletionTokens: &completion, TotalTokens: &total}), "Prompt tokens: 3  Completion tokens: 2  Total tokens: 5"; got != want {
+		t.Fatalf("terminalCMTestUsageSummary() = %q, want %q", got, want)
+	}
+	if got := terminalCMTestUsageSummary(nil); got != "" {
+		t.Fatalf("terminalCMTestUsageSummary(nil) = %q, want empty", got)
+	}
+}
+
+func TestDecodeCMTestProviderResponseRejectsEmptyContentWithoutResponseBody(t *testing.T) {
 	for _, test := range []struct {
 		name string
 		body string
@@ -50,12 +57,12 @@ func TestDecodeCMTestProviderResponseRejectsEmptyContentWithBoundedContext(t *te
 		{
 			name: "empty body",
 			body: "",
-			want: "Provider returned an empty response (finish_reason=unknown, response=<empty body>)",
+			want: "Provider returned an empty response (finish_reason=unknown)",
 		},
 		{
 			name: "blank choice content",
 			body: `{"choices":[{"finish_reason":"length","message":{"content":"  "}}]}`,
-			want: "Provider returned an empty response (finish_reason=length, response={\"choices\":[{\"finish_reason\":\"length\",\"message\":{\"content\":\"  \"}}]})",
+			want: "Provider returned an empty response (finish_reason=length)",
 		},
 	} {
 		t.Run(test.name, func(t *testing.T) {
@@ -66,9 +73,6 @@ func TestDecodeCMTestProviderResponseRejectsEmptyContentWithBoundedContext(t *te
 		})
 	}
 
-	if got, want := cmTestResponseSummary(strings.Repeat("x", 600)), strings.Repeat("x", 500)+"\u2026"; got != want {
-		t.Fatalf("cmTestResponseSummary() = %q, want %q", got, want)
-	}
 }
 
 func assertCMTestUsage(t *testing.T, usage *cmTestTokenUsage, prompt float64, hasPrompt bool, completion float64, hasCompletion bool, total float64, hasTotal bool) {

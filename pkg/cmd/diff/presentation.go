@@ -23,6 +23,7 @@ type Startup struct {
 	BaselineDirectory string
 	TargetDirectory   string
 	Port              int
+	Public            bool
 }
 
 func (session *comparisonSession) startupPresentation(interfaces []NetworkInterface) Startup {
@@ -33,6 +34,7 @@ func (session *comparisonSession) startupPresentation(interfaces []NetworkInterf
 		BaselineDirectory: session.workspace.baseline.path,
 		TargetDirectory:   session.workspace.target.path,
 		Port:              session.server.Port(),
+		Public:            session.bindingAddress == "0.0.0.0",
 	}
 }
 

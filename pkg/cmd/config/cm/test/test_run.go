@@ -17,6 +17,7 @@ type TestRequest struct {
 type TestResult struct {
 	Content    string
 	Diagnostic *TestDiagnostic
+	usage      *cmTestTokenUsage
 }
 
 // TestProfileResolver is the appconfig boundary used by config cm test.
@@ -58,18 +59,33 @@ func NewTest(dependencies TestDependencies) (*TestModule, error) {
 }
 
 // Run resolves one profile, tests it, and returns only secret-safe outcomes.
-func (module *TestModule) Run(context context.Context, request TestRequest) (TestResult, error) {
-	profile, err := module.resolver.ResolveCMProfile(appconfig.CMResolveOptions{ProfileName: request.Profile})
+func (module *TestModule) Run(ctx context.Context, request TestRequest) (TestResult, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	profile, err := module.resolveProfile(request)
 	if err != nil {
 		return TestResult{}, err
 	}
+	return module.testProvider(ctx, profile)
+}
+
+func (module *TestModule) resolveProfile(request TestRequest) (appconfig.ResolvedCMProfile, error) {
+	return module.resolver.ResolveCMProfile(appconfig.CMResolveOptions{ProfileName: request.Profile})
+}
+
+func (module *TestModule) testProvider(context context.Context, profile appconfig.ResolvedCMProfile) (TestResult, error) {
 	providerResult, err := executeCMTestProvider(context, profile, module.transport)
 	if err != nil {
-		diagnostic := &TestDiagnostic{Provider: profile.Name, BaseURL: profile.BaseURL, Model: profile.Model}
+		diagnostic := &TestDiagnostic{
+			Provider: redactCMTestText(profile.Name, profile.APIKey),
+			BaseURL:  redactCMTestText(safeCMTestURL(profile.BaseURL), profile.APIKey),
+			Model:    redactCMTestText(profile.Model, profile.APIKey),
+		}
 		return TestResult{Diagnostic: diagnostic}, redactCMTestError(err, profile.APIKey)
 	}
 	content := redactCMTestText(providerResult.Content, profile.APIKey)
-	return TestResult{Content: content}, nil
+	return TestResult{Content: content, usage: providerResult.Usage}, nil
 }
 
 func redactCMTestError(err error, apiKey string) error {

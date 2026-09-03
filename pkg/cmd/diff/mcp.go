@@ -110,7 +110,7 @@ func newMCPServer(workspace *Workspace, refresh *refreshCoordinator) *mcp.Server
 		},
 		OutputSchema: mcpRefreshComparisonOutputSchema,
 	}, func(_ context.Context, _ *mcp.CallToolRequest, _ mcpRefreshComparisonInput) (*mcp.CallToolResult, mcpRefreshComparisonOutput, error) {
-		err := refresh.Start()
+		err := refresh.StartSource("mcp")
 		accepted := err == nil
 		output := mcpRefreshComparisonOutput{Accepted: accepted, AlreadyRunning: !accepted}
 		text := "Refresh accepted"

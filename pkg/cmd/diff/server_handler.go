@@ -23,13 +23,17 @@ type diffServerHandler struct {
 }
 
 func newServerHandler(workspace *Workspace, bindingAddress string) (*diffServerHandler, error) {
+	return newServerHandlerWithLifecycle(workspace, bindingAddress, nil)
+}
+
+func newServerHandlerWithLifecycle(workspace *Workspace, bindingAddress string, lifecycle *diffLifecycle) (*diffServerHandler, error) {
 	site, err := webassets.Load("diff")
 	if err != nil {
 		return nil, err
 	}
 	return &diffServerHandler{
 		site:      site,
-		protocols: NewProtocolHandlers(workspace, bindingAddress),
+		protocols: newProtocolHandlers(workspace, bindingAddress, lifecycle),
 	}, nil
 }
 

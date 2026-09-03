@@ -72,6 +72,9 @@ func TestFetchCommitsPreservesSilentPartialFailures(t *testing.T) {
 	if result.FailedRepositories != 2 {
 		t.Fatalf("failed repositories = %d, want 2", result.FailedRepositories)
 	}
+	if got, want := result.FailedRepositoryPaths, []string{exited, missing}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("failed repository paths = %#v, want %#v", got, want)
+	}
 	if !reflect.DeepEqual(result.Commits, []Commit{{Repository: good, Author: "Ada", Date: "2026-08-23 10:11:12", Subject: "kept"}}) {
 		t.Fatalf("commits = %#v", result.Commits)
 	}

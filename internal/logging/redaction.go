@@ -31,7 +31,7 @@ func Redact(value string) string {
 
 // RedactDiagnostic projects arbitrary diagnostic text as one control-free line.
 func RedactDiagnostic(value string) string {
-	value = ansi.Strip(value)
+	value = StripANSI(value)
 	value = strings.Map(func(character rune) rune {
 		if character == '\r' || character == '\n' || unicode.IsControl(character) {
 			return ' '
@@ -39,6 +39,12 @@ func RedactDiagnostic(value string) string {
 		return character
 	}, value)
 	return Redact(strings.Join(strings.Fields(value), " "))
+}
+
+// StripANSI removes terminal styling sequences while keeping caller-specific
+// control-character and whitespace projection behind its existing policy.
+func StripANSI(value string) string {
+	return ansi.Strip(value)
 }
 
 func redactContext(context map[string]any) map[string]any {

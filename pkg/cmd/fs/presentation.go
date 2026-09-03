@@ -3,6 +3,7 @@ package fs
 import (
 	"net/netip"
 	"strconv"
+	"time"
 )
 
 // NetworkInterface is one observed host network interface for FS startup
@@ -20,17 +21,18 @@ type StartupURL struct {
 
 // Startup contains the complete presentation facts available after FS binds.
 type Startup struct {
-	URLs              []StartupURL
-	Directory         string
-	BindingAddress    string
-	Port              int
-	ManagementEnabled bool
-	ChunkedUploads    bool
-	UploadChunkSize   int64
-	SafeHTML          bool
-	Authentication    bool
-	AccountCount      int
-	SessionDirectory  string
+	URLs                []StartupURL
+	Directory           string
+	BindingAddress      string
+	Port                int
+	ManagementEnabled   bool
+	ChunkedUploads      bool
+	UploadChunkSize     int64
+	SafeHTML            bool
+	Authentication      bool
+	AccountCount        int
+	SessionDirectory    string
+	SessionIdleDuration time.Duration
 }
 
 func runtimeStartup(runtime *Runtime, interfaces []NetworkInterface) Startup {
@@ -51,6 +53,7 @@ func runtimeStartup(runtime *Runtime, interfaces []NetworkInterface) Startup {
 		startup.Authentication = true
 		startup.AccountCount = len(runtime.authentication.accounts)
 		startup.SessionDirectory = runtime.authentication.SessionDirectory()
+		startup.SessionIdleDuration = runtime.authentication.SessionIdleLifetime()
 	}
 	return startup
 }

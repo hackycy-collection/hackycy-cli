@@ -33,7 +33,7 @@ func TestGitPulseStandaloneBinaryScansContainedWorkspaceActivity(t *testing.T) {
 		"NO_COLOR":    "1",
 	})
 	output, err := runGitPulseStandalone(binary, t.TempDir(), environment, "1,2\n", "git", "pulse", workspace, "--days", "3tail")
-	if exitCode(err) != 1 || string(output) != "error: git pulse requires an interactive terminal\n" {
+	if exitCode(err) != 1 || string(output) != "Skipped 1 repositories while reading commits: unborn\nerror: git pulse requires an interactive terminal\n" {
 		t.Fatalf("redirected author selection = (%v, %q)", err, output)
 	}
 

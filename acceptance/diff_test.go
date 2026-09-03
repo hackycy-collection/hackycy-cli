@@ -5,6 +5,7 @@ package acceptance
 import (
 	"bufio"
 	"bytes"
+	"encoding/json"
 	"net"
 	"net/http"
 	"net/url"
@@ -116,8 +117,137 @@ func TestDiffStandaloneBinaryPreservesCLIValidationAndLifecycle(t *testing.T) {
 	if err := waitForDiffProcess(t, process); err != nil {
 		t.Fatalf("diff exit after SIGINT: %v\nstderr:\n%s", err, process.stderr.String())
 	}
-	if process.stderr.Len() != 0 {
-		t.Fatalf("diff lifecycle wrote stderr: %q", process.stderr.String())
+	assertDiffTextLifecycle(t, process.stderr.String(), localURL, resolvedBaseline, resolvedTarget)
+}
+
+func TestDiffStandaloneBinaryEmitsNDJSONLifecycle(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("signal fixture uses Unix process delivery")
+	}
+	binary := buildDiffStandaloneBinary(t)
+	environment := environmentWith(map[string]string{"HOME": t.TempDir(), "USERPROFILE": ""})
+	root := t.TempDir()
+	baseline := filepath.Join(root, "baseline")
+	target := filepath.Join(root, "target")
+	writeStandaloneDiffFile(t, baseline, "same.txt", "same")
+	writeStandaloneDiffFile(t, target, "same.txt", "same")
+	process := startDiffStandalone(t, binary, root, environment, "--log-format=json", "diff", "--port", "0", baseline, target)
+	_, localURL := waitForDiffStartup(t, process)
+	waitForDiffReady(t, localURL)
+	if err := process.command.Process.Signal(os.Interrupt); err != nil {
+		t.Fatalf("send SIGINT: %v", err)
+	}
+	if err := waitForDiffProcess(t, process); err != nil {
+		t.Fatalf("diff exit after SIGINT: %v\nstderr:\n%s", err, process.stderr.String())
+	}
+	scanner := bufio.NewScanner(strings.NewReader(process.stderr.String()))
+	var messages []string
+	for scanner.Scan() {
+		var record struct {
+			Level   string         `json:"level"`
+			Scope   string         `json:"scope"`
+			Message string         `json:"message"`
+			Context map[string]any `json:"context"`
+		}
+		if err := json.Unmarshal(scanner.Bytes(), &record); err != nil {
+			t.Fatalf("decode diff NDJSON %q: %v", scanner.Text(), err)
+		}
+		if record.Scope != "diff" || record.Message == "" {
+			t.Fatalf("NDJSON lifecycle record = %#v", record)
+		}
+		messages = append(messages, record.Message)
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan diff NDJSON: %v", err)
+	}
+	if len(messages) < 6 || messages[0] != "Directory diff started" || messages[1] != "Diff endpoints available" || messages[2] != "Comparison workspace configured" || messages[3] != "Initial comparison refresh started" || messages[len(messages)-2] != "Directory diff stopping" || messages[len(messages)-1] != "Directory diff stopped" {
+		t.Fatalf("NDJSON lifecycle messages = %#v (URL %s)", messages, localURL)
+	}
+	if !strings.Contains(strings.Join(messages, "\n"), "Comparison snapshot ready") && !strings.Contains(strings.Join(messages, "\n"), "Comparison refresh cancelled") {
+		t.Fatalf("NDJSON lifecycle omitted refresh terminal event: %#v", messages)
+	}
+	if strings.ContainsRune(process.stderr.String(), '\x1b') {
+		t.Fatalf("NDJSON lifecycle contains ANSI control: %q", process.stderr.String())
+	}
+}
+
+func waitForDiffReady(t *testing.T, localURL string) {
+	t.Helper()
+	client := &http.Client{Timeout: 250 * time.Millisecond}
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		response, err := client.Get(localURL + "/api/state")
+		if err == nil {
+			var state struct {
+				Workspace struct {
+					Phase string `json:"phase"`
+				} `json:"workspace"`
+			}
+			decodeErr := json.NewDecoder(response.Body).Decode(&state)
+			response.Body.Close()
+			if decodeErr == nil && state.Workspace.Phase == "ready" {
+				return
+			}
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for diff ready state")
+}
+
+func assertDiffTextLifecycle(t *testing.T, contents, localURL, baseline, target string) {
+	t.Helper()
+	if strings.Contains(contents, "error:") || strings.Contains(contents, "\x1b[") || strings.ContainsAny(contents, "\r") {
+		t.Fatalf("diff lifecycle contains root duplicate or terminal control: %q", contents)
+	}
+	lines := strings.Split(strings.TrimSuffix(contents, "\n"), "\n")
+	if len(lines) < 7 {
+		t.Fatalf("diff lifecycle emitted too few records: %q", contents)
+	}
+	for _, expected := range []string{
+		"Directory diff started",
+		"Diff endpoints available",
+		"Comparison workspace configured",
+		"Initial comparison refresh started",
+		"Comparison snapshot ready",
+		"Directory diff stopping",
+		"Directory diff stopped",
+	} {
+		found := false
+		for _, line := range lines {
+			if strings.Contains(line, expected) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Fatalf("diff lifecycle omitted %q: %q", expected, contents)
+		}
+	}
+	order := []string{
+		"Directory diff started",
+		"Diff endpoints available",
+		"Comparison workspace configured",
+		"Initial comparison refresh started",
+		"Comparison snapshot ready",
+		"Directory diff stopping",
+		"Directory diff stopped",
+	}
+	last := -1
+	for _, expected := range order {
+		index := -1
+		for candidate, line := range lines {
+			if candidate > last && strings.Contains(line, expected) {
+				index = candidate
+				break
+			}
+		}
+		if index < 0 {
+			t.Fatalf("diff lifecycle order missing %q after line %d: %q", expected, last, contents)
+		}
+		last = index
+	}
+	if !strings.Contains(contents, `"localURL":"`+localURL+`"`) || !strings.Contains(contents, `"networkURLs":[]`) || !strings.Contains(contents, `"baselineDirectory":"`+baseline+`"`) || !strings.Contains(contents, `"targetDirectory":"`+target+`"`) {
+		t.Fatalf("diff startup lifecycle fields missing: %q", contents)
 	}
 }
 

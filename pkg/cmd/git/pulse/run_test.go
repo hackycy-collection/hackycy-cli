@@ -50,7 +50,7 @@ func TestModuleRunComposesScanPromptFetchAuthorSelectionAndReport(t *testing.T) 
 	}
 }
 
-func TestModuleRunEmitsTypedScanAndFetchPhases(t *testing.T) {
+func TestModuleRunEmitsTheDeclaredPrepareScanFetchAndBuildPhases(t *testing.T) {
 	root := t.TempDir()
 	nested := filepath.Join(root, "nested")
 	makePulseDirectory(t, filepath.Join(root, ".git"))
@@ -74,22 +74,30 @@ func TestModuleRunEmitsTypedScanAndFetchPhases(t *testing.T) {
 	if _, err := module.Run(context.Background(), Input{}); err != nil {
 		t.Fatalf("Run() error = %v", err)
 	}
-	if got, want := tracker.started, []PhaseKind{PhaseScan, PhaseFetch}; !reflect.DeepEqual(got, want) {
+	if got, want := tracker.started, []PhaseKind{PhasePrepare, PhaseScan, PhaseFetch, PhaseBuild}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("started phases = %#v, want %#v", got, want)
 	}
-	if tracker.closed != 2 {
-		t.Fatalf("closed phase reporters = %d, want 2", tracker.closed)
+	if tracker.closed != 4 {
+		t.Fatalf("closed phase reporters = %d, want 4", tracker.closed)
 	}
-	if len(tracker.phases) < 4 {
+	if len(tracker.phases) < 8 {
 		t.Fatalf("phase updates = %#v", tracker.phases)
 	}
+	prepare := phaseUpdates(tracker.phases, PhasePrepare)
+	if first, last := prepare[0], prepare[len(prepare)-1]; first.State != PhaseActive || first.Detail != "Checking workspace and Git" || last.State != PhaseCompleted || last.Detail != "Checking workspace and Git" {
+		t.Fatalf("prepare phase boundaries = %#v", prepare)
+	}
 	scan := phaseUpdates(tracker.phases, PhaseScan)
-	if first, last := scan[0], scan[len(scan)-1]; first.State != PhaseActive || first.Root != root || last.State != PhaseCompleted {
+	if first, last := scan[0], scan[len(scan)-1]; first.State != PhaseActive || first.Root != root || last.State != PhaseCompleted || last.RepositoryCount != 2 || last.Detail != "Found 2 repositories" {
 		t.Fatalf("scan phase boundaries = %#v", tracker.phases)
 	}
 	fetch := phaseUpdates(tracker.phases, PhaseFetch)
-	if first, last := fetch[0], fetch[len(fetch)-1]; first.State != PhaseActive || first.Total != 2 || last.State != PhaseCompleted {
+	if first, last := fetch[0], fetch[len(fetch)-1]; first.State != PhaseActive || first.Total != 2 || last.State != PhaseCompleted || last.Successful != 2 || last.Detail != "Read 2 of 2 repositories" {
 		t.Fatalf("fetch phase boundaries = %#v", tracker.phases)
+	}
+	build := phaseUpdates(tracker.phases, PhaseBuild)
+	if first, last := build[0], build[len(build)-1]; first.State != PhaseActive || first.Detail != "Grouping commits by repository" || last.State != PhaseCompleted || last.CommitCount != 1 || last.RepositoryCount != 1 || last.Detail != "Built report with 1 commits in 1 repositories" {
+		t.Fatalf("build phase boundaries = %#v", build)
 	}
 }
 
@@ -161,6 +169,54 @@ func TestModuleRunReturnsSuccessfulNoResultAndPromptCancellationOutcomes(t *test
 			t.Fatalf("author cancellation = (%#v, %v), presenter %#v", result, err, presenter)
 		}
 	})
+}
+
+func TestModuleRunPublishesBoundedPresentationDetailsWithoutChangingPartialResults(t *testing.T) {
+	root := t.TempDir()
+	visible := filepath.Join(root, "visible")
+	unreadable := filepath.Join(root, "unreadable")
+	for _, repository := range []string{root, visible, unreadable} {
+		makePulseDirectory(t, filepath.Join(repository, ".git"))
+	}
+	reader := directoryReaderFunc(func(path string) ([]os.DirEntry, error) {
+		if path == unreadable {
+			return nil, errors.New("permission denied")
+		}
+		return os.ReadDir(path)
+	})
+	presenter := &recordingPulsePresenter{}
+	module := newPulseModuleWithDependencies(t, Dependencies{
+		WorkingDirectory: func() (string, error) { return root, nil },
+		Stater:           osPulseStater{},
+		Reader:           reader,
+		Yield:            func() {},
+		Git: &modulePulseGitRunner{logs: map[string]pulseGitResponse{
+			root:    {output: GitOutput{Stdout: []byte("Ada\x1f2026-08-23 10:00:00\x1froot")}},
+			visible: {err: errors.New("repository omitted")},
+		}},
+		Prompter:  &scriptedPulsePrompter{days: 1},
+		Presenter: presenter,
+		Now: func() time.Time {
+			return time.Date(2026, time.August, 23, 14, 0, 0, 0, time.UTC)
+		},
+	})
+
+	result, err := module.Run(context.Background(), Input{Days: pulseInt(1)})
+	if err != nil || result.Report.CommitCount != 1 || result.FailedRepositories != 1 {
+		t.Fatalf("Run() = (%#v, %v)", result, err)
+	}
+	if got, want := presenter.dateSelections, []pulseDateSelection{{days: 1, explicit: true, boundary: "2026-08-23 00:00:00"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("date selections = %#v, want %#v", got, want)
+	}
+	if got, want := presenter.scanWarnings, []pulsePathWarning{{root: root, paths: []string{unreadable}}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("scan warnings = %#v, want %#v", got, want)
+	}
+	if got, want := presenter.fetchWarnings, []pulsePathWarning{{root: root, paths: []string{visible}}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("fetch warnings = %#v, want %#v", got, want)
+	}
+	if got, want := presenter.allAuthorCounts, []int{1}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("all-author details = %#v, want %#v", got, want)
+	}
 }
 
 func TestModuleRunValidatesRootAndGitBeforePresentation(t *testing.T) {
@@ -399,6 +455,21 @@ type recordingPulsePresenter struct {
 	noCommits         int
 	cancelled         int
 	reports           []Report
+	dateSelections    []pulseDateSelection
+	allAuthorCounts   []int
+	scanWarnings      []pulsePathWarning
+	fetchWarnings     []pulsePathWarning
+}
+
+type pulseDateSelection struct {
+	days     int
+	explicit bool
+	boundary string
+}
+
+type pulsePathWarning struct {
+	root  string
+	paths []string
 }
 
 type discardPulseTracker struct{}
@@ -475,4 +546,20 @@ func (presenter *recordingPulsePresenter) Cancelled() {
 
 func (presenter *recordingPulsePresenter) Present(report Report) {
 	presenter.reports = append(presenter.reports, report)
+}
+
+func (presenter *recordingPulsePresenter) PulseDateSelection(days int, explicit bool, boundary string) {
+	presenter.dateSelections = append(presenter.dateSelections, pulseDateSelection{days: days, explicit: explicit, boundary: boundary})
+}
+
+func (presenter *recordingPulsePresenter) PulseAuthorFilterAll(authorCount int) {
+	presenter.allAuthorCounts = append(presenter.allAuthorCounts, authorCount)
+}
+
+func (presenter *recordingPulsePresenter) PulseScanWarning(root string, paths []string) {
+	presenter.scanWarnings = append(presenter.scanWarnings, pulsePathWarning{root: root, paths: append([]string(nil), paths...)})
+}
+
+func (presenter *recordingPulsePresenter) PulseFetchWarning(root string, paths []string) {
+	presenter.fetchWarnings = append(presenter.fetchWarnings, pulsePathWarning{root: root, paths: append([]string(nil), paths...)})
 }

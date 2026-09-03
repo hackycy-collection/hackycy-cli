@@ -15,10 +15,12 @@ import (
 )
 
 const (
-	Repository          = "hackycy/hackycy-cli"
-	LatestReleasePath   = "https://api.github.com/repos/" + Repository + "/releases/latest"
-	ReleaseDownloadBase = "https://github.com/" + Repository + "/releases/download"
-	ChecksumManifest    = "SHA256SUMS"
+	Repository            = "hackycy/hackycy-cli"
+	LatestReleasePath     = "https://api.github.com/repos/" + Repository + "/releases/latest"
+	ReleaseDownloadBase   = "https://github.com/" + Repository + "/releases/download"
+	ChecksumManifest      = "SHA256SUMS"
+	ChecksumReleaseDigest = "release-digest"
+	ChecksumManifestFile  = "SHA256SUMS"
 )
 
 var versionPattern = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?$`)
@@ -51,6 +53,7 @@ type ReleaseResolution struct {
 	Artifact       Artifact
 	ArtifactURL    string
 	ExpectedHash   string
+	ChecksumSource string
 }
 
 // ReleaseResolverOptions keeps network and platform facts injectable for fixtures.
@@ -94,6 +97,10 @@ func (err *HTTPStatusError) Error() string {
 
 // ResolveRelease validates release identity, artifact selection, and the checksum chain.
 func ResolveRelease(ctx context.Context, options ReleaseResolverOptions) (ReleaseResolution, error) {
+	return resolveRelease(ctx, options, UpgradeObserver{})
+}
+
+func resolveRelease(ctx context.Context, options ReleaseResolverOptions, observer UpgradeObserver) (ReleaseResolution, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -109,60 +116,92 @@ func ResolveRelease(ctx context.Context, options ReleaseResolverOptions) (Releas
 	if options.AcceptHeaderValue == "" {
 		options.AcceptHeaderValue = "application/vnd.github.v3+json"
 	}
+	observer.begin(UpgradePhaseResolveRelease)
 	artifact, err := ArtifactFor(options.GOOS, options.GOARCH)
 	if err != nil {
+		observer.end(ctx, UpgradePhaseResolveRelease, err, UpgradePhaseEvent{})
 		return ReleaseResolution{}, err
 	}
 	if strings.TrimSpace(options.CurrentVersion) == "" {
-		return ReleaseResolution{}, errors.New("current CLI version is required")
+		err := errors.New("current CLI version is required")
+		observer.end(ctx, UpgradePhaseResolveRelease, err, UpgradePhaseEvent{})
+		return ReleaseResolution{}, err
 	}
 	if _, err := parseVersion(options.CurrentVersion); err != nil {
-		return ReleaseResolution{}, fmt.Errorf("current CLI version is invalid: %w", err)
+		err = fmt.Errorf("current CLI version is invalid: %w", err)
+		observer.end(ctx, UpgradePhaseResolveRelease, err, UpgradePhaseEvent{})
+		return ReleaseResolution{}, err
 	}
 
 	release, err := fetchRelease(ctx, options.Client, options.LatestURL, options.AcceptHeaderValue)
 	if err != nil {
+		observer.end(ctx, UpgradePhaseResolveRelease, err, UpgradePhaseEvent{})
 		return ReleaseResolution{}, err
 	}
 	version, err := releaseVersion(release.TagName)
 	if err != nil {
+		observer.end(ctx, UpgradePhaseResolveRelease, err, UpgradePhaseEvent{})
 		return ReleaseResolution{}, err
 	}
 	comparison, err := CompareVersions(options.CurrentVersion, version)
 	if err != nil {
+		observer.end(ctx, UpgradePhaseResolveRelease, err, UpgradePhaseEvent{})
 		return ReleaseResolution{}, err
 	}
+	base := ReleaseResolution{
+		CurrentVersion: options.CurrentVersion,
+		Version:        version,
+		Tag:            "v" + version,
+		Artifact:       artifact,
+	}
+	observer.complete(UpgradePhaseResolveRelease, UpgradePhaseEvent{
+		Detail:             "Release metadata resolved",
+		CurrentVersion:     options.CurrentVersion,
+		CandidateVersion:   version,
+		TargetOS:           artifact.GOOS,
+		TargetArchitecture: artifact.GOARCH,
+	})
 	if comparison >= 0 {
-		return ReleaseResolution{CurrentVersion: options.CurrentVersion, Version: version, Tag: "v" + version, Artifact: artifact}, &AlreadyCurrentError{Current: options.CurrentVersion, Latest: version}
+		return base, &AlreadyCurrentError{Current: options.CurrentVersion, Latest: version}
 	}
 
+	observer.begin(UpgradePhaseResolveArtifact)
 	asset, found, err := findAsset(release.Assets, artifact.Name)
 	if err != nil {
+		observer.end(ctx, UpgradePhaseResolveArtifact, err, UpgradePhaseEvent{})
 		return ReleaseResolution{}, err
 	}
 	expectedHash := ""
+	checksumSource := ""
 	if found && asset.Digest != nil && strings.TrimSpace(*asset.Digest) != "" {
 		expectedHash, err = normalizeAssetDigest(*asset.Digest)
 		if err != nil {
+			observer.end(ctx, UpgradePhaseResolveArtifact, err, UpgradePhaseEvent{})
 			return ReleaseResolution{}, err
 		}
+		checksumSource = ChecksumReleaseDigest
 	}
-	tag := "v" + version
 	if expectedHash == "" {
-		manifestURL := strings.TrimRight(options.DownloadBaseURL, "/") + "/" + tag + "/" + ChecksumManifest
+		manifestURL := strings.TrimRight(options.DownloadBaseURL, "/") + "/" + base.Tag + "/" + ChecksumManifest
 		expectedHash, err = fetchChecksum(ctx, options.Client, manifestURL, artifact.Name)
 		if err != nil {
+			observer.end(ctx, UpgradePhaseResolveArtifact, err, UpgradePhaseEvent{})
 			return ReleaseResolution{}, err
 		}
+		checksumSource = ChecksumManifestFile
 	}
-	return ReleaseResolution{
-		CurrentVersion: options.CurrentVersion,
-		Version:        version,
-		Tag:            tag,
-		Artifact:       artifact,
-		ArtifactURL:    strings.TrimRight(options.DownloadBaseURL, "/") + "/" + tag + "/" + artifact.Name,
-		ExpectedHash:   expectedHash,
-	}, nil
+	base.ArtifactURL = strings.TrimRight(options.DownloadBaseURL, "/") + "/" + base.Tag + "/" + artifact.Name
+	base.ExpectedHash = expectedHash
+	base.ChecksumSource = checksumSource
+	observer.complete(UpgradePhaseResolveArtifact, UpgradePhaseEvent{
+		Detail:             "Artifact and checksum resolved",
+		CandidateVersion:   base.Version,
+		TargetOS:           artifact.GOOS,
+		TargetArchitecture: artifact.GOARCH,
+		ArtifactName:       artifact.Name,
+		ChecksumSource:     checksumSource,
+	})
+	return base, nil
 }
 
 // ArtifactFor maps Go's target vocabulary to the public six-artifact vocabulary.

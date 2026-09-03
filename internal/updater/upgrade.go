@@ -36,6 +36,7 @@ type UpgradeOptions struct {
 	Resolver      ReleaseResolverOptions
 	Candidate     CandidateOptions
 	Replacement   ReplacementOptions
+	Observer      UpgradeObserver
 	Executable    func() (string, error)
 	Spawn         SpawnDetached
 	Copy          func(string, string) error
@@ -62,64 +63,102 @@ func RunUpgrade(ctx context.Context, options UpgradeOptions) (UpgradeResult, err
 		ctx = context.Background()
 	}
 	options = normalizeUpgradeOptions(options)
+	observer := options.Observer
+	observer.begin(UpgradePhaseConsumeStartupTransaction)
 	targetPath, err := options.Executable()
 	if err != nil {
-		return UpgradeResult{}, fmt.Errorf("resolve current executable: %w", err)
+		err = fmt.Errorf("resolve current executable: %w", err)
+		observer.end(ctx, UpgradePhaseConsumeStartupTransaction, err, UpgradePhaseEvent{})
+		return UpgradeResult{}, completeUpgradeWithError(ctx, observer, err)
 	}
 	targetPath, err = filepath.Abs(targetPath)
 	if err != nil {
-		return UpgradeResult{}, fmt.Errorf("resolve current executable: %w", err)
+		err = fmt.Errorf("resolve current executable: %w", err)
+		observer.end(ctx, UpgradePhaseConsumeStartupTransaction, err, UpgradePhaseEvent{})
+		return UpgradeResult{}, completeUpgradeWithError(ctx, observer, err)
 	}
 	result := UpgradeResult{}
 	if state, consumeErr := ConsumeState(targetPath); consumeErr != nil {
-		return UpgradeResult{}, consumeErr
+		observer.end(ctx, UpgradePhaseConsumeStartupTransaction, consumeErr, UpgradePhaseEvent{})
+		return UpgradeResult{}, completeUpgradeWithError(ctx, observer, consumeErr)
 	} else if state != nil {
 		if state.Status == StatusPending {
-			return UpgradeResult{}, errors.New("an update is already in progress")
+			err := errors.New("an update is already in progress")
+			observer.end(ctx, UpgradePhaseConsumeStartupTransaction, err, UpgradePhaseEvent{})
+			return UpgradeResult{}, completeUpgradeWithError(ctx, observer, err)
 		}
 		result.PreviousState = state
+		observer.previous(*state)
 	}
+	observer.complete(UpgradePhaseConsumeStartupTransaction, UpgradePhaseEvent{Detail: "Startup transaction checked"})
 	if options.Resolver.CurrentVersion == "" {
-		return result, errors.New("current CLI version is required")
+		err := errors.New("current CLI version is required")
+		observer.begin(UpgradePhaseResolveRelease)
+		observer.end(ctx, UpgradePhaseResolveRelease, err, UpgradePhaseEvent{})
+		return result, completeUpgradeWithError(ctx, observer, err)
 	}
-	resolution, err := ResolveRelease(ctx, options.Resolver)
+	resolution, err := resolveRelease(ctx, options.Resolver, observer)
 	if err != nil {
 		var already *AlreadyCurrentError
 		if errors.As(err, &already) {
 			result.AlreadyCurrent = true
 			result.CurrentVersion = already.Current
+			observer.begin(UpgradePhaseComplete)
+			observer.complete(UpgradePhaseComplete, UpgradePhaseEvent{Detail: "Already current", CurrentVersion: already.Current, CandidateVersion: already.Latest})
 			return result, nil
 		}
 		result.Aborted = true
-		return result, classifyUpgradeError(err)
+		return result, completeUpgradeWithError(ctx, observer, classifyUpgradeError(err))
 	}
-	candidate, err := DownloadCandidate(ctx, resolution, targetPath, options.Candidate)
+	candidate, err := downloadCandidate(ctx, resolution, targetPath, options.Candidate, observer)
 	if err != nil {
 		result.Aborted = true
-		return result, classifyUpgradeError(err)
+		return result, completeUpgradeWithError(ctx, observer, classifyUpgradeError(err))
 	}
+	observer.begin(UpgradePhaseStageUpdater)
 	updaterPath := updaterBinaryPath(options.TempDirectory(), candidate.TransactionID)
 	if err := options.Copy(targetPath, updaterPath); err != nil {
 		cleanupUpgradePaths(options.Remove, candidate.Path)
-		return result, fmt.Errorf("copy updater: %w", err)
+		err = fmt.Errorf("copy updater: %w", err)
+		observer.end(ctx, UpgradePhaseStageUpdater, err, UpgradePhaseEvent{})
+		return result, completeUpgradeWithError(ctx, observer, err)
 	}
 	if err := protectUpgradePath(updaterPath, 0o755, os.Chmod); err != nil {
 		cleanupUpgradePaths(options.Remove, candidate.Path, updaterPath)
-		return result, fmt.Errorf("protect updater: %w", err)
+		err = fmt.Errorf("protect updater: %w", err)
+		observer.end(ctx, UpgradePhaseStageUpdater, err, UpgradePhaseEvent{})
+		return result, completeUpgradeWithError(ctx, observer, err)
 	}
+	observer.complete(UpgradePhaseStageUpdater, UpgradePhaseEvent{Detail: "Detached updater staged"})
 	state := NewUpdateTransaction(targetPath, candidate, resolution.Version, options.PID(), updaterPath, options.Now())
+	observer.begin(UpgradePhasePublishPending)
 	if err := WriteState(state); err != nil {
 		cleanupUpgradePaths(options.Remove, candidate.Path, updaterPath)
-		return result, fmt.Errorf("publish pending update state: %w", err)
+		err = fmt.Errorf("publish pending update state: %w", err)
+		observer.end(ctx, UpgradePhasePublishPending, err, UpgradePhaseEvent{})
+		return result, completeUpgradeWithError(ctx, observer, err)
 	}
+	observer.complete(UpgradePhasePublishPending, UpgradePhaseEvent{Detail: "Pending update published"})
+	observer.begin(UpgradePhaseScheduleUpdater)
 	if err := options.Spawn(ctx, updaterPath, InternalUpdateArgs(state)); err != nil {
 		cleanupUpgradePaths(options.Remove, candidate.Path, updaterPath, state.StatePath)
-		return result, fmt.Errorf("schedule updater: %w", err)
+		err = fmt.Errorf("schedule updater: %w", err)
+		observer.end(ctx, UpgradePhaseScheduleUpdater, err, UpgradePhaseEvent{})
+		return result, completeUpgradeWithError(ctx, observer, err)
 	}
+	observer.complete(UpgradePhaseScheduleUpdater, UpgradePhaseEvent{Detail: "Detached updater scheduled"})
 	result.Scheduled = true
 	result.ScheduledVersion = resolution.Version
 	result.State = state
+	observer.begin(UpgradePhaseComplete)
+	observer.complete(UpgradePhaseComplete, UpgradePhaseEvent{Detail: "Update scheduled", CandidateVersion: resolution.Version})
 	return result, nil
+}
+
+func completeUpgradeWithError(ctx context.Context, observer UpgradeObserver, err error) error {
+	observer.begin(UpgradePhaseComplete)
+	observer.end(ctx, UpgradePhaseComplete, err, UpgradePhaseEvent{})
+	return err
 }
 
 func normalizeUpgradeOptions(options UpgradeOptions) UpgradeOptions {

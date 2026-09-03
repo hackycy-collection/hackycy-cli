@@ -98,7 +98,7 @@ func TestResolveReleasePrefersAssetDigestAndBuildsFixedURLs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Version != "1.2.3" || got.Tag != "v1.2.3" || got.ExpectedHash != strings.Repeat("a", 64) || got.ArtifactURL != server.URL+"/download/v1.2.3/ycy-linux-x64" {
+	if got.Version != "1.2.3" || got.Tag != "v1.2.3" || got.ExpectedHash != strings.Repeat("a", 64) || got.ChecksumSource != ChecksumReleaseDigest || got.ArtifactURL != server.URL+"/download/v1.2.3/ycy-linux-x64" {
 		t.Fatalf("resolution = %#v", got)
 	}
 }
@@ -122,7 +122,7 @@ func TestResolveReleaseFallsBackToChecksumManifest(t *testing.T) {
 		GOOS:            "windows",
 		GOARCH:          "arm64",
 	})
-	if err != nil || got.ExpectedHash != strings.Repeat("c", 64) {
+	if err != nil || got.ExpectedHash != strings.Repeat("c", 64) || got.ChecksumSource != ChecksumManifestFile {
 		t.Fatalf("resolution = %#v, %v", got, err)
 	}
 }

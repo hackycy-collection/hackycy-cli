@@ -19,6 +19,8 @@ func runDiff(options *Options) error {
 	}
 	module, err := New(Dependencies{
 		NetworkInterfaces: options.NetworkInterfaces,
+		Logger:            options.Logger,
+		Now:               options.Now,
 	})
 	if err != nil {
 		return err
@@ -33,9 +35,9 @@ func runDiff(options *Options) error {
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
 	if err := run.Result(terminalDiffStartupDocument(operation.Startup)); err != nil {
-		_ = operation.Close()
-		return err
+		return errors.Join(err, operation.session.startupOutputFailure())
 	}
+	operation.session.lifecycle.commitStartup()
 	return operation.Wait(options.Context)
 }
 

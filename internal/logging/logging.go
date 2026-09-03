@@ -252,10 +252,40 @@ func charmLogLevel(level Level) slog.Level {
 }
 
 func textMessage(record diagnosticRecord) string {
-	if len(record.context) == 0 {
-		return record.message
+	message := record.message
+	if symbol := lifecycleSymbol(record.scope, record.message, record.level); symbol != "" {
+		message = symbol + "  " + message
 	}
-	return record.message + " " + marshalContext(record.context)
+	if len(record.context) == 0 {
+		return message
+	}
+	return message + " " + marshalContext(record.context)
+}
+
+func lifecycleSymbol(scope, message string, level Level) string {
+	if scope != "diff" && scope != "fs" {
+		return ""
+	}
+	if level == Warn {
+		return "!"
+	}
+	if level == Error {
+		return "✕"
+	}
+	switch message {
+	case "Directory diff started", "Diff endpoints available", "Comparison workspace configured", "Initial comparison refresh started", "Comparison refresh started",
+		"File Browser started", "Browse root configured", "File Browser capabilities configured", "File Browser authentication configured",
+		"File Browser stopping", "Download task accepted", "Download task started", "Extraction task accepted", "Extraction task started", "Chunked upload started":
+		return "●"
+	case "Comparison refresh phase":
+		return "·"
+	case "Comparison snapshot ready", "Directory diff stopped", "File Browser stopped", "Download task completed", "Extraction task completed", "Chunked upload completed":
+		return "✓"
+	case "Comparison refresh cancelled", "Download task cancelled", "Extraction task cancelled", "Chunked upload cancelled", "Chunked upload expired":
+		return "⊘"
+	default:
+		return ""
+	}
 }
 
 func renderJSONRecord(record diagnosticRecord) string {

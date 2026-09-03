@@ -3,11 +3,59 @@ package env
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 )
+
+func TestModuleObservedExportPhasesAndSafeResult(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, ".env"), []byte("SECRET=do-not-project\nBASE=base\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".env.production"), []byte("VALUE=production\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	module, err := New(Dependencies{
+		WorkingDirectory: func() (string, error) { return root, nil },
+		Selector:         &recordingSelector{},
+		Reader:           osReader{},
+		Writer:           osWriter{},
+		Presenter:        &recordingPresenter{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var phases []string
+	var selectedSource string
+	observer := &runObserver{
+		phase: func(id, _ string, state terminalPhaseState, _ string) {
+			phases = append(phases, id+":"+fmt.Sprint(state))
+		},
+		selected: func(_ Selection, source string, _ bool) { selectedSource = source },
+	}
+	result, err := module.run(context.Background(), Input{Merge: true}, observer)
+	if err != nil || result.Cancelled {
+		t.Fatalf("run = (%#v, %v)", result, err)
+	}
+	want := []string{
+		"resolve-directory:0", "resolve-directory:1",
+		"discover-environment-files:0", "discover-environment-files:1",
+		"read-selected-files:0", "read-selected-files:1",
+		"parse-and-merge-values:0", "parse-and-merge-values:1",
+		"encode-json:0", "encode-json:1",
+	}
+	// The final write phase is absent because this invocation targets stdout.
+	if !reflect.DeepEqual(phases, want) {
+		t.Fatalf("phases = %#v, want %#v", phases, want)
+	}
+	if observer.output == "" || selectedSource != "unique candidate" {
+		t.Fatalf("observer output/source = (%q, %q)", observer.output, selectedSource)
+	}
+}
 
 func TestModuleExportsNamedEnvironmentToStdout(t *testing.T) {
 	workingDirectory := t.TempDir()
@@ -103,6 +151,9 @@ func TestModuleWritesOutputFromWorkingDirectoryAndOverwrites(t *testing.T) {
 func TestModuleReportsCancellationWithoutReadingOrWriting(t *testing.T) {
 	workingDirectory := t.TempDir()
 	if err := os.WriteFile(filepath.Join(workingDirectory, ".env.production"), []byte("VALUE=production\n"), 0o600); err != nil {
+		t.Fatalf("write environment file: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(workingDirectory, ".env.local"), []byte("VALUE=local\n"), 0o600); err != nil {
 		t.Fatalf("write environment file: %v", err)
 	}
 	selector := &recordingSelector{cancel: true}

@@ -3,7 +3,6 @@ package test
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/http"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
@@ -42,42 +41,6 @@ func NewCmdTest(factory *cmdutil.Factory, runF func(*Options) error) *cobra.Comm
 			return store, nil
 		}, HTTP: factory.HTTPClient, Terminal: factory.Terminal})
 	}}
-}
-
-func runTest(options *Options) error {
-	if options == nil || options.Store == nil || options.HTTP == nil || options.Terminal == nil {
-		return errors.New("config cm test options are incomplete")
-	}
-	resolver, err := options.Store()
-	if err != nil {
-		return err
-	}
-	module, err := NewTest(TestDependencies{Resolver: resolver, Transport: options.HTTP})
-	if err != nil {
-		return err
-	}
-	result, runErr := module.Run(options.Context, TestRequest{Profile: options.Profile})
-	if result.Content != "" || result.Diagnostic != nil {
-		run := options.Terminal.Open(options.Context)
-		defer run.Close()
-		if err := run.Result(terminalCMTestDocument(result)); err != nil {
-			return err
-		}
-	}
-	return runErr
-}
-
-func terminalCMTestDocument(result TestResult) terminalexperience.PresentationDocument {
-	if result.Diagnostic != nil {
-		document := terminalCMTestFailureDocument(*result.Diagnostic, terminalexperience.VisualRoleMuted)
-		document.Blocks = append([]terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleTitle, Text: "Commit message provider test"}, {Role: terminalexperience.VisualRoleWarning, Text: "Provider request failed"}}, document.Blocks...)
-		return document
-	}
-	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleTitle, Text: "Commit message provider test"}, {Role: terminalexperience.VisualRolePlain, Text: "Response:\n" + result.Content}, {Role: terminalexperience.VisualRoleSuccess, Text: "Done"}}}
-}
-
-func terminalCMTestFailureDocument(diagnostic TestDiagnostic, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
-	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: fmt.Sprintf("Provider: %s\nBase URL: %s\nModel: %s", diagnostic.Provider, diagnostic.BaseURL, diagnostic.Model)}}}
 }
 
 var _ TestProfileResolver = (*appconfig.Store)(nil)

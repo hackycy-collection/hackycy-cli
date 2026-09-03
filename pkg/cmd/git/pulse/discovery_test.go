@@ -104,6 +104,28 @@ func TestScanRepositoriesSkipsUnreadableDirectoriesAndContinues(t *testing.T) {
 	}
 }
 
+func TestScanRepositoryDetailsRetainsUnreadableChildPathsWithoutChangingDiscovery(t *testing.T) {
+	root := t.TempDir()
+	unreadable := filepath.Join(root, "unreadable")
+	visible := filepath.Join(root, "visible")
+	makePulseDirectory(t, filepath.Join(unreadable, ".git"))
+	makePulseDirectory(t, filepath.Join(visible, ".git"))
+
+	reader := directoryReaderFunc(func(path string) ([]os.DirEntry, error) {
+		if path == unreadable {
+			return nil, errors.New("permission denied")
+		}
+		return os.ReadDir(path)
+	})
+	result, err := ScanRepositoryDetails(context.Background(), root, reader, nil, nil)
+	if err != nil {
+		t.Fatalf("ScanRepositoryDetails() error = %v", err)
+	}
+	if !reflect.DeepEqual(result.Repositories, []string{visible}) || !reflect.DeepEqual(result.UnreadableDirectories, []string{unreadable}) {
+		t.Fatalf("details = %#v", result)
+	}
+}
+
 func TestScanRepositoriesYieldsAfterEachFullScanBatch(t *testing.T) {
 	root := t.TempDir()
 	for index := range scanYieldEvery {

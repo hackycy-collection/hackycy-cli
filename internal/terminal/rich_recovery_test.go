@@ -12,10 +12,12 @@ import (
 func TestRuntimeRecoversStoppedRichRendererAndBlocksReplay(t *testing.T) {
 	rendererErr := errors.New("renderer failed")
 	var diagnostics bytes.Buffer
+	var output bytes.Buffer
 	runtime := NewExperience(ExperienceOptions{
 		Capabilities: Capabilities{Interaction: RichInteractive},
 		Diagnostics:  &diagnostics,
 		Input:        strings.NewReader("unexpected input\n"),
+		Output:       &output,
 	})
 	run := runtime.Open(context.Background()).(*runtimeRun)
 	run.ledger.Append(TranscriptEvent{Kind: TranscriptMilestone, Text: "safe checkpoint"})
@@ -54,6 +56,12 @@ func TestRuntimeRecoversStoppedRichRendererAndBlocksReplay(t *testing.T) {
 	}
 	if got := diagnostics.String(); strings.Contains(got, "unused") || strings.Contains(got, "result") {
 		t.Fatalf("recovery emitted repeated semantic work: %q", got)
+	}
+	if got, want := output.String(), "result\n"; got != want {
+		t.Fatalf("Finish() fallback result = %q, want %q", got, want)
+	}
+	if err := run.Finish(Failed, &PresentationDocument{Blocks: []PresentationBlock{{Text: "retry"}}}); !errors.Is(err, ErrExperienceRunFinished) {
+		t.Fatalf("second Finish() after renderer failure = %v, want finished run", err)
 	}
 	if err := run.Close(); err != nil {
 		t.Fatalf("Close() after recovery = %v", err)

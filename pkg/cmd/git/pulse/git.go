@@ -3,6 +3,7 @@ package pulse
 import (
 	"context"
 	"errors"
+	"sort"
 	"strings"
 )
 
@@ -31,8 +32,9 @@ type Commit struct {
 // FetchResult retains the otherwise silent repository inspection failures.
 // They remain separate from commits so the caller can preserve legacy no-result behavior.
 type FetchResult struct {
-	Commits            []Commit
-	FailedRepositories int
+	Commits               []Commit
+	FailedRepositories    int
+	FailedRepositoryPaths []string
 }
 
 // FetchCommits reads the selected range from each repository with the legacy five-child limit.
@@ -78,6 +80,7 @@ func FetchCommits(ctx context.Context, runner GitRunner, repositories []string, 
 		completed++
 		if response.failed {
 			result.FailedRepositories++
+			result.FailedRepositoryPaths = append(result.FailedRepositoryPaths, response.repository)
 			if cancellationOutcome == nil && isPulseExitCodedError(response.err) {
 				cancellationOutcome = response.err
 			}
@@ -88,6 +91,7 @@ func FetchCommits(ctx context.Context, runner GitRunner, repositories []string, 
 			onProgress(response.repository, completed)
 		}
 	}
+	sort.Strings(result.FailedRepositoryPaths)
 
 	if err := ctx.Err(); err != nil {
 		if cancellationOutcome != nil {

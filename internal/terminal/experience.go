@@ -18,6 +18,10 @@ var (
 	ErrExperienceRunFinished = errors.New("terminal experience run has emitted its result")
 	// ErrInvalidFinishOutcome reports a completion request outside the semantic contract.
 	ErrInvalidFinishOutcome = errors.New("terminal finish outcome is invalid")
+	// ErrInvalidResultCheckpoint reports a checkpoint without a stable ID.
+	ErrInvalidResultCheckpoint = errors.New("terminal result checkpoint ID is invalid")
+	// ErrResultCheckpointEmitted reports an attempt to write the same checkpoint twice.
+	ErrResultCheckpointEmitted = errors.New("terminal result checkpoint was already emitted")
 )
 
 // ExperienceOptions supplies terminal-owned dependencies for one invocation.
@@ -86,7 +90,8 @@ func (runtime *Runtime) Open(ctx context.Context) ExperienceRun {
 			Input:        runtime.input,
 			Diagnostics:  runtime.diagnostics,
 		}),
-		ledger: NewTranscriptLedger(runtime.transcriptOptions),
+		ledger:      NewTranscriptLedger(runtime.transcriptOptions),
+		checkpoints: make(map[string]struct{}),
 	}
 }
 
@@ -107,6 +112,7 @@ type runtimeRun struct {
 	richFailure      error
 	controller       *richController
 	ledger           *TranscriptLedger
+	checkpoints      map[string]struct{}
 }
 
 type runState uint8
@@ -251,9 +257,6 @@ func (run *runtimeRun) Finish(outcome FinishOutcome, document *PresentationDocum
 	if run.state == runFinished {
 		return ErrExperienceRunFinished
 	}
-	if run.richFailure != nil {
-		return run.richFailure
-	}
 	if !outcome.valid() {
 		return ErrInvalidFinishOutcome
 	}
@@ -264,9 +267,41 @@ func (run *runtimeRun) Finish(outcome FinishOutcome, document *PresentationDocum
 	run.freezeTranscript()
 	restoreErr := run.stopRich()
 	if document == nil {
-		return restoreErr
+		return errors.Join(run.richFailure, restoreErr)
 	}
-	return errors.Join(restoreErr, run.writeResult(*document))
+	return errors.Join(run.richFailure, restoreErr, run.writeResult(*document))
+}
+
+// ResultCheckpoint writes one stable service-command checkpoint while leaving
+// the run active for later checkpoints and shutdown cleanup.
+func (run *runtimeRun) ResultCheckpoint(id string, document PresentationDocument) error {
+	run.operation.Lock()
+	defer run.operation.Unlock()
+	if run.state == runClosed {
+		return ErrExperienceRunClosed
+	}
+	if run.state == runFinished {
+		return ErrExperienceRunFinished
+	}
+	if strings.TrimSpace(id) == "" {
+		return ErrInvalidResultCheckpoint
+	}
+	if run.checkpoints == nil {
+		run.checkpoints = make(map[string]struct{})
+	}
+	if _, emitted := run.checkpoints[id]; emitted {
+		return ErrResultCheckpointEmitted
+	}
+	if run.richFailure != nil {
+		return run.richFailure
+	}
+	run.checkpoints[id] = struct{}{}
+	if err := run.writeResult(document); err != nil {
+		// The checkpoint is intentionally not retried. Keep the ID consumed so
+		// a caller cannot turn a write failure into duplicate durable output.
+		return err
+	}
+	return nil
 }
 
 // Result is the compatibility durable-result operation used by un-migrated commands.

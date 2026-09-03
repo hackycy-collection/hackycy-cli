@@ -5,16 +5,27 @@ import (
 	"errors"
 	"net/http"
 	"sync"
+	"time"
 )
 
+var ErrRefreshStopped = errors.New("the comparison service is stopping")
+
 type refreshCoordinator struct {
-	workspace *Workspace
-	mu        sync.Mutex
-	active    *RefreshRun
+	workspace   *Workspace
+	lifecycle   *diffLifecycle
+	mu          sync.Mutex
+	active      *RefreshRun
+	lastStarted *RefreshRun
+	nextOrdinal int
+	accepting   bool
 }
 
-func newRefreshCoordinator(workspace *Workspace) *refreshCoordinator {
-	return &refreshCoordinator{workspace: workspace}
+func newRefreshCoordinator(workspace *Workspace, lifecycles ...*diffLifecycle) *refreshCoordinator {
+	var lifecycle *diffLifecycle
+	if len(lifecycles) > 0 {
+		lifecycle = lifecycles[0]
+	}
+	return &refreshCoordinator{workspace: workspace, lifecycle: lifecycle, accepting: true}
 }
 
 func (handler *diffHTTPHandler) serveRefresh(writer http.ResponseWriter, request *http.Request) {
@@ -58,7 +69,7 @@ func isHTTPRefreshOriginAllowed(request *http.Request) bool {
 }
 
 func (handler *diffHTTPHandler) startHTTPRefresh() error {
-	return handler.refresh.Start()
+	return handler.refresh.StartSource("rest")
 }
 
 func (handler *diffHTTPHandler) cancelHTTPRefresh() {
@@ -66,30 +77,89 @@ func (handler *diffHTTPHandler) cancelHTTPRefresh() {
 }
 
 func (coordinator *refreshCoordinator) Start() error {
+	return coordinator.StartSource("rest")
+}
+
+func (coordinator *refreshCoordinator) StartInitial() error {
+	return coordinator.StartSource("initial")
+}
+
+func (coordinator *refreshCoordinator) StartSource(source string) error {
 	coordinator.mu.Lock()
-	defer coordinator.mu.Unlock()
+	if !coordinator.accepting {
+		coordinator.mu.Unlock()
+		return ErrRefreshStopped
+	}
 	if coordinator.active != nil {
+		coordinator.mu.Unlock()
 		return ErrRefreshActive
 	}
-	run, err := coordinator.workspace.StartRefresh(context.Background())
+	if source == "" {
+		source = "rest"
+	}
+	source = sanitizeDiffField(source)
+	if source == "" {
+		source = "rest"
+	}
+	attempt := &diffRefreshAttempt{
+		lifecycle:          coordinator.lifecycle,
+		ordinal:            coordinator.nextOrdinal + 1,
+		source:             source,
+		startedAt:          coordinator.lifecycleNow(),
+		phaseSeen:          make(map[WorkspacePhase]bool),
+		previousSnapshotID: coordinator.workspace.publishedSnapshotID(),
+	}
+	run, err := coordinator.workspace.startRefresh(context.Background(), attempt)
 	if err != nil {
+		coordinator.mu.Unlock()
 		return err
 	}
+	coordinator.nextOrdinal = attempt.ordinal
 	coordinator.active = run
+	coordinator.lastStarted = run
 	go coordinator.clear(run)
+	coordinator.mu.Unlock()
+	if coordinator.lifecycle != nil {
+		coordinator.lifecycle.attemptStarted(attempt, run)
+	}
 	return nil
 }
 
 func (coordinator *refreshCoordinator) Cancel() {
+	coordinator.CancelSource("rest")
+}
+
+func (coordinator *refreshCoordinator) CancelSource(source string) {
 	coordinator.mu.Lock()
 	run := coordinator.active
 	coordinator.mu.Unlock()
 	if run != nil {
+		if run.attempt != nil {
+			run.attempt.markCancellation(source, false)
+		}
 		run.Cancel()
 	}
 }
 
 func (coordinator *refreshCoordinator) CancelAndWait() {
+	coordinator.StopAndCancel()
+	coordinator.waitActive()
+}
+
+func (coordinator *refreshCoordinator) StopAndCancel() {
+	coordinator.mu.Lock()
+	coordinator.accepting = false
+	run := coordinator.active
+	coordinator.mu.Unlock()
+	if run != nil {
+		if run.attempt != nil {
+			run.attempt.markCancellation("shutdown", true)
+		}
+		run.Cancel()
+	}
+}
+
+func (coordinator *refreshCoordinator) waitActive() {
 	coordinator.mu.Lock()
 	run := coordinator.active
 	coordinator.mu.Unlock()
@@ -98,6 +168,13 @@ func (coordinator *refreshCoordinator) CancelAndWait() {
 	}
 	run.Cancel()
 	_, _ = run.Wait(context.Background())
+}
+
+func (coordinator *refreshCoordinator) lifecycleNow() time.Time {
+	if coordinator.lifecycle == nil || coordinator.lifecycle.now == nil {
+		return time.Now()
+	}
+	return coordinator.lifecycle.now()
 }
 
 func (coordinator *refreshCoordinator) clear(run *RefreshRun) {

@@ -175,6 +175,9 @@ type ExperienceRun interface {
 	Notice(PresentationDocument) error
 	Milestone(PresentationDocument) error
 	Finish(FinishOutcome, *PresentationDocument) error
+	// ResultCheckpoint writes one identified service-command result without
+	// closing the run or entering the interaction transcript.
+	ResultCheckpoint(string, PresentationDocument) error
 	// Result remains for command adapters that have not yet migrated to Finish.
 	Result(PresentationDocument) error
 	Close() error

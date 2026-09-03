@@ -70,11 +70,10 @@ func TestSelectUsesBaseWithoutPromptWhenItIsTheOnlyChoice(t *testing.T) {
 	}
 }
 
-func TestSelectPromptsForOneEnvironmentWithoutBase(t *testing.T) {
+func TestSelectUsesOneEnvironmentWithoutBaseWithoutPrompt(t *testing.T) {
 	discovery := Discovery{Directory: "/project", EnvironmentFiles: []string{".env.production"}}
-	selector := &recordingSelector{value: ".env.production"}
 
-	got, err := Select(discovery, SelectionOptions{}, selector)
+	got, err := Select(discovery, SelectionOptions{}, nil)
 
 	if err != nil {
 		t.Fatalf("Select returned an error: %v", err)
@@ -82,9 +81,6 @@ func TestSelectPromptsForOneEnvironmentWithoutBase(t *testing.T) {
 	want := Selection{Files: []string{".env.production"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("Select() = %#v, want %#v", got, want)
-	}
-	if !reflect.DeepEqual(selector.choices, []EnvironmentChoice{{Value: ".env.production", Label: "production"}}) {
-		t.Fatalf("selector choices = %#v", selector.choices)
 	}
 }
 

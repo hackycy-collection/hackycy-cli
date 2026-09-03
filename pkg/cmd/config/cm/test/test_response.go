@@ -19,11 +19,10 @@ type cmTestTokenUsage struct {
 }
 
 func decodeCMTestProviderResponse(body []byte) (cmTestProviderResult, error) {
-	raw := string(body)
 	var decoded any = map[string]any{}
 	if len(body) > 0 {
 		if err := json.Unmarshal(body, &decoded); err != nil {
-			return cmTestProviderResult{}, fmt.Errorf("decode CM test provider response: %w", err)
+			return cmTestProviderResult{}, newCMTestProviderError(cmTestProviderFailureDecode, "Unable to decode CM test provider response", err)
 		}
 	}
 
@@ -37,7 +36,7 @@ func decodeCMTestProviderResponse(body []byte) (cmTestProviderResult, error) {
 	content, _ := message["content"].(string)
 	content = strings.TrimSpace(content)
 	if content == "" {
-		return cmTestProviderResult{}, fmt.Errorf("Provider returned an empty response (finish_reason=%s, response=%s)", cmTestFinishReason(choice), cmTestResponseSummary(raw))
+		return cmTestProviderResult{}, newCMTestProviderError(cmTestProviderFailureEmpty, fmt.Sprintf("Provider returned an empty response (finish_reason=%s)", safeCMTestStatus(cmTestFinishReason(choice))), nil)
 	}
 	return cmTestProviderResult{Content: content, Usage: normalizeCMTestUsage(payload["usage"])}, nil
 }
@@ -47,9 +46,9 @@ func normalizeCMTestUsage(value any) *cmTestTokenUsage {
 	if !ok {
 		return nil
 	}
-	promptTokens, hasPromptTokens := cmTestFiniteNumber(usage["prompt_tokens"])
-	completionTokens, hasCompletionTokens := cmTestFiniteNumber(usage["completion_tokens"])
-	totalTokens, hasTotalTokens := cmTestFiniteNumber(usage["total_tokens"])
+	promptTokens, hasPromptTokens := cmTestUsageNumber(usage["prompt_tokens"])
+	completionTokens, hasCompletionTokens := cmTestUsageNumber(usage["completion_tokens"])
+	totalTokens, hasTotalTokens := cmTestUsageNumber(usage["total_tokens"])
 	if !hasTotalTokens && hasPromptTokens && hasCompletionTokens {
 		totalTokens = promptTokens + completionTokens
 		hasTotalTokens = true
@@ -75,21 +74,14 @@ func cmTestFiniteNumber(value any) (float64, bool) {
 	return number, ok && !math.IsInf(number, 0) && !math.IsNaN(number)
 }
 
+func cmTestUsageNumber(value any) (float64, bool) {
+	number, ok := cmTestFiniteNumber(value)
+	return number, ok && number >= 0 && math.Trunc(number) == number
+}
+
 func cmTestFinishReason(choice map[string]any) string {
 	if reason, found := choice["finish_reason"]; found && reason != nil {
 		return fmt.Sprint(reason)
 	}
 	return "unknown"
-}
-
-func cmTestResponseSummary(value string) string {
-	const limit = 500
-	if value == "" {
-		return "<empty body>"
-	}
-	trimmed := strings.TrimSpace(value)
-	if len(trimmed) <= limit {
-		return trimmed
-	}
-	return trimmed[:limit] + "\u2026"
 }

@@ -44,8 +44,9 @@ type comparisonRoot struct {
 }
 
 type RefreshRun struct {
-	cancel context.CancelFunc
-	done   chan struct{}
+	cancel  context.CancelFunc
+	done    chan struct{}
+	attempt *diffRefreshAttempt
 
 	mu       sync.RWMutex
 	snapshot *Snapshot
@@ -372,6 +373,15 @@ func (workspace *Workspace) Snapshot(ids ...string) *Snapshot {
 	return workspace.published
 }
 
+func (workspace *Workspace) publishedSnapshotID() string {
+	workspace.mu.RLock()
+	defer workspace.mu.RUnlock()
+	if workspace.published == nil {
+		return ""
+	}
+	return workspace.published.summary.ID
+}
+
 func (workspace *Workspace) Subscribe(listener func(WorkspaceState)) func() {
 	workspace.mu.Lock()
 	id := workspace.nextListener
@@ -388,11 +398,15 @@ func (workspace *Workspace) Subscribe(listener func(WorkspaceState)) func() {
 }
 
 func (workspace *Workspace) StartRefresh(parent context.Context) (*RefreshRun, error) {
+	return workspace.startRefresh(parent, nil)
+}
+
+func (workspace *Workspace) startRefresh(parent context.Context, attempt *diffRefreshAttempt) (*RefreshRun, error) {
 	if parent == nil {
 		parent = context.Background()
 	}
 	ctx, cancel := context.WithCancel(parent)
-	run := &RefreshRun{cancel: cancel, done: make(chan struct{})}
+	run := &RefreshRun{cancel: cancel, done: make(chan struct{}), attempt: attempt}
 
 	workspace.mu.Lock()
 	if workspace.active != nil {
@@ -407,6 +421,9 @@ func (workspace *Workspace) StartRefresh(parent context.Context) (*RefreshRun, e
 	})
 	workspace.mu.Unlock()
 	workspace.notify(listeners, state)
+	if run.attempt != nil && run.attempt.lifecycle != nil {
+		run.attempt.lifecycle.state(run, state)
+	}
 
 	go workspace.runRefresh(ctx, run)
 	return run, nil
@@ -414,6 +431,24 @@ func (workspace *Workspace) StartRefresh(parent context.Context) (*RefreshRun, e
 
 func (run *RefreshRun) Cancel() {
 	run.cancel()
+}
+
+func (run *RefreshRun) snapshotValue() *Snapshot {
+	if run == nil {
+		return nil
+	}
+	run.mu.RLock()
+	defer run.mu.RUnlock()
+	return run.snapshot
+}
+
+func (run *RefreshRun) errorValue() error {
+	if run == nil {
+		return nil
+	}
+	run.mu.RLock()
+	defer run.mu.RUnlock()
+	return run.err
 }
 
 func (run *RefreshRun) Wait(ctx context.Context) (*Snapshot, error) {
@@ -431,7 +466,7 @@ func (run *RefreshRun) Wait(ctx context.Context) (*Snapshot, error) {
 }
 
 func (workspace *Workspace) runRefresh(ctx context.Context, run *RefreshRun) {
-	snapshot, err := workspace.buildSnapshot(ctx)
+	snapshot, err := workspace.buildSnapshot(ctx, run)
 	if err == nil && ctx.Err() != nil {
 		snapshot = nil
 		err = ctx.Err()
@@ -464,10 +499,13 @@ func (workspace *Workspace) runRefresh(ctx context.Context, run *RefreshRun) {
 	run.snapshot = snapshot
 	run.err = err
 	run.mu.Unlock()
+	if run.attempt != nil && run.attempt.lifecycle != nil {
+		run.attempt.lifecycle.state(run, state)
+	}
 	close(run.done)
 }
 
-func (workspace *Workspace) buildSnapshot(ctx context.Context) (*Snapshot, error) {
+func (workspace *Workspace) buildSnapshot(ctx context.Context, run *RefreshRun) (*Snapshot, error) {
 	if err := workspace.assertFixedRoots(); err != nil {
 		return nil, err
 	}
@@ -478,8 +516,8 @@ func (workspace *Workspace) buildSnapshot(ctx context.Context) (*Snapshot, error
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	workspace.publishState(WorkspaceState{Phase: PhaseDiscovering, Progress: &WorkspaceProgress{Issues: len(ignoreDiscovery.issues)}})
-	baselineDiscovery, targetDiscovery := workspace.discover(ctx, ignoreDiscovery)
+	workspace.publishStateForRun(run, WorkspaceState{Phase: PhaseDiscovering, Progress: &WorkspaceProgress{Issues: len(ignoreDiscovery.issues)}})
+	baselineDiscovery, targetDiscovery := workspace.discover(ctx, ignoreDiscovery, run)
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -494,6 +532,9 @@ func (workspace *Workspace) buildSnapshot(ctx context.Context) (*Snapshot, error
 	paths := unionComparisonPaths(baselineDiscovery.entries, targetDiscovery.entries, issues)
 	totalEntries := len(paths)
 	progress := WorkspaceProgress{TotalEntries: &totalEntries, Issues: len(issues)}
+	if discovered := workspace.State().Progress; discovered != nil {
+		progress.DiscoveredEntries = discovered.DiscoveredEntries
+	}
 	for _, comparisonPath := range paths {
 		baseline := baselineDiscovery.entries[comparisonPath]
 		target := targetDiscovery.entries[comparisonPath]
@@ -501,7 +542,7 @@ func (workspace *Workspace) buildSnapshot(ctx context.Context) (*Snapshot, error
 			progress.TotalBytes = int64Pointer(valueOrZero(progress.TotalBytes) + baseline.state.Size)
 		}
 	}
-	workspace.publishState(WorkspaceState{Phase: PhaseComparing, Progress: &progress})
+	workspace.publishStateForRun(run, WorkspaceState{Phase: PhaseComparing, Progress: &progress})
 
 	entries := make([]snapshotEntry, 0, len(paths))
 	for index, comparisonPath := range paths {
@@ -514,7 +555,7 @@ func (workspace *Workspace) buildSnapshot(ctx context.Context) (*Snapshot, error
 			entry.Message = message
 			entries = append(entries, entry)
 			progress.ComparedEntries++
-			workspace.publishState(WorkspaceState{Phase: PhaseComparing, Progress: &progress})
+			workspace.publishStateForRun(run, WorkspaceState{Phase: PhaseComparing, Progress: &progress})
 			continue
 		}
 
@@ -536,7 +577,7 @@ func (workspace *Workspace) buildSnapshot(ctx context.Context) (*Snapshot, error
 				entries = append(entries, entry)
 				progress.ComparedEntries++
 				progress.Issues++
-				workspace.publishState(WorkspaceState{Phase: PhaseComparing, Progress: &progress})
+				workspace.publishStateForRun(run, WorkspaceState{Phase: PhaseComparing, Progress: &progress})
 				continue
 			}
 			baseline = comparison.baseline
@@ -554,7 +595,7 @@ func (workspace *Workspace) buildSnapshot(ctx context.Context) (*Snapshot, error
 		entry.target = target
 		entries = append(entries, entry)
 		progress.ComparedEntries++
-		workspace.publishState(WorkspaceState{Phase: PhaseComparing, Progress: &progress})
+		workspace.publishStateForRun(run, WorkspaceState{Phase: PhaseComparing, Progress: &progress})
 	}
 
 	if err := workspace.assertFixedRoots(); err != nil {
@@ -600,7 +641,7 @@ func (workspace *Workspace) buildSnapshot(ctx context.Context) (*Snapshot, error
 	}
 	progress.Issues = issueCount
 	progress.TotalBytes = int64Pointer(progress.ComparedBytes)
-	workspace.publishState(WorkspaceState{Phase: PhasePublishing, Progress: &progress})
+	workspace.publishStateForRun(run, WorkspaceState{Phase: PhasePublishing, Progress: &progress})
 	tree, directorySearch := buildSnapshotTree(entries)
 	return &Snapshot{
 		summary: SnapshotSummary{
@@ -618,7 +659,7 @@ func (workspace *Workspace) buildSnapshot(ctx context.Context) (*Snapshot, error
 	}, nil
 }
 
-func (workspace *Workspace) discover(ctx context.Context, ignoreDiscovery targetIgnoreDiscovery) (discovery, discovery) {
+func (workspace *Workspace) discover(ctx context.Context, ignoreDiscovery targetIgnoreDiscovery, run *RefreshRun) (discovery, discovery) {
 	progress := workspace.State().Progress
 	baseline := discoverRoot(ctx, workspace.baseline, workspace.exclusions, ignoreDiscovery, func(issue bool) {
 		if progress == nil {
@@ -628,7 +669,7 @@ func (workspace *Workspace) discover(ctx context.Context, ignoreDiscovery target
 		if issue {
 			progress.Issues++
 		}
-		workspace.publishState(WorkspaceState{Phase: PhaseDiscovering, Progress: progress})
+		workspace.publishStateForRun(run, WorkspaceState{Phase: PhaseDiscovering, Progress: progress})
 	})
 	target := discoverRoot(ctx, workspace.target, workspace.exclusions, ignoreDiscovery, func(issue bool) {
 		if progress == nil {
@@ -638,7 +679,7 @@ func (workspace *Workspace) discover(ctx context.Context, ignoreDiscovery target
 		if issue {
 			progress.Issues++
 		}
-		workspace.publishState(WorkspaceState{Phase: PhaseDiscovering, Progress: progress})
+		workspace.publishStateForRun(run, WorkspaceState{Phase: PhaseDiscovering, Progress: progress})
 	})
 	return baseline, target
 }
@@ -964,10 +1005,17 @@ func resolveComparisonRoot(label, directory string) (comparisonRoot, error) {
 }
 
 func (workspace *Workspace) publishState(state WorkspaceState) {
+	workspace.publishStateForRun(nil, state)
+}
+
+func (workspace *Workspace) publishStateForRun(run *RefreshRun, state WorkspaceState) {
 	workspace.mu.Lock()
 	listeners, published := workspace.setStateLocked(state)
 	workspace.mu.Unlock()
 	workspace.notify(listeners, published)
+	if run != nil && run.attempt != nil && run.attempt.lifecycle != nil {
+		run.attempt.lifecycle.state(run, published)
+	}
 }
 
 func (workspace *Workspace) setStateLocked(state WorkspaceState) ([]func(WorkspaceState), WorkspaceState) {

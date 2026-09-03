@@ -48,6 +48,12 @@ func TestRuntimeFiltersAndRedacts(t *testing.T) {
 	}
 }
 
+func TestStripANSIRemovesStylingWithoutChangingText(t *testing.T) {
+	if got, want := StripANSI("one\x1b[31mtwo\x1b[0m\nthree\tend"), "onetwo\nthree\tend"; got != want {
+		t.Fatalf("StripANSI() = %q, want %q", got, want)
+	}
+}
+
 func TestRuntimeRoutesRedactedDiagnosticsOnlyToInjectedStderr(t *testing.T) {
 	streams := terminaltest.NewRedirectedStreams("")
 	runtime := NewRuntime(Options{

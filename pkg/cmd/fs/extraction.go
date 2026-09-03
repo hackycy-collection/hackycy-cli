@@ -26,7 +26,21 @@ type ExtractionTask struct {
 	FinishedAt        string `json:"finishedAt,omitempty"`
 	Error             string `json:"error,omitempty"`
 	cancel            context.CancelFunc
+	startedAt         time.Time
+	retryOf           string
+	cancelSource      string
+	lifecycleTerminal bool
 	order             uint64
+}
+
+// extractionLifecycleObserver receives only real Managed Task transitions.
+// It is private so the existing task HTTP representation stays unchanged.
+type extractionLifecycleObserver interface {
+	extractionAccepted(extractionLifecycleTask)
+	extractionStarted(extractionLifecycleTask)
+	extractionCompleted(extractionLifecycleTask)
+	extractionCancelled(extractionLifecycleTask)
+	extractionFailed(extractionLifecycleTask, error)
 }
 
 type ArchiveTaskExecutor func(context.Context, WorkspacePath, ArchiveExtractionOptions) (ArchiveExtractionResult, error)
@@ -40,6 +54,9 @@ type ExtractionManager struct {
 	nextOrder     uint64
 	closed        bool
 	subscriptions map[*taskSubscription[ExtractionTask]]struct{}
+	now           func() time.Time
+	observer      extractionLifecycleObserver
+	workers       sync.WaitGroup
 }
 
 func NewExtractionManager(workspace *Workspace, options ArchiveExtractionOptions) *ExtractionManager {
@@ -51,7 +68,24 @@ func NewExtractionManager(workspace *Workspace, options ArchiveExtractionOptions
 }
 
 func newExtractionManager(extract ArchiveTaskExecutor) *ExtractionManager {
-	return &ExtractionManager{extract: extract, tasks: make(map[string]*ExtractionTask), subscriptions: make(map[*taskSubscription[ExtractionTask]]struct{})}
+	return newExtractionManagerWithLifecycle(extract, time.Now, nil)
+}
+
+func newExtractionManagerWithLifecycle(extract ArchiveTaskExecutor, now func() time.Time, observer extractionLifecycleObserver) *ExtractionManager {
+	if now == nil {
+		now = time.Now
+	}
+	return &ExtractionManager{extract: extract, tasks: make(map[string]*ExtractionTask), subscriptions: make(map[*taskSubscription[ExtractionTask]]struct{}), now: now, observer: observer}
+}
+
+// setLifecycle installs the service observer before the listener is exposed.
+func (manager *ExtractionManager) setLifecycle(observer extractionLifecycleObserver, now func() time.Time) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.observer = observer
+	if now != nil {
+		manager.now = now
+	}
 }
 
 func (manager *ExtractionManager) List() []ExtractionTask {
@@ -103,6 +137,10 @@ func (manager *ExtractionManager) closeSubscriptionsLocked() {
 }
 
 func (manager *ExtractionManager) Enqueue(paths []string) ([]ExtractionTask, error) {
+	return manager.enqueue(paths, "")
+}
+
+func (manager *ExtractionManager) enqueue(paths []string, retryOf string) ([]ExtractionTask, error) {
 	parsed, err := validateExtractionPaths(paths)
 	if err != nil {
 		return nil, err
@@ -125,10 +163,11 @@ func (manager *ExtractionManager) Enqueue(paths []string) ([]ExtractionTask, err
 		if err != nil {
 			return nil, err
 		}
-		task := &ExtractionTask{ID: id, ArchivePath: path.String(), Status: "queued", CreatedAt: formatTaskTime(time.Now()), order: manager.nextOrder}
+		task := &ExtractionTask{ID: id, ArchivePath: path.String(), Status: "queued", CreatedAt: formatTaskTime(manager.now()), retryOf: retryOf, order: manager.nextOrder}
 		manager.nextOrder++
 		manager.tasks[id] = task
 		manager.queue = append(manager.queue, id)
+		manager.emitExtractionAcceptedLocked(task)
 		created = append(created, publicExtractionTask(task))
 	}
 	manager.pumpLocked()
@@ -144,12 +183,18 @@ func (manager *ExtractionManager) Cancel(id string) (ExtractionTask, error) {
 		return ExtractionTask{}, &ServiceError{Code: "EXTRACTION_NOT_FOUND", Message: "Extraction task was not found"}
 	}
 	if task.Status == "queued" {
-		task.Status, task.FinishedAt = "cancelled", formatTaskTime(time.Now())
+		task.Status, task.FinishedAt = "cancelled", formatTaskTime(manager.now())
+		task.cancelSource = "client"
 		manager.removeQueuedLocked(id)
+		manager.emitExtractionTerminalLocked(task, nil)
 		manager.pruneTerminalLocked(0)
 	} else if task.Status == "running" {
-		task.Status, task.FinishedAt = "cancelled", formatTaskTime(time.Now())
-		task.cancel()
+		task.Status, task.FinishedAt = "cancelled", formatTaskTime(manager.now())
+		task.cancelSource = "client"
+		if task.cancel != nil {
+			task.cancel()
+		}
+		manager.emitExtractionTerminalLocked(task, nil)
 		manager.pruneTerminalLocked(0)
 	}
 	manager.notifyLocked()
@@ -167,9 +212,9 @@ func (manager *ExtractionManager) Retry(id string) (ExtractionTask, error) {
 		manager.mu.Unlock()
 		return ExtractionTask{}, &ServiceError{Code: "EXTRACTION_ACTIVE", Message: "Only failed or cancelled extractions can be retried"}
 	}
-	path := task.ArchivePath
+	path, oldID := task.ArchivePath, task.ID
 	manager.mu.Unlock()
-	created, err := manager.Enqueue([]string{path})
+	created, err := manager.enqueue([]string{path}, oldID)
 	if err != nil {
 		return ExtractionTask{}, err
 	}
@@ -188,24 +233,41 @@ func (manager *ExtractionManager) ClearTerminal() {
 }
 
 func (manager *ExtractionManager) Close() {
+	_, _ = manager.closeWithStats()
+}
+
+func (manager *ExtractionManager) closeWithStats() (queued, active int) {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
+	if manager.closed {
+		manager.mu.Unlock()
+		return 0, 0
+	}
 	manager.closed = true
+	manager.observer = nil
 	for _, id := range manager.queue {
 		if task := manager.tasks[id]; task != nil && task.Status == "queued" {
-			task.Status, task.FinishedAt = "cancelled", formatTaskTime(time.Now())
+			queued++
+			task.Status, task.FinishedAt = "cancelled", formatTaskTime(manager.now())
+			task.cancelSource = "shutdown"
 		}
 	}
 	manager.queue = nil
 	for _, task := range manager.tasks {
 		if task.Status == "running" {
-			task.Status, task.FinishedAt = "cancelled", formatTaskTime(time.Now())
-			task.cancel()
+			active++
+			task.Status, task.FinishedAt = "cancelled", formatTaskTime(manager.now())
+			task.cancelSource = "shutdown"
+			if task.cancel != nil {
+				task.cancel()
+			}
 		}
 	}
 	manager.pruneTerminalLocked(0)
 	manager.notifyLocked()
 	manager.closeSubscriptionsLocked()
+	manager.mu.Unlock()
+	manager.workers.Wait()
+	return queued, active
 }
 
 func (manager *ExtractionManager) pumpLocked() {
@@ -221,14 +283,18 @@ func (manager *ExtractionManager) pumpLocked() {
 		}
 		ctx, cancel := context.WithCancel(context.Background())
 		task.cancel = cancel
-		task.Status, task.StartedAt = "running", formatTaskTime(time.Now())
+		task.startedAt = manager.now()
+		task.Status, task.StartedAt = "running", formatTaskTime(task.startedAt)
+		manager.emitExtractionStartedLocked(task)
 		manager.active = true
+		manager.workers.Add(1)
 		go manager.run(ctx, task)
 		return
 	}
 }
 
 func (manager *ExtractionManager) run(ctx context.Context, task *ExtractionTask) {
+	defer manager.workers.Done()
 	path, err := ParseWorkspacePath(task.ArchivePath)
 	var result ArchiveExtractionResult
 	if err == nil {
@@ -243,6 +309,9 @@ func (manager *ExtractionManager) run(ctx context.Context, task *ExtractionTask)
 	task.cancel = nil
 	if task.Status == "cancelled" || ctx.Err() != nil {
 		task.Status = "cancelled"
+		if task.cancelSource == "" {
+			task.cancelSource = "client"
+		}
 	} else if err != nil {
 		task.Status, task.Error = "error", err.Error()
 	} else {
@@ -251,10 +320,73 @@ func (manager *ExtractionManager) run(ctx context.Context, task *ExtractionTask)
 		bytes, entries := result.Inspection.UncompressedBytes, result.Inspection.EntryCount
 		task.UncompressedBytes, task.EntryCount = &bytes, &entries
 	}
-	task.FinishedAt = formatTaskTime(time.Now())
+	task.FinishedAt = formatTaskTime(manager.now())
+	manager.emitExtractionTerminalLocked(task, err)
 	manager.pruneTerminalLocked(0)
 	manager.pumpLocked()
 	manager.notifyLocked()
+}
+
+func (manager *ExtractionManager) lifecycleSnapshot() fsShutdownSnapshot {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	snapshot := fsShutdownSnapshot{}
+	for _, task := range manager.tasks {
+		switch task.Status {
+		case "queued":
+			snapshot.QueuedExtractions++
+		case "running":
+			snapshot.ActiveExtractions++
+		}
+	}
+	return snapshot
+}
+
+func (manager *ExtractionManager) extractionLifecycleSnapshotLocked(task *ExtractionTask) extractionLifecycleTask {
+	if task == nil {
+		return extractionLifecycleTask{}
+	}
+	return extractionLifecycleTask{
+		ID:                task.ID,
+		ArchivePath:       task.ArchivePath,
+		DestinationPath:   task.DestinationPath,
+		Progress:          task.Progress,
+		UncompressedBytes: task.UncompressedBytes,
+		EntryCount:        task.EntryCount,
+		StartedAt:         task.startedAt,
+		RetryOf:           task.retryOf,
+	}
+}
+
+func (manager *ExtractionManager) emitExtractionAcceptedLocked(task *ExtractionTask) {
+	if manager.observer != nil {
+		manager.observer.extractionAccepted(manager.extractionLifecycleSnapshotLocked(task))
+	}
+}
+
+func (manager *ExtractionManager) emitExtractionStartedLocked(task *ExtractionTask) {
+	if manager.observer != nil {
+		manager.observer.extractionStarted(manager.extractionLifecycleSnapshotLocked(task))
+	}
+}
+
+func (manager *ExtractionManager) emitExtractionTerminalLocked(task *ExtractionTask, err error) {
+	if task == nil || task.lifecycleTerminal {
+		return
+	}
+	task.lifecycleTerminal = true
+	if manager.observer == nil {
+		return
+	}
+	snapshot := manager.extractionLifecycleSnapshotLocked(task)
+	switch task.Status {
+	case "done":
+		manager.observer.extractionCompleted(snapshot)
+	case "cancelled":
+		manager.observer.extractionCancelled(snapshot)
+	case "error":
+		manager.observer.extractionFailed(snapshot, err)
+	}
 }
 
 func (manager *ExtractionManager) updateProgress(task *ExtractionTask, value int) {
@@ -329,5 +461,9 @@ func terminalExtractionStatus(status string) bool {
 func publicExtractionTask(task *ExtractionTask) ExtractionTask {
 	result := *task
 	result.cancel = nil
+	result.startedAt = time.Time{}
+	result.retryOf = ""
+	result.cancelSource = ""
+	result.lifecycleTerminal = false
 	return result
 }

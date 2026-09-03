@@ -94,10 +94,21 @@ func (app *App) execute(invoke func() error) (outcome Outcome) {
 		if errors.Is(err, errHelpRequested) {
 			return Outcome{Code: 1, Err: err}
 		}
-		app.reportError(err)
+		if !alreadyReported(err) {
+			app.reportError(err)
+		}
 		return Outcome{Code: 1, Err: err}
 	}
 	return Outcome{}
+}
+
+type alreadyReportedError interface {
+	AlreadyReported() bool
+}
+
+func alreadyReported(err error) bool {
+	var reported alreadyReportedError
+	return errors.As(err, &reported) && reported.AlreadyReported()
 }
 
 type exitCodedError interface {

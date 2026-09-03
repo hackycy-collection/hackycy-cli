@@ -15,6 +15,7 @@ type Options struct {
 	Context        context.Context
 	Terminal       *terminal.Runtime
 	CurrentVersion string
+	run            func(context.Context, updater.UpgradeOptions) (updater.UpgradeResult, error)
 }
 
 // NewCmdUpgrade creates the Upgrade leaf with an optional test runner.
@@ -44,8 +45,29 @@ func runUpgrade(options *Options) error {
 	if options == nil || options.Terminal == nil {
 		return errors.New("upgrade options are incomplete")
 	}
-	result, err := updater.RunUpgrade(options.Context, updater.UpgradeOptions{
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	run := options.Terminal.Open(ctx)
+	defer run.Close()
+	if options.Terminal.Capabilities().Interaction == terminal.RichInteractive {
+		if err := run.Notice(terminalUpgradeIntroDocument()); err != nil {
+			return errors.Join(err, run.Finish(terminal.Failed, nil))
+		}
+	}
+	sink := newUpgradePhaseSink(run, options.Terminal.Capabilities(), cancel)
+	runner := options.run
+	if runner == nil {
+		runner = updater.RunUpgrade
+	}
+	result, resultErr := runner(ctx, updater.UpgradeOptions{
 		Resolver: updater.ReleaseResolverOptions{CurrentVersion: options.CurrentVersion},
+		Observer: sink.observer(),
 	})
-	return PresentResult(options.Context, options.Terminal, result, err)
+	sink.close()
+	resultErr = errors.Join(resultErr, sink.err())
+	return finishUpgradeRun(run, options.Terminal.DiagnosticWriter(), sink.previousDocument(), result, resultErr)
 }

@@ -13,6 +13,7 @@ type RunningServer struct {
 	listener   net.Listener
 	httpServer *http.Server
 	refresh    *refreshCoordinator
+	initialRun *RefreshRun
 	done       chan struct{}
 
 	mu       sync.RWMutex
@@ -24,7 +25,11 @@ type RunningServer struct {
 // StartServer binds the selected address, begins serving, and queues the first
 // asynchronous Workspace Refresh before returning.
 func StartServer(workspace *Workspace, bindingAddress string, port int) (*RunningServer, error) {
-	handler, err := newServerHandler(workspace, bindingAddress)
+	return startServerWithLifecycle(workspace, bindingAddress, port, nil)
+}
+
+func startServerWithLifecycle(workspace *Workspace, bindingAddress string, port int, lifecycle *diffLifecycle) (*RunningServer, error) {
+	handler, err := newServerHandlerWithLifecycle(workspace, bindingAddress, lifecycle)
 	if err != nil {
 		return nil, err
 	}
@@ -39,10 +44,13 @@ func StartServer(workspace *Workspace, bindingAddress string, port int) (*Runnin
 	}
 	running.httpServer = &http.Server{Handler: handler}
 	go running.serve()
-	if err := running.refresh.Start(); err != nil {
+	if err := running.refresh.StartInitial(); err != nil {
 		_ = running.Close()
 		return nil, err
 	}
+	running.refresh.mu.Lock()
+	running.initialRun = running.refresh.lastStarted
+	running.refresh.mu.Unlock()
 	return running, nil
 }
 
@@ -71,7 +79,7 @@ func (server *RunningServer) Port() int {
 // until the serving goroutine has stopped.
 func (server *RunningServer) Close() error {
 	server.close.Do(func() {
-		server.refresh.Cancel()
+		server.refresh.StopAndCancel()
 		server.mu.Lock()
 		server.closeErr = server.httpServer.Close()
 		server.mu.Unlock()

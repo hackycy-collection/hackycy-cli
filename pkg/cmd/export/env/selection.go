@@ -38,8 +38,13 @@ func Select(discovery Discovery, options SelectionOptions, selector EnvironmentS
 	if len(selectable) == 0 {
 		return Selection{Files: []string{discovery.BaseFile}}, nil
 	}
-	if len(selectable) == 1 && selectable[0] == discovery.BaseFile {
-		return Selection{Files: []string{discovery.BaseFile}}, nil
+	if len(selectable) == 1 {
+		files := make([]string, 0, 2)
+		if options.Merge && discovery.BaseFile != "" && selectable[0] != discovery.BaseFile {
+			files = append(files, discovery.BaseFile)
+		}
+		files = append(files, selectable[0])
+		return Selection{Files: files}, nil
 	}
 
 	choices := make([]EnvironmentChoice, 0, len(selectable))

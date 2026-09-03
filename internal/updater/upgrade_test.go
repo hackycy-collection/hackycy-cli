@@ -33,6 +33,7 @@ func TestRunUpgradeSchedulesOnlyVerifiedCandidate(t *testing.T) {
 	}
 	var spawnedPath string
 	var spawnedArgs []string
+	var phases []UpgradePhaseEvent
 	result, err := RunUpgrade(context.Background(), UpgradeOptions{
 		Resolver: ReleaseResolverOptions{LatestURL: server.URL + "/latest", DownloadBaseURL: server.URL + "/download", CurrentVersion: "1.0.0", GOOS: "linux", GOARCH: "amd64"},
 		Candidate: CandidateOptions{
@@ -52,6 +53,9 @@ func TestRunUpgradeSchedulesOnlyVerifiedCandidate(t *testing.T) {
 		TempDirectory: func() string { return directory },
 		PID:           func() int { return 123 },
 		Now:           func() time.Time { return time.Unix(1, 0) },
+		Observer: UpgradeObserver{Phase: func(event UpgradePhaseEvent) {
+			phases = append(phases, event)
+		}},
 	})
 	if err != nil || !result.Scheduled || result.ScheduledVersion != "2.0.0" {
 		t.Fatalf("run = %#v, %v", result, err)
@@ -66,6 +70,37 @@ func TestRunUpgradeSchedulesOnlyVerifiedCandidate(t *testing.T) {
 	assertPrivateUpgradePath(t, result.State.StagedPath, 0o755)
 	assertPrivateUpgradePath(t, spawnedPath, 0o755)
 	assertPrivateUpgradePath(t, state.StatePath, 0o600)
+	wantPhases := []UpgradePhaseEvent{
+		{Phase: UpgradePhaseConsumeStartupTransaction, State: UpgradePhaseActive},
+		{Phase: UpgradePhaseConsumeStartupTransaction, State: UpgradePhaseCompleted},
+		{Phase: UpgradePhaseResolveRelease, State: UpgradePhaseActive},
+		{Phase: UpgradePhaseResolveRelease, State: UpgradePhaseCompleted},
+		{Phase: UpgradePhaseResolveArtifact, State: UpgradePhaseActive},
+		{Phase: UpgradePhaseResolveArtifact, State: UpgradePhaseCompleted},
+		{Phase: UpgradePhaseDownloadCandidate, State: UpgradePhaseActive},
+		{Phase: UpgradePhaseDownloadCandidate, State: UpgradePhaseCompleted},
+		{Phase: UpgradePhaseVerifyCandidate, State: UpgradePhaseActive},
+		{Phase: UpgradePhaseVerifyCandidate, State: UpgradePhaseCompleted},
+		{Phase: UpgradePhaseStageUpdater, State: UpgradePhaseActive},
+		{Phase: UpgradePhaseStageUpdater, State: UpgradePhaseCompleted},
+		{Phase: UpgradePhasePublishPending, State: UpgradePhaseActive},
+		{Phase: UpgradePhasePublishPending, State: UpgradePhaseCompleted},
+		{Phase: UpgradePhaseScheduleUpdater, State: UpgradePhaseActive},
+		{Phase: UpgradePhaseScheduleUpdater, State: UpgradePhaseCompleted},
+		{Phase: UpgradePhaseComplete, State: UpgradePhaseActive},
+		{Phase: UpgradePhaseComplete, State: UpgradePhaseCompleted},
+	}
+	if len(phases) != len(wantPhases) {
+		t.Fatalf("phase count = %d, want %d: %#v", len(phases), len(wantPhases), phases)
+	}
+	for index, want := range wantPhases {
+		if phases[index].Phase != want.Phase || phases[index].State != want.State {
+			t.Fatalf("phase[%d] = %#v, want %#v", index, phases[index], want)
+		}
+	}
+	if phases[3].CurrentVersion != "1.0.0" || phases[3].CandidateVersion != "2.0.0" || phases[5].ArtifactName != "ycy-linux-x64" || phases[5].ChecksumSource != ChecksumReleaseDigest {
+		t.Fatalf("safe resolution facts = %#v", phases)
+	}
 }
 
 func TestRunUpgradeAlreadyCurrentAndFailureCleanup(t *testing.T) {
@@ -164,6 +199,58 @@ func TestRunUpgradeReturnsPriorStateAndAbortForClassifiedFailure(t *testing.T) {
 	if !result.Aborted || result.PreviousState == nil || result.PreviousState.Status != StatusSucceeded || !errors.As(err, &exit) || exit.Code != 0 {
 		t.Fatalf("classified result = %#v, %v", result, err)
 	}
+}
+
+func TestRunUpgradeMarksCancelledCandidateWorkWithoutLeakingTransportFacts(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var phases []UpgradePhaseEvent
+	result, err := RunUpgrade(ctx, UpgradeOptions{
+		Resolver: ReleaseResolverOptions{
+			CurrentVersion: "1.0.0",
+			GOOS:           "linux",
+			GOARCH:         "amd64",
+			LatestURL:      "https://releases.example/private?token=upgrade-secret",
+			Client: upgradeHTTPDoer(func(request *http.Request) (*http.Response, error) {
+				if request.URL.Path == "/private" {
+					cancel()
+					return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"tag_name":"v2.0.0","assets":[{"name":"ycy-linux-x64","digest":"sha256:` + strings.Repeat("a", 64) + `"}]}`))}, nil
+				}
+				return nil, request.Context().Err()
+			}),
+		},
+		Executable: func() (string, error) { return filepath.Join(t.TempDir(), "ycy"), nil },
+		Observer: UpgradeObserver{Phase: func(event UpgradePhaseEvent) {
+			phases = append(phases, event)
+		}},
+	})
+	var exit *ExitCodeError
+	if !result.Aborted || !errors.Is(err, context.Canceled) || !errors.As(err, &exit) || exit.Code != 1 {
+		t.Fatalf("cancelled result = %#v, %v", result, err)
+	}
+	if !containsUpgradePhaseState(phases, UpgradePhaseDownloadCandidate, UpgradePhaseCancelled) || !containsUpgradePhaseState(phases, UpgradePhaseComplete, UpgradePhaseCancelled) {
+		t.Fatalf("cancellation phases = %#v", phases)
+	}
+	for _, event := range phases {
+		if strings.Contains(event.Detail, "upgrade-secret") || strings.Contains(event.Detail, "releases.example") {
+			t.Fatalf("unsafe phase event = %#v", event)
+		}
+	}
+}
+
+func containsUpgradePhaseState(events []UpgradePhaseEvent, phase UpgradePhase, state UpgradePhaseState) bool {
+	for _, event := range events {
+		if event.Phase == phase && event.State == state {
+			return true
+		}
+	}
+	return false
+}
+
+type upgradeHTTPDoer func(*http.Request) (*http.Response, error)
+
+func (do upgradeHTTPDoer) Do(request *http.Request) (*http.Response, error) {
+	return do(request)
 }
 
 func TestConsumeStateDoesNotReadAdjacentState(t *testing.T) {

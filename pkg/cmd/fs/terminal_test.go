@@ -9,6 +9,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hackycy/hackycy-cli/internal/logging"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
@@ -46,10 +47,10 @@ func TestTerminalFSPresentationPreservesPlainAndAutomationLifecycle(t *testing.T
 		var output, diagnostics bytes.Buffer
 		experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{Capabilities: session, Output: &output, Diagnostics: &diagnostics})
 		run := experience.Open(context.Background())
-		if err := run.Result(terminalFSStartupDocument(startup)); err != nil {
+		if err := run.ResultCheckpoint("fs-startup", terminalFSStartupDocument(startup)); err != nil {
 			t.Fatalf("%v startup Present() error = %v", session.Interaction, err)
 		}
-		if err := run.Result(terminalFSStoppedDocument()); err != nil {
+		if err := run.ResultCheckpoint("fs-stopped", terminalFSStoppedDocument()); err != nil {
 			t.Fatalf("%v stopped Present() error = %v", session.Interaction, err)
 		}
 		if err := run.Close(); err != nil {
@@ -146,7 +147,40 @@ func TestRunFSClosesTheOperationWhenStartupPresentationFails(t *testing.T) {
 	_ = listener.Close()
 }
 
+func TestRunFSReturnsFinalCheckpointFailureWithoutLifecycleFailure(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	output := &cancelAfterFirstFSWrite{cancel: cancel, err: errFSStoppedPresentation}
+	var lifecycleOutput bytes.Buffer
+	logRuntime := logging.NewRuntime(logging.Options{Writer: &lifecycleOutput, Format: logging.JSONFormat})
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.Automation},
+		Output:       output,
+	})
+
+	err := runFS(&Options{
+		Context:  ctx,
+		Input:    Input{Directory: t.TempDir(), Address: "127.0.0.1", Port: 0},
+		Terminal: experience,
+		NetworkInterfaces: func() ([]NetworkInterface, error) {
+			return nil, nil
+		},
+		Logger: logRuntime.Logger("fs"),
+	})
+	if !errors.Is(err, errFSStoppedPresentation) {
+		t.Fatalf("runFS() error = %v, want stopped checkpoint error", err)
+	}
+	if output.writes != 2 {
+		t.Fatalf("checkpoint writes = %d, want 2", output.writes)
+	}
+	records := decodeFSLifecycleRecords(t, lifecycleOutput.String())
+	if got := fsLifecycleMessages(records); len(got) < 2 || got[len(got)-2] != "File Browser stopping" || got[len(got)-1] != "File Browser stopped" || countLifecycleMessage(records, "File Browser failed") != 0 {
+		t.Fatalf("lifecycle records = %#v", got)
+	}
+}
+
 var errFSStartupPresentation = errors.New("FS startup presentation failed")
+var errFSStoppedPresentation = errors.New("FS stopped presentation failed")
 
 type failingFSWriter struct {
 	output bytes.Buffer
@@ -159,4 +193,21 @@ func (writer *failingFSWriter) Write(value []byte) (int, error) {
 
 func (writer *failingFSWriter) String() string {
 	return writer.output.String()
+}
+
+type cancelAfterFirstFSWrite struct {
+	output bytes.Buffer
+	cancel context.CancelFunc
+	err    error
+	writes int
+}
+
+func (writer *cancelAfterFirstFSWrite) Write(value []byte) (int, error) {
+	writer.writes++
+	_, _ = writer.output.Write(value)
+	if writer.writes == 1 {
+		writer.cancel()
+		return len(value), nil
+	}
+	return 0, writer.err
 }

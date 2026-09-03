@@ -3,6 +3,7 @@ package test
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
@@ -79,5 +80,24 @@ func TestTerminalCMTestPresentationUsesRichSemanticRoles(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestTerminalCMTestRichPresentationBoundsTheResponseAndKeepsUsageOutOfPlainResults(t *testing.T) {
+	prompt, completion := 3.0, 2.0
+	result := TestResult{
+		Content: strings.Repeat("x", cmTestResponseLimit+1),
+		usage:   &cmTestTokenUsage{PromptTokens: &prompt, CompletionTokens: &completion},
+	}
+	rich := terminalCMTestRichDocument(result)
+	plain := terminalCMTestDocument(result)
+	if rendered := terminalexperience.RenderPlain(rich); !strings.Contains(rendered, "... [truncated]") || !strings.Contains(rendered, "Prompt tokens: 3") || !strings.Contains(rendered, "Total tokens: 5") {
+		t.Fatalf("Rich document = %q", rendered)
+	}
+	if rendered := terminalexperience.RenderPlain(plain); strings.Contains(rendered, "tokens:") || strings.Contains(rendered, "[truncated]") {
+		t.Fatalf("Plain document changed durable output = %q", rendered)
+	}
+	if transcript := terminalexperience.RenderPlain(terminalCMTestResponseSummaryDocument(result)); strings.Contains(transcript, strings.Repeat("x", 32)) || !strings.Contains(transcript, "Total tokens: 5") {
+		t.Fatalf("response Transcript summary = %q", transcript)
 	}
 }

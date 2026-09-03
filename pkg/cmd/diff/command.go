@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
+	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/pkg/cmdutil"
 	"github.com/spf13/cobra"
@@ -17,6 +19,8 @@ type Options struct {
 
 	Terminal          *terminal.Runtime
 	NetworkInterfaces func() ([]NetworkInterface, error)
+	Logger            logging.Logger
+	Now               func() time.Time
 }
 
 // NewCmdDiff creates the Diff leaf with an optional test runner.
@@ -33,7 +37,7 @@ func NewCmdDiff(factory *cmdutil.Factory, runF func(*Options) error) *cobra.Comm
 		Short: "Compare two directories in a browser",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(command *cobra.Command, arguments []string) error {
-			if factory == nil || factory.Terminal == nil {
+			if factory == nil || factory.Terminal == nil || factory.Logging == nil {
 				return errors.New("diff Factory is incomplete")
 			}
 			parsedPort, err := parseDiffPort(port)
@@ -52,6 +56,8 @@ func NewCmdDiff(factory *cmdutil.Factory, runF func(*Options) error) *cobra.Comm
 				},
 				Terminal:          factory.Terminal,
 				NetworkInterfaces: osDiffNetworkInterfaces,
+				Logger:            factory.Logging.Logger("diff"),
+				Now:               factory.Now,
 			})
 		},
 	}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hackycy/hackycy-cli/internal/logging"
 	"github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/pkg/cmdutil"
 	"github.com/spf13/cobra"
@@ -20,6 +21,8 @@ type Options struct {
 
 	Terminal          *terminal.Runtime
 	NetworkInterfaces func() ([]NetworkInterface, error)
+	Logger            logging.Logger
+	Now               func() time.Time
 }
 
 // NewCmdFS creates the FS leaf with an optional test runner.
@@ -41,7 +44,7 @@ func NewCmdFS(factory *cmdutil.Factory, runF func(*Options) error) *cobra.Comman
 		Short: "Browse a directory in a browser",
 		Args:  cobra.MaximumNArgs(1),
 		RunE: func(command *cobra.Command, arguments []string) error {
-			if factory == nil || factory.Terminal == nil || factory.Environment == nil {
+			if factory == nil || factory.Terminal == nil || factory.Logging == nil || factory.Environment == nil {
 				return errors.New("fs Factory is incomplete")
 			}
 			parsedPort, err := parseFSPort(port)
@@ -87,6 +90,8 @@ func NewCmdFS(factory *cmdutil.Factory, runF func(*Options) error) *cobra.Comman
 				},
 				Terminal:          factory.Terminal,
 				NetworkInterfaces: osFSNetworkInterfaces,
+				Logger:            factory.Logging.Logger("fs"),
+				Now:               factory.Now,
 			})
 		},
 	}

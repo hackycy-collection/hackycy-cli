@@ -88,8 +88,8 @@
 | G1: Shared semantic terminal foundation | passed | G0 | `implementation-plan.md` -> `G1: Shared semantic terminal foundation` | G0 passed |
 | G2: Logging and root boundary | passed | G1 | `implementation-plan.md` -> `G2: Logging and root boundary` | G1 passed |
 | G3: Low-risk finite command slices | passed | G2 + B visual re-acceptance | `implementation-plan.md` -> `G3: Low-risk finite command slices` | G2 passed; B Ops Console visual re-acceptance passed 2026-09-02; G3 Exit conditions passed 2026-09-03 |
-| G4: External-read and service-startup slices | active | G3 | `implementation-plan.md` -> `G4: External-read and service-startup slices` | G3 passed |
-| G5: Mutating, destructive, and archive slices | planned | G4 | `implementation-plan.md` -> `G5: Mutating, destructive, and archive slices` | G4 pending |
+| G4: External-read and service-startup slices | passed | G3 | `implementation-plan.md` -> `G4: External-read and service-startup slices` | G3 passed; manual FS acceptance passed 2026-09-03; G4 Exit conditions passed 2026-09-03 |
+| G5: Mutating, destructive, and archive slices | active | G4 | `implementation-plan.md` -> `G5: Mutating, destructive, and archive slices` | G4 passed; 已激活，尚未开始实施 |
 | G6: Git mutation and process handoff | planned | G5 | `implementation-plan.md` -> `G6: Git mutation and process handoff` | G5 pending |
 | G7: Service lifecycles and detached updater | planned | G6 | `implementation-plan.md` -> `G7: Service lifecycles and detached updater` | G6 pending |
 | G8: Release candidate and final acceptance | planned | G7 | `implementation-plan.md` -> `G8: Release candidate and final acceptance` | G7 pending |
@@ -854,6 +854,493 @@ re-acceptance prerequisite.
 - 2026-09-01: initialized as `planned`; no implementation evidence.
 - 2026-09-03: activated after G3 passed; 已激活，尚未开始实施。 This Gate is
   outside the completed G3 Goal.
+- 2026-09-03: locked G4 slice `export env Experience adapter` as the first
+  independently revertible command slice. Scope is limited to the export env
+  adapter, its command-owned phase/result/transcript projections, and focused
+  tests; no other G4 command or service surface is inspected or changed.
+  Next: implement the declared export phases and preserve dotenv, merge, file,
+  cancellation, and stdout contracts before running directed verification.
+- 2026-09-03: completed slice `export env Experience adapter`. The terminal
+  path now reports the approved resolve/discover/select/read/parse/encode/write
+  phases through two independent semantic clusters, submits one `Finish`,
+  records safe selection and variable milestones, and writes an `--out` target
+  before emitting its success result. Unique candidates (including a sole
+  `.env.<name>`) are selected without prompting; ambiguous Automation stops at
+  the selection boundary, and cancellation performs no file I/O. The legacy
+  Module presenter path remains available for compatibility callers. Changed
+  files: `pkg/cmd/export/env/{run.go,selection.go,terminal.go}` and focused
+  tests. Directed verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/export/env -count=1`, its `-race` run, and `go vet` for the
+  package. Focused root regressions passed in `./pkg/cmd/root`; `git diff
+  --check` passed. Risk: Rich PTY visual evidence and the full G4 repository
+  sequence remain pending. Next: lock and implement the `config cm test`
+  provider-read slice.
+- 2026-09-03: locked G4 slice `config cm test provider-read Experience adapter`.
+  Scope is limited to profile resolution/provider-request phase projection,
+  safe Rich result/transcript handling, and focused command tests; provider
+  protocol, timeout, response, error, stdout, and exit semantics remain fixed
+  by the decision document. Next: inspect the resolver and transport seams,
+  then implement the two declared phases.
+- 2026-09-03: completed slice `config cm test provider-read Experience adapter`.
+  The command now opens Experience before store/profile resolution, exposes
+  the declared `resolve-cm-test-profile` and `test-cm-provider` phases, and
+  keeps resolver cancellation from starting a provider request. Provider
+  failures are classified as `http-status`, `timeout`, `read`, `decode`, or
+  `empty-response`; non-2xx responses are projected without reading or
+  emitting response bodies. Rich output restores the primary screen, replays
+  a bounded safe Transcript, includes the response/usage summary, and submits
+  the durable result once; Plain, Automation, redirected, cancellation,
+  redaction, and write-failure contracts remain covered. Changed files:
+  `pkg/cmd/config/cm/test/{terminal.go,terminal_run_test.go,terminal_pty_test.go,
+  test_response.go,test_response_test.go,test_run.go,test_safety.go,
+  test_transport.go,test_transport_test.go}` and
+  `internal/terminal/{experience.go,rich_recovery_test.go}`. Directed
+  verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/config/cm/test -count=1`, its `-race` run,
+  `go test ./internal/terminal -count=1`, the combined `-race` run for
+  `./internal/terminal ./pkg/cmd/config/cm/test`, and `go vet` for both
+  packages. The tagged standalone acceptance
+  `TestConfigCMTestStandaloneBinaryUsesOnlyTheLocalProvider` passed, and
+  `git diff --check` passed. Risk: Rich visual evidence and the remaining G4
+  command/service slices plus repository sequence remain pending. Next: lock
+  the `git pulse` presentation slice.
+- 2026-09-03: locked G4 slice `git pulse Experience adapter`. Scope is limited
+  to the command-owned preparation/scan/fetch/report phase and interaction
+  projection, safe Rich Transcript/report rendering, and focused tests. Git
+  discovery, concurrency, filtering, report bytes, process ownership, exits,
+  and cancellation semantics remain fixed by the decision document. Next:
+  inspect the existing adapter and module boundaries before implementing the
+  declared presentation contract.
+- 2026-09-03: completed slice `git pulse Experience adapter`. The command now
+  projects `prepare-workspace`, `scan-repositories`, `fetch-commits`, and
+  `build-commit-tree` through the Experience without changing discovery,
+  filtering, report bytes, process ownership, cancellation, or exit behavior.
+  Directory-read and per-repository fetch failures become bounded,
+  relative-path-safe warnings; a partial report retains the exact existing
+  result semantics. Rich restores before replaying a safe Transcript and the
+  formatted report; Plain and Automation retain control-free output and do
+  not read stdin before their existing interaction boundary. Changed files:
+  `pkg/cmd/git/pulse/{command.go,discovery.go,git.go,run.go,terminal.go,tracking.go,\
+  presentation.go,presentation_test.go,terminal_pty_test.go}` and
+  `acceptance/git_pulse_test.go`. Directed verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/git/pulse -count=1`, its `-race` run, `go vet` for the package,
+  `go test ./internal/terminal -count=1`, and tagged standalone acceptance
+  `TestGitPulseStandaloneBinary`; `git diff --check` passed. Risk: visual
+  manual evidence and the remaining G4 command/service slices plus repository
+  sequence remain pending. Next: lock and implement the `upgrade` parent
+  presentation slice.
+- 2026-09-03: locked G4 slice `upgrade parent Experience presentation`.
+  Scope is limited to parent-command resolution, candidate, download, verify,
+  and schedule phase/result projection plus focused tests. Hidden-updater
+  replacement, persisted transaction behavior, artifact semantics, unusual
+  exits, stdout bytes, and process handoff remain fixed by the decision
+  document and are not changed. Next: inspect the existing parent adapter and
+  its decision contract before implementing the declared phase sequence.
+- 2026-09-03: completed slice `upgrade parent Experience presentation`. The
+  parent now projects the actual consume, release/artifact resolution,
+  candidate download/verification, updater staging, pending-state publication,
+  detached scheduling, and completion boundaries through one Experience run.
+  The optional updater observer carries only presentation-safe versions,
+  platform/artifact identity, checksum source, and fixed failure classes;
+  URLs, hashes, paths, headers, candidate output, and raw errors remain out of
+  phases and Transcript. A consumed prior state is a first Rich Transcript
+  milestone and is combined with the final durable stdout document only after
+  primary-screen restoration, preserving the existing bytes without writing
+  into AltScreen. Existing classified aborts, unusual exit codes, cleanup,
+  detached ownership, and global startup consumption remain unchanged. Changed
+  files: `internal/updater/{progress.go,release.go,candidate.go,upgrade.go}`
+  and tests plus `pkg/cmd/upgrade/{command.go,terminal.go,terminal_test.go,
+  terminal_pty_test.go}`. Directed verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/upgrade ./internal/updater ./internal/ycycmd ./pkg/cmd/root
+  -count=1`, `go test -race ./pkg/cmd/upgrade ./internal/updater`, and `go
+  vet` for both affected packages. Rich color/no-color PTY coverage proved one
+  AltScreen enter/restore, safe phase visibility, prior-state/phase Transcript
+  order, Transcript-before-stdout ordering, and control-free no-color output.
+  The tagged standalone detached-updater acceptance
+  `TestDetachedGoToGoStandaloneReplacementRollbackAndSelfCheck` passed; `git
+  diff --check` passed. Supplemental full acceptance encountered unrelated
+  pre-existing failures in `config fork remove`, `rm`, and `tunnel server`, so
+  those surfaces were not changed in this slice. Risk: the remaining G4
+  `diff`/`fs` lifecycle slices and final G4 repository sequence remain
+  pending. Next: lock and implement the `diff` Lifecycle Log slice.
+- 2026-09-03: locked G4 slice `diff Lifecycle Log`. Scope is limited to the
+  line-oriented startup, refresh, warning, failure, and shutdown event
+  projection plus focused text/NDJSON tests. Comparison discovery, snapshot
+  publication, HTTP/MCP behavior, flags, stdout checkpoint bytes, service
+  ownership, and exit semantics remain fixed by the decision document. Next:
+  inspect the service lifecycle and repository logging seams before adding the
+  declared bounded event sequence.
+- 2026-09-03: completed slice `diff Lifecycle Log` sequencing foundation.
+  Startup records and an immediately-completing initial refresh are now
+  sequenced behind the stdout checkpoint; first-entry Debug phases remain
+  deduplicated, ready snapshots retain counts/bytes/duration and adjacent issue
+  warnings, and a ready refresh is preserved when shutdown cancellation races
+  its terminal callback. Startup stdout-write failure now closes the lifecycle
+  gate before teardown and emits exactly the explicit stopping/stopped pair,
+  dropping late refresh callbacks. Changed files:
+  `pkg/cmd/diff/lifecycle.go`, `pkg/cmd/diff/session.go`,
+  `pkg/cmd/diff/lifecycle_test.go`. Directed verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/diff -run '^TestDiffLifecycle' -count=1`; `gofmt` and
+  `git diff --check` passed. Repository verification status: the declared G4
+  repository sequence remains pending. Risk: protocol-source, cancellation,
+  failure, writer, redaction, concurrency, and standalone acceptance evidence
+  for this slice remain to be completed. Next: add refresh coordinator and
+  REST/MCP lifecycle-source tests.
+- 2026-09-03: completed slice `diff Lifecycle Log` refresh coordination.
+  Accepted attempts now carry `initial`/`rest`/`mcp` sources and monotonic
+  service-local ordinals; active attempts are rejected without lifecycle
+  records, REST cancellation is attributed to `cancelSource=rest`, and a
+  subsequent MCP refresh can succeed after the cancelled run clears. Changed
+  file: `pkg/cmd/diff/lifecycle_test.go` (against the coordinator wiring in
+  `pkg/cmd/diff/http_refresh.go`). Directed verification passed the focused
+  `TestDiffRefreshCoordinatorProjectsSourcesOrdinalsRejectionAndRESTCancellation`
+  run; `gofmt` and `git diff --check` passed. Repository verification status:
+  the declared G4 repository sequence remains pending. Risk: previous-snapshot
+  failure retention, shutdown folding, writer failures, and text/NDJSON level
+  goldens remain pending. Next: exercise failure and shutdown terminal paths.
+- 2026-09-03: completed slice `diff Lifecycle Log` failure and shutdown
+  terminal paths. Cancelled and failed attempts now prove bounded progress and
+  previous-snapshot fields without publishing an unpublished ID; active
+  shutdown cancellation is folded into the stopping/stopped pair, while an
+  unexpected listener/serve failure produces one final `stage=serve` error and
+  preserves the reported error wrapper. Changed file:
+  `pkg/cmd/diff/lifecycle_test.go`. Directed verification passed the focused
+  lifecycle/coordinator/session tests; `gofmt` and `git diff --check` passed.
+  Repository verification status: the declared G4 repository sequence remains
+  pending. Risk: startup/close writer failures, protocol-level silent rejects,
+  sanitization, level filtering, and text/NDJSON goldens remain pending. Next:
+  cover failure writers and root duplicate suppression.
+- 2026-09-03: completed slice `diff Lifecycle Log` failure-writer and rendering
+  boundaries. Startup stdout-write failures preserve the original error and
+  emit only the shutdown pair; logging writer errors remain best effort.
+  Malicious URL/path/source fields are control-free, redacted, and bounded,
+  while text symbols and Info/Warn/Error filtering and the shared NDJSON
+  envelope are covered; ordinary, invalid, and forbidden protocol requests stay
+  silent. Changed file: `pkg/cmd/diff/lifecycle_test.go` plus the scoped source
+  sanitization in `pkg/cmd/diff/{lifecycle.go,http_refresh.go}`. Directed
+  verification passed the focused lifecycle tests; `gofmt` and `git diff
+  --check` passed. Repository verification status: the declared G4 sequence
+  remains pending. Risk: concurrent event ordering and standalone stderr
+  acceptance still need evidence. Next: update the diff acceptance contract
+  and run race/concurrent checks.
+- 2026-09-03: completed slice `diff Lifecycle Log` standalone acceptance
+  contract. `TestDiffStandaloneBinaryPreservesCLIValidationAndLifecycle` now
+  verifies the stderr startup/refresh/shutdown catalog, field projection,
+  ordering, no ANSI, and no duplicate root `error:` while preserving stdout,
+  HTTP, argument, port-zero, signal, and exit assertions. Added a tagged
+  `--log-format=json` session check with valid per-line NDJSON and refresh
+  readiness before signal. Changed file: `acceptance/diff_test.go`. Directed
+  verification passed both tagged `TestDiffStandaloneBinary*` tests;
+  `gofmt` and `git diff --check` passed. Repository verification status: the
+  declared G4 sequence remains pending. Risk: concurrent exactly-once ordering
+  and root-level duplicate suppression still need direct evidence. Next: add
+  concurrent lifecycle stress and root integration coverage.
+- 2026-09-03: completed slice `diff Lifecycle Log` concurrent sequencing and
+  root boundary evidence. A 24-attempt concurrent stress test proves exactly
+  one start and one terminal event per accepted attempt, no late start after
+  `Directory diff stopping`, and a final stopped record; root now has a direct
+  regression proving an error implementing `AlreadyReported()` is not copied
+  into a second diagnostic line. Changed files:
+  `pkg/cmd/diff/lifecycle.go`, `pkg/cmd/diff/lifecycle_test.go`,
+  `pkg/cmd/root/diff_error_test.go`. Directed verification passed focused
+  concurrent `-race` coverage and the root boundary test; `gofmt` and
+  `git diff --check` passed. Repository verification status: the declared G4
+  sequence remains pending. Risk: full package/repository checks and final
+  manual text/NDJSON review remain. Next: run the declared G4 repository
+  sequence and inspect any regressions before handoff.
+- 2026-09-03: completed the declared G4 repository verification for the locked
+  `diff Lifecycle Log` slice as far as the repository permits. Step 1 passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/export ./pkg/cmd/config/cm/... ./pkg/cmd/git/pulse
+  ./pkg/cmd/upgrade ./pkg/cmd/diff ./pkg/cmd/fs`. Step 2
+  `make command-surface` passed. `make check` completed web checks, lock
+  checks, and most Go packages but exited 2 on two unrelated existing
+  surfaces: `internal/architecture` rejects the pre-existing
+  `github.com/charmbracelet/x/ansi` import in
+  `pkg/cmd/config/cm/test/test_safety.go`, and
+  `TestGoClientToGoServerForwardsHTTPAndTCPAndUDPWithPinnedFRP` could not
+  download the pinned FRP 0.70.1 Darwin arm64 archive (EOF). No files in
+  either surface were changed. Step 3 `git diff --check` passed. Directed
+  diff lifecycle, race, vet, and tagged standalone text/NDJSON acceptance
+  evidence remains green. Risk: repository Exit condition is not green only
+  because of those out-of-scope failures; a real manual text/NDJSON review is
+  still pending. Next: start the diff text and NDJSON acceptance sessions and
+  record the one-time handoff while keeping G4 `active`.
+- 2026-09-03: manual acceptance handoff opened for the locked `diff Lifecycle
+  Log` slice; G4 intentionally remains `active`. Acceptance entry is live in
+  two local service sessions: colored text at
+  `http://127.0.0.1:50205` (Codex terminal session `93961`, command uses the
+  temporary workspace under
+  `/var/folders/t_/7hzhygj540jbb980xrx0v9zw0000gn/T/hackycy-diff-accept.hyljsy`)
+  and no-color NDJSON at `http://127.0.0.1:50445` (Codex terminal session
+  `40961`, `NO_COLOR=1 --log-format=json`). Both sessions reached a ready
+  snapshot and were exercised through REST and MCP refresh calls; `/api/state`
+  returned HTTP 200. Automated evidence: the declared G4 package test step,
+  `make command-surface`, non-cached diff/root/logging package tests,
+  `-race`, `go vet`, tagged standalone text/NDJSON acceptance, and
+  `git diff --check` all passed. `make check` still has only the recorded
+  out-of-scope architecture import and pinned FRP download EOF failures.
+  Minimal checklist: (1) open both service URLs and confirm the browser/API
+  is available; (2) inspect the colored session for ordered startup,
+  `initial`/`rest`/`mcp` refresh, ready counts/bytes, symbols, bounded fields,
+  and no request-level noise; (3) inspect the no-color session for one valid
+  JSON object per line, `scope=diff`, no ANSI, the same ordering, and separate
+  stdout startup text; (4) send SIGINT/Ctrl-C once in each session and confirm
+  `Directory diff stopping` followed by `Directory diff stopped` with no
+  duplicate root error. Expected explicit reply format: `通过: <scenarios>`
+  or `未通过: <scenario and reason>`. Next action: only a new Goal carrying
+  that explicit reply may resolve the manual review; do not mark G4 passed or
+  activate `fs` from this handoff.
+- 2026-09-03: received the explicit manual acceptance result `通过` for the
+  `diff Lifecycle Log` handoff. The colored text and no-color NDJSON sessions
+  were accepted for startup, REST/MCP refresh ordering, safe fields, and
+  shutdown. This resolves only that manual review; G4 remains `active` because
+  the `fs` Lifecycle Log Exit condition and the recorded repository failures
+  are still outstanding. Locked next slice: `fs startup Lifecycle Log`, limited
+  to startup/capability/authentication projection, the existing `fs-startup`
+  stdout checkpoint ordering, and focused tests. Next: inspect the FS service
+  startup seams without changing task, protocol, or shutdown behavior.
+- 2026-09-03: completed the locked `fs startup Lifecycle Log` slice. Injected
+  the scoped `fs` logger and clock through the command/module boundary, retained
+  the existing stdout startup document, and added the fixed startup records for
+  bound URLs, resolved browse root, positive capabilities, authentication
+  facts, and the public-without-auth warning. Startup records are emitted only
+  after the listener and runtime services are ready and before the stable
+  `fs-startup` result checkpoint; checkpoint failure closes the startup gate
+  without changing the existing service shutdown/result path. Added safe field
+  projection, conditional chunk/auth fields, normalized idle duration, loopback
+  detection, and FS text symbols. Changed files:
+  `pkg/cmd/fs/{command.go,run.go,leaf_run.go,presentation.go,auth.go,lifecycle.go,
+  lifecycle_test.go}`, `internal/logging/logging.go`,
+  `internal/terminal/{experience.go,checkpoint_test.go,semantic_test.go}`,
+  `internal/terminaltest/{recording.go,semantic_recording.go}`, and
+  `acceptance/fs_test.go`. Directed verification passed the focused FS,
+  terminal, terminaltest, and logging suites, the combined `-race` suites,
+  `go vet`, `git diff --check`, and tagged
+  `TestFSStandaloneBinary*` acceptance. Risk: FS managed-task and shutdown
+  lifecycle events, final G4 repository checks, and the required manual
+  service review remain pending. Next: lock the `fs Managed Task` event slice;
+  do not enter G5.
+- 2026-09-03: locked G4 slice `fs download Managed Task lifecycle`. Scope is
+  limited to download accepted/started/completed/cancelled/failed event
+  projection, startup-gate sequencing, safe source/destination/stat fields,
+  and focused tests. Extraction, chunked upload, shutdown/failure folding,
+  and final FS text/NDJSON acceptance remain outside this slice. Next: inspect
+  the download manager observer seams and implement the smallest reversible
+  event cluster.
+- 2026-09-03: completed slice `fs download Managed Task lifecycle`. Added a
+  private download observer with startup-gate buffering and exactly-once
+  accepted/started/terminal events for completion, client cancellation, and
+  failure; retries carry `retryOf` on a new task ID while invalid/duplicate
+  controls remain silent. Lifecycle context projects only task type/ID,
+  scheme/host, workspace-relative destination/filename, safe byte counts, and
+  stable failure classes; URL paths, queries, fragments, progress updates,
+  request details, and internal errors are excluded. Changed files:
+  `pkg/cmd/fs/{download.go,lifecycle.go,run.go,lifecycle_test.go}` and
+  `internal/logging/logging.go`. Directed verification passed the full FS
+  package suite, focused download lifecycle tests, `-race` coverage, `go vet`,
+  and `git diff --check`. Risk: extraction/chunked-upload observers,
+  shutdown/failure folding, final FS text/NDJSON acceptance, and G4 repository
+  checks remain pending. Next: lock the `fs extraction Managed Task lifecycle`
+  slice; do not enter G5.
+- 2026-09-03: locked G4 slice `fs extraction Managed Task lifecycle`. Scope is
+  limited to extraction accepted/started/completed/cancelled/failed event
+  projection, startup-gate sequencing, retry identity, safe archive and
+  destination/stat fields, and focused tests. Download behavior is retained;
+  chunked upload, shutdown/failure folding, and final FS acceptance remain
+  outside this slice. Next: inspect the extraction manager executor callbacks
+  and implement the smallest reversible event cluster.
+- 2026-09-03: completed slice `fs extraction Managed Task lifecycle`. Installed
+  the scoped extraction observer before the FS listener is exposed, preserving
+  the startup checkpoint gate and the existing task HTTP representation. Added
+  exactly-once accepted/started/terminal events for successful, client-cancelled,
+  and failed extractions; retries receive a new task ID with `retryOf` while
+  invalid controls remain silent. Lifecycle projection is limited to bounded
+  workspace-relative archive/destination paths, task identity, safe statistics,
+  duration, and stable public failure classes; archive entry names, contents,
+  7-Zip output, absolute staging paths, progress updates, and internal causes
+  remain excluded. Added extraction ordering, gate, cancellation, retry,
+  failure-redaction, and text-symbol coverage. Changed files:
+  `pkg/cmd/fs/{extraction.go,lifecycle.go,lifecycle_test.go,run.go}` and
+  `internal/logging/logging.go`. Directed verification passed the complete FS
+  package suite, extraction/download lifecycle focused tests, extraction
+  `-race`, `go vet ./pkg/cmd/fs`, and `git diff --check`. Risk: chunked-upload
+  lifecycle, shutdown/failure folding, final G4 repository checks, and the
+  required FS text/NDJSON manual review remain pending. Next: lock the
+  `fs chunked upload Managed Task lifecycle` slice; do not enter G5.
+- 2026-09-03: locked G4 slice `fs chunked upload Managed Task lifecycle`.
+  Scope is limited to the decision-approved started/completed/cancelled/expired
+  chunked-upload records, safe filename/destination/stat projection, and
+  focused tests. Download and extraction behavior remain retained; shutdown/
+  failure folding and final FS acceptance remain outside this slice. Next:
+  inspect the chunked-upload manager's real Create/Complete/Cancel/prune seams
+  and implement the smallest reversible event cluster.
+- 2026-09-03: completed slice `fs chunked upload Managed Task lifecycle`.
+  Added a private observer at the real chunked upload Create/Complete/Cancel/
+  expiry transitions and installed it before the FS listener is exposed. The
+  startup sequencer buffers a Create that races the startup checkpoint and
+  releases it in order; Append/Get and every chunk remain silent, completion is
+  exactly-once across replayed Complete calls, and shutdown still suppresses
+  per-upload records for the later summary slice. Projections include only
+  `taskType=chunkedUpload`, bounded task ID, safe filename/destination paths,
+  total/chunk/uploaded byte counts, cancel source, and duration; owner/session,
+  staging path, and request details are excluded. Text symbols now cover the
+  four chunked-upload lifecycle messages. Changed files:
+  `pkg/cmd/fs/{chunked_upload.go,lifecycle.go,lifecycle_test.go,run.go}` and
+  `internal/logging/logging.go`. Directed verification passed complete FS
+  package tests, chunked-upload focused tests, full FS `-race`, `go vet
+  ./pkg/cmd/fs`, and `git diff --check`. Risk: shutdown/failure folding, final
+  G4 repository checks, and the required FS text/NDJSON manual review remain
+  pending. Next: lock the `fs shutdown and failure folding` slice; do not enter
+  G5.
+- 2026-09-03: locked G4 slice `fs shutdown and failure folding`. Scope is
+  limited to the decision-approved File Browser stopping/stopped/failed
+  lifecycle records, task cancellation/removal counts, startup/final checkpoint
+  ordering, root duplicate suppression, and focused tests. Download, extraction,
+  and chunked-upload per-task behavior remain retained; final FS text/NDJSON
+  acceptance remains outside this slice. Next: inspect Runtime/RunningServer
+  ownership and the existing `runFS` shutdown paths, then implement the
+  smallest reversible service-level event cluster.
+- 2026-09-03: completed slice `fs shutdown and failure folding`. Runtime now
+  snapshots queued/active download and extraction work plus incomplete chunked
+  uploads before cleanup, folds manager cancellation/removal into one stopping/
+  terminal pair, disables late task projection after stopping, and waits for
+  manager workers before resource release. The terminal uses stable
+  `fs-startup` and `fs-stopped` checkpoints; a final-checkpoint write error
+  preserves the stopped service outcome, while startup-checkpoint and
+  serve/close/release failures retain their joined original error chain and
+  project exactly one `File Browser failed` record for root duplicate
+  suppression. Changed files: `pkg/cmd/fs/{download.go,extraction.go,
+  chunked_upload.go,lifecycle.go,lifecycle_test.go,runtime.go,server.go,run.go,
+  leaf_run.go,terminal_test.go}`, `internal/logging/logging.go`, and
+  `acceptance/fs_test.go`. Directed verification passed focused lifecycle,
+  checkpoint, and root-boundary tests; complete `go test ./pkg/cmd/fs -count=1`;
+  `go test -race ./pkg/cmd/fs -count=1`; `go vet ./pkg/cmd/fs`; the tagged
+  standalone SIGINT lifecycle test; and `git diff --check`. Risk: final FS
+  text/NDJSON process projection, manual service review, and the declared G4
+  repository sequence remain pending. Next: lock a presentation-only FS
+  text/NDJSON verification slice; do not enter G5.
+- 2026-09-03: locked G4 slice `fs Lifecycle Log text/NDJSON verification`.
+  Scope is limited to end-to-end text/NDJSON lifecycle projection, configured
+  level filtering, atomic line ordering, safe field/redaction checks, and
+  standalone acceptance evidence. Existing FS task, shutdown, stdout,
+  protocol, and ownership semantics remain fixed. Next: inspect the existing
+  acceptance helpers and add only the missing FS JSON/service assertions.
+- 2026-09-03: completed slice `fs Lifecycle Log text/NDJSON verification`.
+  Added FS-specific `debug`/`info`/`warn`/`error` filtering coverage and a
+  standalone no-color `--log-format=json` signal journey. The NDJSON journey
+  proves one parseable `scope=fs` record per stderr line, no ANSI, the fixed
+  startup/stopping/stopped order, isolated unchanged stdout checkpoints, safe
+  URL/count context, and context-cancelled shutdown fields; the text journey
+  now also asserts the stopping/stopped symbols and order. Changed files:
+  `pkg/cmd/fs/lifecycle_test.go` and `acceptance/fs_test.go`. Directed
+  verification passed focused level/text tests; focused NDJSON acceptance;
+  complete `go test ./pkg/cmd/fs -count=1`; `go test -race ./pkg/cmd/fs
+  -count=1`; all tagged `TestFSStandaloneBinary*` acceptance tests; complete
+  `go test ./internal/logging -count=1`; and `git diff --check`. Risk: the
+  declared cross-package G4 repository sequence and the manual FS service
+  review remain pending. Next: lock and run G4 repository verification in its
+  declared order; do not enter G5.
+- 2026-09-03: locked G4 slice `final repository verification`. Scope is
+  limited to the declared G4 package, command-surface, repository-check, and
+  diff validation sequence plus diagnosis of any in-G4 regression. No command
+  behavior or next-Gate implementation is authorized. Next: run the declared
+  sequence in order and record any out-of-scope blocker precisely.
+- 2026-09-03: completed the locked `final repository verification` slice.
+  Step 1 passed uncached:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/export ./pkg/cmd/config/cm/... ./pkg/cmd/git/pulse
+  ./pkg/cmd/upgrade ./pkg/cmd/diff ./pkg/cmd/fs -count=1`, including all
+  affected command packages. Step 2 passed `make command-surface` and the
+  complete `make check` (web lint/typecheck/tests/build, architecture,
+  logging, terminal, all Go packages, and asset verification); the earlier
+  `config cm test` Charm import violation was removed behind the shared
+  logging ANSI helper. Step 3 passed `git diff --check`. G4 automated evidence
+  now covers every finite command slice, bounded diff/fs text and NDJSON
+  lifecycle plus shutdown tests, upgrade parent contracts, and repository
+  integration. Risk remaining only: the required one-time human FS service
+  review. Next: start the colored and no-color FS acceptance sessions and
+  record the handoff while keeping G4 `active`.
+
+- 2026-09-03: manual acceptance handoff opened for the locked G4 FS
+  Lifecycle Log surface; G4 intentionally remains `active`. The acceptance
+  environment is live in two local service sessions using the built binary
+  `/tmp/hackycy-fs-accept.fatxCb/ycy`: colored text at
+  `http://localhost:51155` (Codex terminal session `30060`, public bind,
+  management and chunked-upload enabled) and no-color NDJSON at
+  `http://127.0.0.1:51529` (Codex terminal session `23321`,
+  `NO_COLOR=1 --log-format=json`). Both startup checkpoints completed; root,
+  `/api/session`, and `/api/directory?path=` returned HTTP 200. Automated
+  evidence: the complete G4 package test step, all FS lifecycle and shutdown
+  tests, FS `-race`, `go vet`, tagged standalone FS text/NDJSON and SIGINT
+  acceptance, `make command-surface`, complete `make check`, architecture/
+  logging/terminal suites, and `git diff --check` all passed.
+  Minimal checklist: (1) open both service URLs and confirm the shell/API is
+  available; (2) inspect the colored session for ordered startup records,
+  public-without-auth warning, capability/authentication fields, status
+  symbols, bounded safe fields, and no request-level noise; exercise one
+  available Managed Task endpoint and confirm only its approved lifecycle
+  records appear; (3) inspect the no-color session for one valid shared
+  NDJSON object per line, `scope=fs`, no ANSI, the same ordering, and separate
+  stdout startup text; (4) send SIGINT/Ctrl-C once in each session and confirm
+  `File Browser stopping` with `reason=context-cancelled`, then
+  `File Browser stopped` and the unchanged `File Browser stopped.` stdout
+  checkpoint, with no duplicate root `error:`. Expected explicit reply
+  format: `通过: <scenarios>` or `未通过: <scenario and reason>`. This
+  handoff is the final action for this Goal; only a new Goal carrying that
+  explicit result may resolve the FS manual review. Do not mark G4 passed or
+  activate G5 from this handoff.
+
+- 2026-09-03: received the explicit FS manual acceptance result `未通过: File
+  Browser 启动摘要不是首个可见输出，结构化日志先出现`. Locked the G4
+  presentation-only diagnostic slice `fs startup summary ordering`. Scope is
+  limited to reproducing and resolving the visible ordering of the existing
+  `fs-startup` stdout checkpoint versus the fixed startup Lifecycle Log; task,
+  protocol, shutdown, result bytes, and all non-FS surfaces remain unchanged.
+  Initial source inspection found a contract conflict: decision 19, the
+  lifecycle implementation, and `TestFSLifecycleStartupCheckpointOrdering`
+  explicitly require startup records before the stdout checkpoint. Next: run
+  that focused test as reproducible evidence, then stop for a decision update
+  unless the acceptance requirement can be satisfied without changing the
+  approved order.
+
+- 2026-09-03: stopped the locked `fs startup summary ordering` slice. Evidence:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./pkg/cmd/fs -run
+  '^TestFSLifecycleStartupCheckpointOrdering$' -count=1 -v` passed, and its
+  asserted event sequence is four `log:` writes followed by the `result:`
+  startup checkpoint. `pkg/cmd/fs/run.go` calls `lifecycle.begin(startup)`
+  synchronously before `pkg/cmd/fs/leaf_run.go` writes `fs-startup`; this is
+  therefore deterministic call order, not independent stdout/stderr display
+  interleaving. Blocker: decision 19 explicitly fixes those startup Lifecycle
+  records before the stdout checkpoint, while the manual acceptance requires
+  the inverse visible ordering. No implementation or test assertion was
+  changed. Recovery input required: an explicit approved decision stating
+  whether the `fs-startup` stdout document must precede all startup Lifecycle
+  Log records, and whether the matching `diff` ordering contract changes too.
+  G4 remains `active`; do not enter G5.
+
+- 2026-09-03: received the explicit final FS manual acceptance result `通过，
+  不改变`. The reviewer accepted the existing deterministic ordering in which
+  the startup Lifecycle Log records precede the `File Browser` stdout summary;
+  no implementation or test change is required. Manual acceptance passed for
+  the colored text and no-color NDJSON service sessions, startup/API
+  availability, safe capability/authentication projections, bounded lifecycle
+  output, and SIGINT stopping/stopped behavior with the unchanged stdout
+  checkpoints and no duplicate root error. Existing automated evidence remains
+  green: declared G4 package verification, FS lifecycle tests and `-race`,
+  `go vet`, tagged standalone text/NDJSON/SIGINT acceptance,
+  `make command-surface`, complete `make check`, and `git diff --check`.
+  G4 Exit conditions were rechecked item by item: finite-command and service
+  lifecycle evidence complete; `diff`/`fs` bounded text/NDJSON and shutdown
+  evidence complete; `upgrade` parent contracts preserved; manual review and
+  repository verification complete. G4 is now `passed`. Direct successor G5
+  is `active` with the record `已激活，尚未开始实施`; no G5 implementation or
+  verification was performed in this Goal.
 
 ### G5: Mutating, destructive, and archive slices
 

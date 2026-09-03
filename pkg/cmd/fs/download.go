@@ -57,7 +57,22 @@ type DownloadTask struct {
 	Error               string `json:"error,omitempty"`
 	cancel              context.CancelFunc
 	lastProgress        time.Time
+	startedAt           time.Time
+	retryOf             string
+	cancelSource        string
+	lifecycleStarted    bool
+	lifecycleTerminal   bool
 	order               uint64
+}
+
+// downloadLifecycleObserver receives only real Managed Task transitions. It
+// is intentionally private so the HTTP task API remains unchanged.
+type downloadLifecycleObserver interface {
+	downloadAccepted(downloadLifecycleTask)
+	downloadStarted(downloadLifecycleTask)
+	downloadCompleted(downloadLifecycleTask)
+	downloadCancelled(downloadLifecycleTask)
+	downloadFailed(downloadLifecycleTask, error)
 }
 
 type DownloadManager struct {
@@ -73,9 +88,19 @@ type DownloadManager struct {
 	nextOrder        uint64
 	closed           bool
 	subscriptions    map[*taskSubscription[DownloadTask]]struct{}
+	now              func() time.Time
+	observer         downloadLifecycleObserver
+	workers          sync.WaitGroup
 }
 
 func NewDownloadManager(workspace *Workspace) *DownloadManager {
+	return newDownloadManager(workspace, time.Now, nil)
+}
+
+func newDownloadManager(workspace *Workspace, now func() time.Time, observer downloadLifecycleObserver) *DownloadManager {
+	if now == nil {
+		now = time.Now
+	}
 	return &DownloadManager{
 		workspace:        workspace,
 		client:           &http.Client{CheckRedirect: func(_ *http.Request, _ []*http.Request) error { return http.ErrUseLastResponse }},
@@ -84,6 +109,19 @@ func NewDownloadManager(workspace *Workspace) *DownloadManager {
 		progressInterval: 250 * time.Millisecond,
 		tasks:            make(map[string]*DownloadTask),
 		subscriptions:    make(map[*taskSubscription[DownloadTask]]struct{}),
+		now:              now,
+		observer:         observer,
+	}
+}
+
+// setLifecycle installs the service observer before the listener is exposed.
+// Existing standalone manager callers continue to run without presentation.
+func (manager *DownloadManager) setLifecycle(observer downloadLifecycleObserver, now func() time.Time) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.observer = observer
+	if now != nil {
+		manager.now = now
 	}
 }
 
@@ -138,6 +176,10 @@ func (manager *DownloadManager) closeSubscriptionsLocked() {
 }
 
 func (manager *DownloadManager) Enqueue(request DownloadRequest) (DownloadTask, error) {
+	return manager.enqueue(request, "")
+}
+
+func (manager *DownloadManager) enqueue(request DownloadRequest, retryOf string) (DownloadTask, error) {
 	if len(request.DirectoryPath) > maxDownloadPathLength || len(request.Filename) > maxDownloadPathLength {
 		return DownloadTask{}, &ServiceError{Code: "INVALID_DOWNLOAD", Message: "Download request is invalid"}
 	}
@@ -168,11 +210,21 @@ func (manager *DownloadManager) Enqueue(request DownloadRequest) (DownloadTask, 
 	if err != nil {
 		return DownloadTask{}, err
 	}
-	task := &DownloadTask{ID: id, URL: url.String(), DirectoryPath: directory.String(), Filename: filename, Status: "queued", CreatedAt: formatTaskTime(time.Now()), order: manager.nextOrder}
+	task := &DownloadTask{
+		ID:            id,
+		URL:           url.String(),
+		DirectoryPath: directory.String(),
+		Filename:      filename,
+		Status:        "queued",
+		CreatedAt:     formatTaskTime(manager.now()),
+		retryOf:       retryOf,
+		order:         manager.nextOrder,
+	}
 	manager.nextOrder++
 	manager.tasks[id] = task
 	manager.queue = append(manager.queue, id)
 	manager.pruneTerminalLocked()
+	manager.emitDownloadAcceptedLocked(task)
 	manager.pumpLocked()
 	manager.notifyLocked()
 	return publicDownloadTask(task), nil
@@ -186,15 +238,21 @@ func (manager *DownloadManager) Cancel(id string) (DownloadTask, error) {
 		return DownloadTask{}, &ServiceError{Code: "DOWNLOAD_NOT_FOUND", Message: "Download task was not found"}
 	}
 	if task.Status == "queued" {
-		task.Status, task.FinishedAt = "cancelled", formatTaskTime(time.Now())
+		task.Status, task.FinishedAt = "cancelled", formatTaskTime(manager.now())
+		task.cancelSource = "client"
 		manager.removeQueuedLocked(id)
+		manager.emitDownloadTerminalLocked(task, nil)
 		manager.pruneTerminalLocked()
 		manager.notifyLocked()
 		return publicDownloadTask(task), nil
 	}
 	if task.Status == "running" {
-		task.Status, task.FinishedAt = "cancelled", formatTaskTime(time.Now())
-		task.cancel()
+		task.Status, task.FinishedAt = "cancelled", formatTaskTime(manager.now())
+		task.cancelSource = "client"
+		if task.cancel != nil {
+			task.cancel()
+		}
+		manager.emitDownloadTerminalLocked(task, nil)
 		manager.pruneTerminalLocked()
 		manager.notifyLocked()
 		return publicDownloadTask(task), nil
@@ -215,7 +273,7 @@ func (manager *DownloadManager) Retry(id string) (DownloadTask, error) {
 	}
 	request := DownloadRequest{URL: task.URL, DirectoryPath: task.DirectoryPath, Filename: task.Filename}
 	manager.mu.Unlock()
-	return manager.Enqueue(request)
+	return manager.enqueue(request, task.ID)
 }
 
 func (manager *DownloadManager) ClearTerminal() {
@@ -230,18 +288,32 @@ func (manager *DownloadManager) ClearTerminal() {
 }
 
 func (manager *DownloadManager) Close() {
+	_, _ = manager.closeWithStats()
+}
+
+func (manager *DownloadManager) closeWithStats() (queued, active int) {
 	manager.mu.Lock()
-	defer manager.mu.Unlock()
+	if manager.closed {
+		manager.mu.Unlock()
+		return 0, 0
+	}
 	manager.closed = true
+	// Service shutdown folds task cancellation into its summary. Disable the
+	// per-task observer before touching queued or running work.
+	manager.observer = nil
 	for _, id := range manager.queue {
 		if task := manager.tasks[id]; task != nil && task.Status == "queued" {
-			task.Status, task.FinishedAt = "cancelled", formatTaskTime(time.Now())
+			queued++
+			task.Status, task.FinishedAt = "cancelled", formatTaskTime(manager.now())
+			task.cancelSource = "shutdown"
 		}
 	}
 	manager.queue = nil
 	for _, task := range manager.tasks {
 		if task.Status == "running" {
-			task.Status, task.FinishedAt = "cancelled", formatTaskTime(time.Now())
+			active++
+			task.Status, task.FinishedAt = "cancelled", formatTaskTime(manager.now())
+			task.cancelSource = "shutdown"
 			if task.cancel != nil {
 				task.cancel()
 			}
@@ -250,6 +322,9 @@ func (manager *DownloadManager) Close() {
 	manager.pruneTerminalLocked()
 	manager.notifyLocked()
 	manager.closeSubscriptionsLocked()
+	manager.mu.Unlock()
+	manager.workers.Wait()
+	return queued, active
 }
 
 func (manager *DownloadManager) pumpLocked() {
@@ -261,30 +336,102 @@ func (manager *DownloadManager) pumpLocked() {
 			continue
 		}
 		manager.running++
+		manager.workers.Add(1)
 		context, cancel := context.WithCancel(context.Background())
 		task.cancel = cancel
-		task.Status, task.StartedAt = "running", formatTaskTime(time.Now())
+		task.startedAt = manager.now()
+		task.Status, task.StartedAt = "running", formatTaskTime(task.startedAt)
+		task.lifecycleStarted = true
+		manager.emitDownloadStartedLocked(task)
 		go manager.run(context, task)
 	}
 }
 
+func (manager *DownloadManager) downloadLifecycleSnapshotLocked(task *DownloadTask) downloadLifecycleTask {
+	if task == nil {
+		return downloadLifecycleTask{}
+	}
+	return downloadLifecycleTask{
+		ID:              task.ID,
+		URL:             task.URL,
+		DirectoryPath:   task.DirectoryPath,
+		Filename:        task.Filename,
+		DestinationPath: task.DestinationPath,
+		BytesDownloaded: task.BytesDownloaded,
+		TotalBytes:      task.TotalBytes,
+		StartedAt:       task.startedAt,
+		RetryOf:         task.retryOf,
+	}
+}
+
+func (manager *DownloadManager) emitDownloadAcceptedLocked(task *DownloadTask) {
+	if manager.observer != nil {
+		manager.observer.downloadAccepted(manager.downloadLifecycleSnapshotLocked(task))
+	}
+}
+
+func (manager *DownloadManager) emitDownloadStartedLocked(task *DownloadTask) {
+	if manager.observer != nil {
+		manager.observer.downloadStarted(manager.downloadLifecycleSnapshotLocked(task))
+	}
+}
+
+func (manager *DownloadManager) emitDownloadTerminalLocked(task *DownloadTask, err error) {
+	if task == nil || task.lifecycleTerminal {
+		return
+	}
+	task.lifecycleTerminal = true
+	if manager.observer == nil {
+		return
+	}
+	snapshot := manager.downloadLifecycleSnapshotLocked(task)
+	switch task.Status {
+	case "done":
+		manager.observer.downloadCompleted(snapshot)
+	case "cancelled":
+		manager.observer.downloadCancelled(snapshot)
+	case "error":
+		manager.observer.downloadFailed(snapshot, err)
+	}
+}
+
 func (manager *DownloadManager) run(ctx context.Context, task *DownloadTask) {
+	defer manager.workers.Done()
 	err := manager.download(ctx, task)
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	manager.running--
 	task.cancel = nil
-	task.FinishedAt = formatTaskTime(time.Now())
-	if ctx.Err() != nil {
+	task.FinishedAt = formatTaskTime(manager.now())
+	if task.Status == "cancelled" || ctx.Err() != nil {
 		task.Status = "cancelled"
+		if task.cancelSource == "" {
+			task.cancelSource = "client"
+		}
 	} else if err != nil {
 		task.Status, task.Error = "error", err.Error()
 	} else {
 		task.Status = "done"
 	}
+	manager.emitDownloadTerminalLocked(task, err)
 	manager.pruneTerminalLocked()
 	manager.pumpLocked()
 	manager.notifyLocked()
+}
+
+func (manager *DownloadManager) lifecycleSnapshot() fsShutdownSnapshot {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	snapshot := fsShutdownSnapshot{}
+	for _, task := range manager.tasks {
+		switch task.Status {
+		case "queued":
+			snapshot.QueuedDownloads++
+		case "running":
+			snapshot.ActiveDownloads++
+		}
+	}
+	return snapshot
 }
 
 func (manager *DownloadManager) download(ctx context.Context, task *DownloadTask) error {
@@ -359,7 +506,7 @@ func (manager *DownloadManager) download(ctx context.Context, task *DownloadTask
 		task.Filename, task.TotalBytes = filename, totalBytes
 		manager.notifyLocked()
 		manager.mu.Unlock()
-		started := time.Now()
+		started := manager.now()
 		result, err := manager.workspace.Download(directory, filename, idleDownloadReader{reader: response.Body, close: response.Body.Close, timeout: manager.idleTimeout}, func(downloaded int64) {
 			manager.updateProgress(task, downloaded, started, false)
 		})
@@ -627,7 +774,7 @@ func (manager *DownloadManager) updateProgress(task *DownloadTask, downloaded in
 	if !force && time.Since(task.lastProgress) < manager.progressInterval {
 		return
 	}
-	task.lastProgress = time.Now()
+	task.lastProgress = manager.now()
 	task.BytesDownloaded = downloaded
 	if task.TotalBytes != nil {
 		progress := 100
@@ -666,5 +813,10 @@ func formatTaskTime(value time.Time) string { return value.UTC().Format("2006-01
 func publicDownloadTask(task *DownloadTask) DownloadTask {
 	result := *task
 	result.cancel = nil
+	result.startedAt = time.Time{}
+	result.retryOf = ""
+	result.cancelSource = ""
+	result.lifecycleStarted = false
+	result.lifecycleTerminal = false
 	return result
 }

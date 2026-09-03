@@ -18,7 +18,11 @@ func runFS(options *Options) error {
 	if options.Terminal == nil {
 		return errors.New("fs terminal is required")
 	}
-	module, err := New(Dependencies{NetworkInterfaces: options.NetworkInterfaces})
+	module, err := New(Dependencies{
+		NetworkInterfaces: options.NetworkInterfaces,
+		Logger:            options.Logger,
+		Now:               options.Now,
+	})
 	if err != nil {
 		return err
 	}
@@ -31,14 +35,21 @@ func runFS(options *Options) error {
 	}
 	run := options.Terminal.Open(options.Context)
 	defer run.Close()
-	if err := run.Result(terminalFSStartupDocument(operation.Startup)); err != nil {
-		_ = operation.Close()
+	if err := run.ResultCheckpoint("fs-startup", terminalFSStartupDocument(operation.Startup)); err != nil {
+		operation.setShutdownReason("startup-output-failed")
+		operation.recordShutdownCause(err)
+		if closeErr := operation.Close(); closeErr != nil {
+			return reportedFSError{error: errors.Join(err, closeErr)}
+		}
 		return err
+	}
+	if operation.lifecycle != nil {
+		operation.lifecycle.commitStartup()
 	}
 	if err := operation.Wait(options.Context); err != nil {
-		return err
+		return reportedFSError{error: err}
 	}
-	if err := run.Result(terminalFSStoppedDocument()); err != nil {
+	if err := run.ResultCheckpoint("fs-stopped", terminalFSStoppedDocument()); err != nil {
 		return err
 	}
 	return nil

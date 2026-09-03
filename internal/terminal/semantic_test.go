@@ -42,6 +42,9 @@ func TestRecordingExperienceCapturesOnlyTerminalSemantics(t *testing.T) {
 	if err := run.Track(operation); err != nil {
 		t.Fatalf("Track() error = %v", err)
 	}
+	if err := run.ResultCheckpoint("startup", document); err != nil {
+		t.Fatalf("ResultCheckpoint() error = %v", err)
+	}
 	if err := run.Result(document); err != nil {
 		t.Fatalf("Result() error = %v", err)
 	}
@@ -53,6 +56,7 @@ func TestRecordingExperienceCapturesOnlyTerminalSemantics(t *testing.T) {
 		{Kind: terminaltest.AskOperation, Value: request},
 		{Kind: terminaltest.NoticeOperation, Value: document},
 		{Kind: terminaltest.TrackOperation, Value: operation},
+		{Kind: terminaltest.ResultCheckpointOperation, Value: terminaltest.Checkpoint{ID: "startup", Document: document}},
 		{Kind: terminaltest.ResultOperation, Value: document},
 		{Kind: terminaltest.CloseOperation},
 	}

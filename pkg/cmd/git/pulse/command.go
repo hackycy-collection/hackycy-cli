@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/pkg/cmdutil"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // Options contains the parsed git pulse request and its leaf-owned adapters.
@@ -23,6 +26,7 @@ type Options struct {
 	Terminal         *terminal.Runtime
 	Git              *gitprocess.Runner
 	Now              func() time.Time
+	Width            int
 }
 
 // NewCmdPulse creates the git pulse leaf with an optional test runner.
@@ -56,11 +60,24 @@ func NewCmdPulse(factory *cmdutil.Factory, runF func(*Options) error) *cobra.Com
 				}
 				options.Days = &parsed
 			}
+			options.Width = pulseTerminalWidth(factory.IOStreams.Out)
 			return runF(options)
 		},
 	}
 	command.Flags().StringVar(&days, "days", "", "Number of days to search")
 	return command
+}
+
+func pulseTerminalWidth(output io.Writer) int {
+	file, ok := output.(*os.File)
+	if !ok || file == nil {
+		return 0
+	}
+	width, _, err := term.GetSize(int(file.Fd()))
+	if err != nil || width <= 0 {
+		return 0
+	}
+	return width
 }
 
 func parseInteger(value string) (int, error) {

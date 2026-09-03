@@ -33,7 +33,11 @@ type ProtocolHandlers struct {
 // NewProtocolHandlers creates the paired Diff protocol boundaries for one
 // fixed Comparison Workspace.
 func NewProtocolHandlers(workspace *Workspace, bindingAddress string) ProtocolHandlers {
-	refresh := newRefreshCoordinator(workspace)
+	return newProtocolHandlers(workspace, bindingAddress, nil)
+}
+
+func newProtocolHandlers(workspace *Workspace, bindingAddress string, lifecycle *diffLifecycle) ProtocolHandlers {
+	refresh := newRefreshCoordinator(workspace, lifecycle)
 	return ProtocolHandlers{
 		REST:    newHTTPHandler(workspace, refresh),
 		MCP:     newMCPHandler(workspace, bindingAddress, refresh),

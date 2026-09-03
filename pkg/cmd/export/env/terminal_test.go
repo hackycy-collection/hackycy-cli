@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -38,9 +39,9 @@ func TestTerminalExportEnvAdapterTranslatesSelectionAndPresentation(t *testing.T
 	}
 	request := operations[0].Value.(terminalexperience.InteractionRequest)
 	if request.Kind != terminalexperience.InteractionSelect || request.Message != "Select environment" || request.HasDefault || !reflect.DeepEqual(request.Options, []terminalexperience.InteractionOption{
-		{Value: ".env", Label: "default"},
-		{Value: ".env.production", Label: "production"},
-	}) || !reflect.DeepEqual(request.CancelValues, []string{"", "q", "quit", "cancel"}) {
+		{Value: ".env", Label: "default", Description: ".env"},
+		{Value: ".env.production", Label: "production", Description: ".env.production"},
+	}) || !reflect.DeepEqual(request.CancelValues, []string{"", "q", "quit", "cancel"}) || request.TranscriptLabel != "Selected environment" {
 		t.Fatalf("selection request = %#v", request)
 	}
 	for index, want := range []terminalexperience.PresentationDocument{
@@ -107,6 +108,44 @@ func TestTerminalExportEnvAdapterPreservesAutomationResolutionAndRejectsInteract
 	automationAdapter := newTerminalExportEnvAdapter(automationExperience.Open(context.Background()), true)
 	if _, _, err := automationAdapter.SelectEnvironment("Select environment", []EnvironmentChoice{{Value: ".env", Label: "default"}, {Value: ".env.production", Label: "production"}}); !errors.Is(err, errExportEnvRequiresInteractive) {
 		t.Fatalf("ambiguous Automation selection error = %v", err)
+	}
+}
+
+func TestTerminalExportEnvPhaseSinkUsesIndependentClustersAndSafeMilestones(t *testing.T) {
+	experience := terminaltest.NewRecordingExperience()
+	run := experience.Open(context.Background())
+	sink := newExportEnvPhaseSink(run, terminalexperience.Capabilities{Interaction: terminalexperience.RichInteractive}, false)
+	sink.phase("resolve-directory", "Resolve directory", terminalPhaseActive, "")
+	sink.phase("resolve-directory", "Resolve directory", terminalPhaseSucceeded, "Directory ready")
+	sink.phase("discover-environment-files", "Discover environment files", terminalPhaseActive, "")
+	sink.phase("discover-environment-files", "Discover environment files", terminalPhaseSucceeded, "Found 2 environment files")
+	sink.selected(Selection{Files: []string{".env", ".env.production"}}, "user selection", true)
+	sink.variables(2)
+	sink.phase("read-selected-files", "Read selected files", terminalPhaseActive, "")
+	sink.phase("read-selected-files", "Read selected files", terminalPhaseSucceeded, "Read 2 files")
+	sink.phase("parse-and-merge-values", "Parse and merge values", terminalPhaseActive, "")
+	sink.phase("parse-and-merge-values", "Parse and merge values", terminalPhaseSucceeded, "Parsed 2 variables")
+	sink.phase("encode-json", "Encode JSON", terminalPhaseActive, "")
+	sink.phase("encode-json", "Encode JSON", terminalPhaseSucceeded, "JSON ready")
+	sink.close()
+	if err := run.Close(); err != nil {
+		t.Fatal(err)
+	}
+	operations := experience.Run.Operations()
+	var tracks, milestones int
+	for _, operation := range operations {
+		switch operation.Kind {
+		case terminaltest.TrackOperation:
+			tracks++
+		case terminaltest.MilestoneOperation:
+			milestones++
+			if strings.Contains(fmt.Sprint(operation.Value), "do-not-project") {
+				t.Fatalf("milestone leaked secret: %#v", operation.Value)
+			}
+		}
+	}
+	if tracks != 2 || milestones != 2 {
+		t.Fatalf("operations = %#v, tracks=%d milestones=%d", operations, tracks, milestones)
 	}
 }
 

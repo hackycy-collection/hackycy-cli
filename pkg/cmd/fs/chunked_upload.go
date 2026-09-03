@@ -18,18 +18,31 @@ type ChunkedUploadManager struct {
 	mu        sync.Mutex
 	uploads   map[string]*chunkedUpload
 	closed    bool
+	now       func() time.Time
+	observer  chunkedUploadLifecycleObserver
 }
 
 type chunkedUpload struct {
-	id        string
-	owner     string
-	directory WorkspacePath
-	filename  string
-	temporary WorkspacePath
-	size      int64
-	uploaded  int64
-	complete  *UploadResult
-	updated   time.Time
+	id                string
+	owner             string
+	directory         WorkspacePath
+	filename          string
+	temporary         WorkspacePath
+	size              int64
+	uploaded          int64
+	complete          *UploadResult
+	started           time.Time
+	updated           time.Time
+	lifecycleTerminal bool
+}
+
+// chunkedUploadLifecycleObserver receives only real Managed Task transitions.
+// It is private so the existing upload HTTP representation stays unchanged.
+type chunkedUploadLifecycleObserver interface {
+	chunkedUploadStarted(chunkedUploadLifecycleTask)
+	chunkedUploadCompleted(chunkedUploadLifecycleTask)
+	chunkedUploadCancelled(chunkedUploadLifecycleTask)
+	chunkedUploadExpired(chunkedUploadLifecycleTask)
 }
 
 type ChunkedUpload struct {
@@ -45,7 +58,27 @@ func NewChunkedUploadManager(workspace *Workspace, chunkSize int64) *ChunkedUplo
 	if chunkSize == 0 {
 		chunkSize = 8 * 1024 * 1024
 	}
-	return &ChunkedUploadManager{workspace: workspace, chunkSize: chunkSize, uploads: make(map[string]*chunkedUpload)}
+	return newChunkedUploadManager(workspace, chunkSize, time.Now, nil)
+}
+
+func newChunkedUploadManager(workspace *Workspace, chunkSize int64, now func() time.Time, observer chunkedUploadLifecycleObserver) *ChunkedUploadManager {
+	if chunkSize == 0 {
+		chunkSize = 8 * 1024 * 1024
+	}
+	if now == nil {
+		now = time.Now
+	}
+	return &ChunkedUploadManager{workspace: workspace, chunkSize: chunkSize, uploads: make(map[string]*chunkedUpload), now: now, observer: observer}
+}
+
+// setLifecycle installs the service observer before the listener is exposed.
+func (manager *ChunkedUploadManager) setLifecycle(observer chunkedUploadLifecycleObserver, now func() time.Time) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	manager.observer = observer
+	if now != nil {
+		manager.now = now
+	}
 }
 
 func (manager *ChunkedUploadManager) Create(owner string, directory WorkspacePath, filename string, size int64) (ChunkedUpload, error) {
@@ -72,7 +105,7 @@ func (manager *ChunkedUploadManager) Create(owner string, directory WorkspacePat
 	if manager.closed {
 		return ChunkedUpload{}, &ServiceError{Code: "CHUNKED_UPLOAD_STOPPED", Message: "Chunked upload service is stopped"}
 	}
-	manager.pruneLocked(time.Now())
+	manager.pruneLocked(manager.now())
 	count := 0
 	for _, upload := range manager.uploads {
 		if upload.owner == owner && upload.complete == nil {
@@ -94,54 +127,74 @@ func (manager *ChunkedUploadManager) Create(owner string, directory WorkspacePat
 	if err := file.Close(); err != nil {
 		return ChunkedUpload{}, workspaceUnavailable("close chunked upload staging file", err)
 	}
-	upload := &chunkedUpload{id: id, owner: owner, directory: directory, filename: filename, temporary: temporary, size: size, updated: time.Now()}
+	started := manager.now()
+	upload := &chunkedUpload{id: id, owner: owner, directory: directory, filename: filename, temporary: temporary, size: size, started: started, updated: started}
 	manager.uploads[id] = upload
+	manager.emitChunkedUploadStartedLocked(upload)
 	return manager.describe(upload), nil
 }
 
 // Close removes process-local incomplete staging entries and refuses future
 // upload creation. Completed publications remain in the workspace.
 func (manager *ChunkedUploadManager) Close() error {
+	_, err := manager.closeWithStats()
+	return err
+}
+
+func (manager *ChunkedUploadManager) closeWithStats() (removed int, result error) {
 	manager.mu.Lock()
 	if manager.closed {
 		manager.mu.Unlock()
-		return nil
+		return 0, nil
 	}
 	manager.closed = true
+	manager.observer = nil
 	temporary := make([]WorkspacePath, 0, len(manager.uploads))
 	for _, upload := range manager.uploads {
 		if upload.complete == nil {
+			removed++
 			temporary = append(temporary, upload.temporary)
 		}
 	}
 	manager.uploads = make(map[string]*chunkedUpload)
 	manager.mu.Unlock()
 
-	var result error
 	for _, path := range temporary {
 		if err := manager.workspace.root.Remove(path.rootName()); err != nil && !os.IsNotExist(err) {
 			result = errors.Join(result, workspaceUnavailable("remove chunked upload staging file", err))
 		}
 	}
-	return result
+	return removed, result
+}
+
+func (manager *ChunkedUploadManager) lifecycleSnapshot() fsShutdownSnapshot {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	snapshot := fsShutdownSnapshot{}
+	for _, upload := range manager.uploads {
+		if upload.complete == nil {
+			snapshot.IncompleteChunkedUploads++
+		}
+	}
+	return snapshot
 }
 
 func (manager *ChunkedUploadManager) Get(owner, id string) (ChunkedUpload, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	manager.pruneLocked(time.Now())
+	manager.pruneLocked(manager.now())
 	upload, err := manager.ownedLocked(owner, id)
 	if err != nil {
 		return ChunkedUpload{}, err
 	}
-	upload.updated = time.Now()
+	upload.updated = manager.now()
 	return manager.describe(upload), nil
 }
 
 func (manager *ChunkedUploadManager) Append(owner, id string, start, end, total int64, body io.Reader) (ChunkedUpload, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	manager.pruneLocked(time.Now())
+	manager.pruneLocked(manager.now())
 	upload, err := manager.ownedLocked(owner, id)
 	if err != nil {
 		return ChunkedUpload{}, err
@@ -168,7 +221,7 @@ func (manager *ChunkedUploadManager) Append(owner, id string, start, end, total 
 		return ChunkedUpload{}, &ServiceError{Code: "CHUNKED_UPLOAD_OFFSET_MISMATCH", Message: "Chunk body length does not match Content-Range"}
 	}
 	upload.uploaded += written
-	upload.updated = time.Now()
+	upload.updated = manager.now()
 	return manager.describe(upload), nil
 }
 
@@ -177,7 +230,7 @@ func (manager *ChunkedUploadManager) Complete(owner, id string) (ChunkedUpload, 
 	defer manager.workspace.writes.Unlock()
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	manager.pruneLocked(time.Now())
+	manager.pruneLocked(manager.now())
 	upload, err := manager.ownedLocked(owner, id)
 	if err != nil {
 		return ChunkedUpload{}, err
@@ -205,7 +258,8 @@ func (manager *ChunkedUploadManager) Complete(owner, id string) (ChunkedUpload, 
 		}
 		result := UploadResult{Filename: name, Path: destination.String(), Size: upload.size}
 		upload.complete = &result
-		upload.updated = time.Now()
+		upload.updated = manager.now()
+		manager.emitChunkedUploadCompletedLocked(upload)
 		return manager.describe(upload), nil
 	}
 	return ChunkedUpload{}, &ServiceError{Code: "NAME_EXHAUSTED", Message: "Too many files have the same name"}
@@ -224,6 +278,7 @@ func (manager *ChunkedUploadManager) Cancel(owner, id string) error {
 	if err := manager.workspace.root.Remove(upload.temporary.rootName()); err != nil && !os.IsNotExist(err) {
 		return workspaceUnavailable("remove chunked upload staging file", err)
 	}
+	manager.emitChunkedUploadCancelledLocked(upload)
 	delete(manager.uploads, id)
 	return nil
 }
@@ -254,9 +309,69 @@ func (manager *ChunkedUploadManager) pruneLocked(now time.Time) {
 			continue
 		}
 		if upload.complete == nil {
+			manager.emitChunkedUploadExpiredLocked(upload)
+		}
+		if upload.complete == nil {
 			_ = manager.workspace.root.Remove(upload.temporary.rootName())
 		}
 		delete(manager.uploads, id)
+	}
+}
+
+func (manager *ChunkedUploadManager) chunkedUploadLifecycleSnapshotLocked(upload *chunkedUpload) chunkedUploadLifecycleTask {
+	if upload == nil {
+		return chunkedUploadLifecycleTask{}
+	}
+	return chunkedUploadLifecycleTask{
+		ID:            upload.id,
+		DirectoryPath: upload.directory.String(),
+		Filename:      upload.filename,
+		DestinationPath: func() string {
+			if upload.complete == nil {
+				return ""
+			}
+			return upload.complete.Path
+		}(),
+		TotalBytes:     upload.size,
+		UploadedBytes:  upload.uploaded,
+		ChunkSizeBytes: manager.chunkSize,
+		StartedAt:      upload.started,
+	}
+}
+
+func (manager *ChunkedUploadManager) emitChunkedUploadStartedLocked(upload *chunkedUpload) {
+	if manager.observer != nil {
+		manager.observer.chunkedUploadStarted(manager.chunkedUploadLifecycleSnapshotLocked(upload))
+	}
+}
+
+func (manager *ChunkedUploadManager) emitChunkedUploadCompletedLocked(upload *chunkedUpload) {
+	if upload == nil || upload.lifecycleTerminal {
+		return
+	}
+	upload.lifecycleTerminal = true
+	if manager.observer != nil {
+		manager.observer.chunkedUploadCompleted(manager.chunkedUploadLifecycleSnapshotLocked(upload))
+	}
+}
+
+func (manager *ChunkedUploadManager) emitChunkedUploadCancelledLocked(upload *chunkedUpload) {
+	if upload == nil || upload.lifecycleTerminal {
+		return
+	}
+	upload.lifecycleTerminal = true
+	if manager.observer != nil {
+		manager.observer.chunkedUploadCancelled(manager.chunkedUploadLifecycleSnapshotLocked(upload))
+	}
+}
+
+func (manager *ChunkedUploadManager) emitChunkedUploadExpiredLocked(upload *chunkedUpload) {
+	if upload == nil || upload.lifecycleTerminal {
+		return
+	}
+	upload.lifecycleTerminal = true
+	if manager.observer != nil {
+		manager.observer.chunkedUploadExpired(manager.chunkedUploadLifecycleSnapshotLocked(upload))
 	}
 }
 
