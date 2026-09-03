@@ -88,3 +88,25 @@ func TestTerminalCMListPresentationUsesRichSemanticRoles(t *testing.T) {
 		})
 	}
 }
+
+func TestTerminalCMListRichProjectionUsesPlaceholdersForUnsafeFields(t *testing.T) {
+	result := Result{Profiles: []Profile{{
+		Name:    "bad\nname",
+		Model:   string([]byte{'m', 0xff, 'x'}),
+		BaseURL: "https://user:secret@example.test/v1?token=hidden#fragment",
+	}}}
+	row := terminalCMListRichRow(result.Profiles[0])
+	for _, field := range strings.Split(row, "\t") {
+		if strings.ContainsAny(field, "\r\n\x1b") {
+			t.Fatalf("unsafe Rich field contains raw control: %q", row)
+		}
+	}
+	for _, expected := range []string{"Profile", "Model configured", "https://example.test/v1"} {
+		if !strings.Contains(row, expected) {
+			t.Fatalf("Rich row = %q, missing %q", row, expected)
+		}
+	}
+	if strings.Contains(row, "secret") || strings.Contains(row, "hidden") || strings.Contains(row, "fragment") {
+		t.Fatalf("Rich row exposed URL credentials/query/fragment: %q", row)
+	}
+}

@@ -96,6 +96,31 @@ func TestTerminalForkListPresentationUsesRichSemanticRoles(t *testing.T) {
 	}
 }
 
+func TestTerminalForkListRichProjectionHidesUnsafeFields(t *testing.T) {
+	result := Result{Instances: []Instance{{
+		Name:         "unsafe\nname",
+		Host:         "host\x1b[31m",
+		Scheme:       string([]byte{'h', 0xff, 't'}),
+		Type:         "provider\tname",
+		TokenPreview: "preview\rvalue***",
+	}}}
+
+	row := terminalForkListRichRows(result.Instances)
+	if strings.ContainsAny(row, "\r\n\t\x1b") {
+		t.Fatalf("unsafe Rich row contains raw control: %q", row)
+	}
+	for _, expected := range []string{"Name configured", "Provider configured", "Scheme configured", "Host configured", "[redacted]"} {
+		if !strings.Contains(row, expected) {
+			t.Fatalf("unsafe Rich row = %q, missing %q", row, expected)
+		}
+	}
+	for _, raw := range []string{"unsafe", "host", "provider", "preview"} {
+		if strings.Contains(row, raw) {
+			t.Fatalf("unsafe Rich row exposed %q: %q", raw, row)
+		}
+	}
+}
+
 func environmentWith(overrides map[string]string) []string {
 	environment := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {

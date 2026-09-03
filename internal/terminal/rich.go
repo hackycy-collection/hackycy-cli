@@ -1,6 +1,7 @@
 package terminal
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -19,6 +20,7 @@ type richController struct {
 	model   *richRootModel
 	program *tea.Program
 	lease   *RendererLease
+	output  *rendererTerminalWriter
 
 	done chan struct{}
 	mu   sync.Mutex
@@ -45,15 +47,16 @@ func (controller *richController) start() error {
 		height,
 		controller.runtime.capabilities.Stderr.Color,
 	)
+	controller.output = &rendererTerminalWriter{
+		writer:   controller.lease.Writer(),
+		terminal: controller.runtime.diagnosticTerminal,
+	}
 	controller.program = tea.NewProgram(
 		controller.model,
 		tea.WithInput(controller.runtime.inputTerminal),
 		// Keep the root's writes inside the renderer lease.  This makes the
 		// renderer and the semantic replay share one serialized terminal owner.
-		tea.WithOutput(rendererTerminalWriter{
-			writer:   controller.lease.Writer(),
-			terminal: controller.runtime.diagnosticTerminal,
-		}),
+		tea.WithOutput(controller.output),
 		tea.WithoutSignalHandler(),
 	)
 	go func() {
@@ -75,27 +78,103 @@ func (controller *richController) start() error {
 
 // rendererTerminalWriter preserves Bubble Tea's terminal capability detection
 // while routing every renderer write through the active diagnostic lease.
+//
+// Bubble Tea v2 queues DEC mode probes in a separate output buffer. A finite
+// command can complete before that buffer is flushed, which causes the probe
+// to reach the terminal only after input has been restored to the caller. Any
+// terminal response then becomes shell input. Synchronized-output and Unicode
+// mode probing are optional renderer optimizations, so finite Experience runs
+// suppress those asynchronous probes while leaving normal ANSI rendering
+// untouched.
 type rendererTerminalWriter struct {
 	writer   io.Writer
 	terminal *os.File
+
+	mu      sync.Mutex
+	pending []byte
 }
 
-func (writer rendererTerminalWriter) Write(value []byte) (int, error) {
-	return writer.writer.Write(value)
+var rendererCapabilityQueries = [][]byte{
+	[]byte("\x1b[?2026$p"),
+	[]byte("\x1b[?2027$p"),
 }
 
-func (writer rendererTerminalWriter) Read(value []byte) (int, error) {
+func (writer *rendererTerminalWriter) Write(value []byte) (int, error) {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+
+	writer.pending = append(writer.pending, value...)
+	filtered, pending := filterRendererCapabilityQueries(writer.pending, false)
+	writer.pending = append([]byte(nil), pending...)
+	if err := writeRendererBytes(writer.writer, filtered); err != nil {
+		return 0, err
+	}
+	return len(value), nil
+}
+
+func (writer *rendererTerminalWriter) Read(value []byte) (int, error) {
 	return writer.terminal.Read(value)
 }
 
 // Close deliberately leaves the inherited diagnostic terminal open. Bubble Tea
 // only needs the terminal-file shape for capability detection and sizing.
-func (rendererTerminalWriter) Close() error {
+func (*rendererTerminalWriter) Close() error {
 	return nil
 }
 
-func (writer rendererTerminalWriter) Fd() uintptr {
+func (writer *rendererTerminalWriter) Fd() uintptr {
 	return writer.terminal.Fd()
+}
+
+func (writer *rendererTerminalWriter) Flush() error {
+	writer.mu.Lock()
+	defer writer.mu.Unlock()
+	filtered, _ := filterRendererCapabilityQueries(writer.pending, true)
+	writer.pending = nil
+	return writeRendererBytes(writer.writer, filtered)
+}
+
+func filterRendererCapabilityQueries(value []byte, final bool) (filtered, pending []byte) {
+	filtered = make([]byte, 0, len(value))
+	for len(value) > 0 {
+		matched := false
+		partial := false
+		for _, query := range rendererCapabilityQueries {
+			switch {
+			case bytes.HasPrefix(value, query):
+				value = value[len(query):]
+				matched = true
+			case !final && len(value) < len(query) && bytes.HasPrefix(query, value):
+				partial = true
+			}
+			if matched || partial {
+				break
+			}
+		}
+		if matched {
+			continue
+		}
+		if partial {
+			return filtered, value
+		}
+		filtered = append(filtered, value[0])
+		value = value[1:]
+	}
+	return filtered, nil
+}
+
+func writeRendererBytes(destination io.Writer, value []byte) error {
+	for len(value) > 0 {
+		written, err := destination.Write(value)
+		if err != nil {
+			return err
+		}
+		if written == 0 {
+			return io.ErrShortWrite
+		}
+		value = value[written:]
+	}
+	return nil
 }
 
 func (controller *richController) ask(ctx context.Context, handler *InteractionHandler, request InteractionRequest) (InteractionAnswer, error) {
@@ -194,6 +273,10 @@ func (controller *richController) closeWith(ledger *TranscriptLedger, includePro
 		controller.program.Quit()
 		<-controller.done
 	}
+	var rendererFlushErr error
+	if controller.output != nil {
+		rendererFlushErr = controller.output.Flush()
+	}
 
 	// Bubble Tea has restored the primary screen at this point, while the
 	// lease still owns stderr.  Replay only the bounded semantic ledger; raw
@@ -208,7 +291,7 @@ func (controller *richController) closeWith(ledger *TranscriptLedger, includePro
 	if includeProgramError {
 		programErr = controller.programErrorOrNil()
 	}
-	return errors.Join(programErr, replayErr, controller.releaseLease())
+	return errors.Join(programErr, rendererFlushErr, replayErr, controller.releaseLease())
 }
 
 func (controller *richController) releaseLease() error {

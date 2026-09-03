@@ -62,3 +62,12 @@ func TestTerminalCMUsePresentationUsesARichSuccessRole(t *testing.T) {
 		}
 	}
 }
+
+func TestTerminalCMUseRichProjectionHidesUnsafeProfileIdentity(t *testing.T) {
+	for _, profile := range []string{"bad\nprofile", string([]byte{'b', 0xff, 'd'}), "   "} {
+		document := terminalCMUseRichDocument(UseResult{Profile: profile})
+		if got := document.Blocks[len(document.Blocks)-1].Text; got != "Default CM profile set to Requested profile" {
+			t.Fatalf("profile %q Rich result = %q", profile, got)
+		}
+	}
+}

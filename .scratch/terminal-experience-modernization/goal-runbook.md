@@ -76,8 +76,9 @@
   remain unchanged.
 - Service Commands retain neutral, line-oriented Lifecycle Logs and are not
   converted to full-screen Ops Console views.
-- G3 command slices remain gated on a fresh B visual re-acceptance. No command
-  slice may be treated as B-accepted until that entry has an explicit result.
+- G3 command slices were gated on a fresh B visual re-acceptance. That
+  prerequisite was explicitly accepted on 2026-09-02; each command slice still
+  requires its own evidence and acceptance before G3 can pass.
 
 ## Goal Ledger
 
@@ -86,8 +87,8 @@
 | G0: Baseline and dependency lock | passed | none | `implementation-plan.md` -> `G0: Baseline and dependency lock` | no predecessor |
 | G1: Shared semantic terminal foundation | passed | G0 | `implementation-plan.md` -> `G1: Shared semantic terminal foundation` | G0 passed |
 | G2: Logging and root boundary | passed | G1 | `implementation-plan.md` -> `G2: Logging and root boundary` | G1 passed |
-| G3: Low-risk finite command slices | active | G2 + B visual re-acceptance | `implementation-plan.md` -> `G3: Low-risk finite command slices` | G2 passed; B Ops Console visual re-acceptance pending |
-| G4: External-read and service-startup slices | planned | G3 | `implementation-plan.md` -> `G4: External-read and service-startup slices` | G3 pending |
+| G3: Low-risk finite command slices | passed | G2 + B visual re-acceptance | `implementation-plan.md` -> `G3: Low-risk finite command slices` | G2 passed; B Ops Console visual re-acceptance passed 2026-09-02; G3 Exit conditions passed 2026-09-03 |
+| G4: External-read and service-startup slices | active | G3 | `implementation-plan.md` -> `G4: External-read and service-startup slices` | G3 passed |
 | G5: Mutating, destructive, and archive slices | planned | G4 | `implementation-plan.md` -> `G5: Mutating, destructive, and archive slices` | G4 pending |
 | G6: Git mutation and process handoff | planned | G5 | `implementation-plan.md` -> `G6: Git mutation and process handoff` | G5 pending |
 | G7: Service lifecycles and detached updater | planned | G6 | `implementation-plan.md` -> `G7: Service lifecycles and detached updater` | G6 pending |
@@ -572,10 +573,287 @@ re-acceptance prerequisite.
 
 - 2026-09-01: initialized as `planned`; no implementation evidence.
 - 2026-09-01: activated as `active`; 尚未开始实施。
+- 2026-09-02: manual acceptance handoff issued for the prerequisite B Ops
+  Console visual re-acceptance. No G3 command slice was inspected, changed,
+  or verified in this Goal because the decision log still requires an explicit
+  human result before command work may begin. Acceptance entry from the
+  repository root: `make prototype-terminal` (default B / `console` success
+  journey); optional checks are
+  `make prototype-terminal PROTOTYPE_ARGS='--variant=console --outcome=failure'`,
+  `make prototype-terminal PROTOTYPE_ARGS='--variant=console --outcome=cancel'`,
+  `NO_COLOR=1 make prototype-terminal`,
+  `env -u NO_COLOR TERM=xterm-256color make prototype-terminal`, and a 55x15
+  PTY resize. Existing automated evidence is the B revision record above:
+  prototype `go test ./...`, prototype `go vet ./...`, targeted terminal and
+  terminaltest tests, `make check`, `git diff --check`, source-baseline
+  verification, and PTY smoke coverage all passed. Minimum acceptance checklist:
+  (1) B `OPS CONSOLE` command/status bar, safe metadata row, aligned
+  `STATE / PHASE / DETAIL` table, and active content region; (2) amber/cyan
+  hierarchy and symbol-paired active/done/failed/cancelled states remain
+  understandable with color and `NO_COLOR=1`; (3) Huh bottom focus rule,
+  absence of a persistent left rail, and single-column narrow degradation;
+  (4) AltScreen restoration precedes Transcript replay, deferred diagnostics,
+  and stdout; (5) secrets and large results are absent from the Transcript.
+  Expected reply format is exactly `通过` or `未通过: <reason>` with concise
+  evidence for a failure. Only a new Goal carrying that explicit result may
+  resume G3; this Goal performs no waiting or polling. 本次 Goal 已结束、Gate
+  仍为 `active`。
+- 2026-09-02: received the explicit prerequisite result `通过` for the B Ops
+  Console visual re-acceptance. The command-slice lock is released for this
+  Gate. The accepted evidence is the B prototype entry above; no command
+  adapter is treated as accepted by this result. Next: implement and verify
+  the four G3 command adapters one command per slice, starting with
+  `config fork list`.
+- 2026-09-02: completed slice `config fork list Experience adapter`. Opened the
+  Experience before lazy store construction, tracked the bounded
+  `Load fork provider instances` phase by stable ID, mapped read success/failure
+  and context cancellation to one `Finish` call, and kept Plain/Automation
+  result bytes unchanged. Rich now has a B-oriented eyebrow/title/subtitle,
+  safe bounded row projection, empty guidance, and a small loaded-count
+  milestone; malformed/control-bearing fields and unsafe token previews are
+  redacted only in the Rich projection. Focused verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/config/fork/list -count=1`. Risk: the shared renderer still owns
+  generic table wrapping, so the command's wide/narrow visual evidence remains
+  to be exercised in the G3 acceptance pass. Next: implement `config cm list`.
+- 2026-09-02: completed slice `config cm list Experience adapter`. Opened the
+  Experience before store construction and `ListCMProfiles`, tracked the
+  stable `Load CM profiles` phase, preserved stored order/default semantics and
+  the exact Plain/Automation result, and submitted one `Finish` outcome on
+  success, failure, or cancellation. Rich adds the B-oriented metadata/title
+  hierarchy, bounded control-free fields, warning empty guidance, and a loaded
+  count milestone; URL userinfo/query/fragment and unsafe profile/model values
+  are excluded from the Rich projection. Focused verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/config/cm/list ./pkg/cmd/config/fork/list ./pkg/cmd/root -count=1`.
+  Standalone acceptance for both list commands also passed with
+  `go test -tags acceptance ./acceptance -run
+  'TestConfigForkListStandaloneBinary|TestConfigCMListStandaloneBinary'
+  -count=1`. Risk: Rich PTY dimensions and transcript ordering still need the
+  final G3 acceptance run. Next: implement `config cm use`.
+- 2026-09-02: completed slice `config cm use Experience adapter`. The
+  noninteractive atomic writer now opens the Experience before store creation,
+  uses the single `set-default-cm-profile` phase in Rich, emits exactly one
+  Plain lifecycle notice, preserves the exact profile identity passed to
+  `SetDefaultCMProfile`, and maps success/failure to one `Finish` call without
+  resolving credentials or adding a preflight read. Rich uses a bounded
+  control-free profile projection and B-oriented title/detail blocks; the
+  compatibility result remains unchanged for Plain, Automation, and redirected
+  output. Focused verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/config/cm/use -count=1`. Standalone acceptance passed with
+  `go test -tags acceptance ./acceptance -run TestConfigCMUseStandaloneBinary
+  -count=1`, including successful persistence and missing-profile failure
+  behavior. Risk: Rich PTY/stream ordering and malicious profile-name visual
+  evidence remain for the final G3 acceptance pass. Next: implement `git heat`.
+- 2026-09-02: completed slice `git heat Experience adapter`. Added the three
+  truthful `locate-repository`, `read-git-history`, and `rank-hot-paths` phases,
+  cancellation/error mapping, Rich summary milestone, and the Rich report
+  projection while preserving normalization, Git invocation, aggregation,
+  sorting, time, query, empty-result, stdout, signal, and exit semantics.
+  Changed `pkg/cmd/git/heat/run.go`, `pkg/cmd/git/heat/terminal.go`, and
+  `pkg/cmd/git/heat/terminal_test.go`. Focused package tests, query/path
+  projection tests, cancellation tests, and tagged standalone acceptance all
+  passed. Risk: the final human review still needs to judge wide/narrow report
+  readability and query emphasis in a real terminal. Next: complete the
+  cross-command verification and acceptance handoff.
+- 2026-09-02: completed corrective safety slice `config fork list Rich field
+  projection`. Control-bearing and invalid-UTF-8 names, hosts, schemes,
+  provider types, and token previews now use safe placeholders or redaction
+  instead of echoing any portion of the unsafe value; Plain/Automation result
+  bytes and appconfig projections remain unchanged. Changed
+  `pkg/cmd/config/fork/list/presentation.go` and
+  `pkg/cmd/config/fork/list/terminal_test.go`. Focused and race tests passed.
+  Risk: only the Rich projection is changed; manual review must confirm the
+  placeholders remain understandable at narrow dimensions. Next: rerun the
+  declared G3 repository sequence and hand off for command acceptance.
+- 2026-09-02: G3 automated verification completed after the corrective slice.
+  Directed evidence: all four focused packages passed with
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./pkg/cmd/config/fork/list
+  ./pkg/cmd/config/cm/list ./pkg/cmd/config/cm/use ./pkg/cmd/git/heat -count=1`
+  (run per package), the shared Rich PTY/transcript tests passed with
+  `go test ./internal/terminal -run 'TestRich.*PTY|TestTracked.*PTY|Test.*Transcript|Test.*Finish' -count=1`,
+  all four tagged standalone acceptance tests passed, and the affected-package
+  race suite passed. Repository evidence, in declared order, passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/config/... ./pkg/cmd/git/heat ./internal/terminal`,
+  `make command-surface`, `make check`, and `git diff --check`.
+  `make check` covered Web lint/type/test/build, Go vet, and all Go packages.
+  Real PTY smoke also passed for all four commands at 120x40 with
+  `env -u NO_COLOR TERM=xterm-256color`, at 40x15 with `NO_COLOR=1`, and for
+  CM-list stderr Rich UI with stdout redirected; every run exited 0, retained
+  phase/Transcript/result ordering, and the redirected result stayed the
+  unchanged durable text. The standalone fixture is the binary
+  `/tmp/g3-terminal-acceptance/ycy-final` (SHA-256
+  `212d3ab08dc9982410fe54a30a6c14daeba2eada23b0e484f31e3620a7f841cf`) with
+  data under `/tmp/g3-terminal-acceptance/home` and
+  `/tmp/g3-terminal-acceptance/repo`. Automated evidence covers G3 Exit
+  conditions 1, 2, and the automated portion of 3; no command result, storage,
+  Git, API, or compatibility contract changed. Residual risk is the required
+  human visual judgment at wide/narrow dimensions and explicit confirmation
+  that no secret or large result appears in the Transcript. Next: one-time
+  manual acceptance handoff; Gate remains `active`.
+- 2026-09-02: manual acceptance handoff issued for G3. Acceptance entry is
+  the standalone binary `/tmp/g3-terminal-acceptance/ycy-final` with the
+  prepared fixtures above. Run each command in a colored TTY at wide and
+  narrow dimensions (for example, `stty columns 120 rows 40` and
+  `stty columns 40 rows 15`), then repeat with `NO_COLOR=1`; use the same
+  fixture repository for `git heat`. The minimum checklist is: (1) each
+  command shows its safe title/metadata, loading or focus state, and final
+  phase in the B Ops Console hierarchy; (2) wide and narrow layouts keep all
+  semantic fields/rows understandable, with symbols and labels still clear
+  without color; (3) `config fork list` preserves instance order and only the
+  encrypted preview, `config cm list` preserves profile order/default and
+  never exposes API keys, `config cm use <profile>` persists the exact target
+  and reports missing targets safely, and `git heat` preserves range/target/
+  sort/query semantics including empty and long/control-bearing paths; (4)
+  AltScreen restoration is followed by bounded Transcript, deferred
+  diagnostics, and exactly one unchanged stdout result, including when stdout
+  is redirected; (5) no secret, raw error, absolute path, or large report is
+  present in the Transcript. Expected explicit reply format is exactly
+  `通过: <commands>` or `未通过: <command and reason>`. This is a one-time
+  handoff and termination point for this Goal; no polling or Gate transition
+  is performed. 本次 Goal 已结束、Gate 仍为 `active`。
+- 2026-09-03: the manual acceptance result for the G3 `git heat` report was
+  not accepted. The observed colored-TTY run showed tab-dependent column drift,
+  generic Rich wrapping splitting the table into detached path lines, and long
+  directory paths appearing truncated at the terminal edge. The failure was
+  isolated to `pkg/cmd/git/heat/terminal.go` Rich projection; Git aggregation,
+  ordering, range/query semantics, and the Plain/Automation result were not
+  implicated. Started corrective slice `git heat Rich responsive report` within
+  G3 only. The slice adds no shared-renderer exception: it captures the injected
+  stdout TTY width in the git heat command adapter, uses space-padded columns and
+  explicit path continuation lines at wide widths, and uses labelled
+  `Changed at` / `Changes` / target records at narrow widths. Regression tests
+  first reproduced the failure and then passed at 120 and 40 columns, including
+  latest/query markers and control-safe long paths. Changed files are limited
+  to `pkg/cmd/git/heat/command.go`, `pkg/cmd/git/heat/terminal.go`, and
+  `pkg/cmd/git/heat/terminal_test.go`. Next: complete the declared directed and
+  repository verification, then issue one new manual acceptance handoff; G3
+  remains `active`.
+- 2026-09-03: recorded completion of the corrective slice's automated
+  verification. `go test ./pkg/cmd/git/heat -count=1`, the Rich PTY/transcript
+  focused tests, all four standalone acceptance tests, and the affected-package
+  race suite passed. The declared G3 repository sequence also passed in order:
+  focused repository tests, `make command-surface`, `make check`, and
+  `git diff --check`; the one transient Tunnel FRP integration failure was
+  cleared by the pinned `go1.26.7` rerun, which passed in full. Real PTY smoke
+  passed at 120x40 with color, 40x15 with `NO_COLOR=1`, and the redirected
+  stdout path. The final standalone binary is
+  `/tmp/g3-terminal-acceptance/ycy-final` with SHA-256
+  `95c6236b089aeec612999c5e8ca84a27ea1dc3f0a193dd058d639749a66763e2`;
+  transcripts are under `/tmp/g3-terminal-acceptance/final-pty/`. The
+  corrective changes remain limited to the three files named above. Automated
+  Exit conditions are satisfied; the remaining condition is explicit human
+  acceptance of the report presentation and transcript safety.
+- 2026-09-03: new one-time manual acceptance handoff issued for G3. Use the
+  prepared binary `/tmp/g3-terminal-acceptance/ycy-final` and fixture repository
+  `/tmp/g3-terminal-acceptance/repo`; fixture data is under
+  `/tmp/g3-terminal-acceptance/home`. In a real TTY, run the four commands
+  (`config fork list`, `config cm list`, `config cm use <an existing profile>`,
+  and `git heat` from the fixture repository) first at 120x40 with color, then
+  at 40x15 with `NO_COLOR=1`. The minimum checklist is: (1) the B `OPS CONSOLE`
+  title/metadata, loading or focus state, and final phase are legible; (2) the
+  wide `git heat` columns stay aligned, long paths wrap as complete continuation
+  lines, and the narrow view keeps labelled `Changed at`, `Changes`, and target
+  fields understandable; (3) symbols and labels remain clear without color,
+  latest/query markers remain visible, and no control characters leak; (4) after
+  the screen restores, the bounded transcript contains no secret, raw error,
+  absolute path, or large report, while exactly one unchanged durable result is
+  emitted (including with stdout redirected); (5) list order/defaults and the
+  exact `config cm use` target remain correct. Reply exactly `通过: <commands>`
+  when the checklist passes, or `未通过: <command and reason>` with the first
+  failing command and evidence. This is the termination handoff for this Goal;
+  no Gate transition is performed. 本次 Goal 已结束、Gate 仍为 `active`。
+- 2026-09-03: completed corrective slice `Rich capability-query output
+  boundary` for the reported `2026;2$y` shell-input leak. Bubble Tea v2 queues
+  DEC 2026/2027 probes in its output buffer; a finite command can restore the
+  inherited terminal before those probes are flushed, and a terminal response
+  can then be parsed as the next shell command. The Rich renderer writer now
+  owns that protocol boundary, suppresses only the optional 2026/2027 probe
+  sequences across split writes, flushes non-probe bytes before transcript
+  replay, and leaves normal ANSI output and the command result path unchanged.
+  Changed files are `internal/terminal/rich.go`,
+  `internal/terminal/rich_runtime_pty_test.go`, and
+  `internal/terminal/rich_writer_test.go`; no command API, storage, Git, or
+  durable result contract changed. The regression PTY test and split-write
+  writer tests passed 10 consecutive runs. Directed verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/config/... ./pkg/cmd/git/heat ./internal/terminal`, the four tagged
+  standalone acceptance tests, and the affected-package `-race` suite.
+  Repository verification passed in order: focused repository tests,
+  `make command-surface`, `make check`, and `git diff --check`. A fresh binary
+  `/tmp/g3-terminal-acceptance/ycy-final` has SHA-256
+  `324b19a53f27fd6982c0b20ea0cf76aad9098c925654c225010d9f3108ff4b9d`.
+  Real shell PTY smoke passed for all four G3 commands at 120x40 with color
+  and 40x15 with `NO_COLOR=1`; the redirected `config cm list` result remained
+  durable and control-free. The fixed shell handoff transcript contains no
+  `2026;2$y` and no shell command error, while the pre-fix comparison
+  reproduced both. Records are under `/tmp/g3-terminal-acceptance/final-pty/`
+  and `/tmp/g3-terminal-acceptance/late-report-fixed2.log`. Automated Exit
+  conditions remain satisfied; the only remaining condition is explicit human
+  acceptance of the terminal presentation and transcript safety. Next: issue
+  one new manual acceptance handoff; G3 remains `active`.
+- 2026-09-03: new one-time manual acceptance handoff issued for G3 after the
+  capability-query fix. Use `/tmp/g3-terminal-acceptance/ycy-final` with
+  fixture repository `/tmp/g3-terminal-acceptance/repo` and fixture data under
+  `/tmp/g3-terminal-acceptance/home`. In a real TTY, run `config fork list`,
+  `config cm list`, `config cm use work`, and `git heat -n 20 -t dirs -s path
+  -q terminal` from the fixture repository at 120x40 with color, then repeat
+  at 40x15 with `NO_COLOR=1`. Confirm that no `2026;2$y` or shell error appears
+  after each command and that a following shell command runs immediately. The
+  minimum checklist is: (1) each B `OPS CONSOLE` title/metadata, loading or
+  focus state, and final phase remains legible; (2) `git heat` columns stay
+  aligned at wide width and labelled `Changed at`, `Changes`, and target fields
+  remain understandable at narrow width; (3) symbols, labels, latest/query
+  markers, and control-safe paths remain clear without color; (4) AltScreen
+  restoration is followed by the bounded transcript and exactly one unchanged
+  durable result, including redirected stdout; (5) no secret, raw error,
+  absolute path, large report, or capability response appears in the
+  transcript. Reply exactly `通过: <commands>` when all checks pass, or
+  `未通过: <command and reason>` with the first failing command and evidence.
+  This is the termination handoff for this Goal; no Gate transition is
+  performed. 本次 Goal 已结束、Gate 仍为 `active`。
+- 2026-09-03: received the explicit human acceptance result `确认通过` for
+  the G3 handoff. The four-command colored-TTY and `NO_COLOR=1` checks passed
+  at wide and narrow dimensions: `config fork list`, `config cm list`,
+  `config cm use work`, and `git heat -n 20 -t dirs -s path -q terminal` from
+  `/tmp/g3-terminal-acceptance/repo`. The reviewer confirmed that the B Ops
+  Console hierarchy, responsive `git heat` report, symbols/labels, list order
+  and defaults, exact `config cm use` target, transcript safety, unchanged
+  redirected result, and immediate shell re-entry were correct; no
+  `2026;2$y` or shell error remained.
+- 2026-09-03: all G3 Exit conditions passed and G3 is marked `passed`.
+  1. The four adapters preserve baseline behavior and durable result bytes:
+     focused command tests, the four tagged standalone acceptance tests, and
+     the redirected `config cm list` PTY result passed; no storage, Git, API,
+     default, or compatibility contract changed.
+  2. Rich, Plain, Automation, and redirected coverage passed for every G3
+     command, including the shared Rich PTY/transcript/form tests, wide and
+     narrow `NO_COLOR` smoke, and standalone fixtures.
+  3. Phase, cancellation, redaction, Transcript bounds, responsive visual
+     records, and the capability-query boundary are covered by the focused
+     tests and PTY evidence. The pre-fix shell comparison reproduced
+     `2026;2$y` and `command not found`; the fixed handoff transcript contains
+     neither, and the next shell command executes immediately. The final
+     binary is `/tmp/g3-terminal-acceptance/ycy-final` (SHA-256
+     `324b19a53f27fd6982c0b20ea0cf76aad9098c925654c225010d9f3108ff4b9d`),
+     with records under `/tmp/g3-terminal-acceptance/final-pty/`.
+  4. G3 Repository verification passed in the declared order:
+     `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+     ./pkg/cmd/config/... ./pkg/cmd/git/heat ./internal/terminal`,
+     `make command-surface`, `make check`, and `git diff --check`; the
+     affected-package `-race` suite and standalone acceptance suite also
+     passed.
+  Direct successor G4 is activated as `active` with the record
+  `已激活，尚未开始实施`; no G4 code, analysis, or verification is part of
+  this Goal. Effort for this Goal is complete.
 
 ### G4: External-read and service-startup slices
 
 - 2026-09-01: initialized as `planned`; no implementation evidence.
+- 2026-09-03: activated after G3 passed; 已激活，尚未开始实施。 This Gate is
+  outside the completed G3 Goal.
 
 ### G5: Mutating, destructive, and archive slices
 

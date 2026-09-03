@@ -204,6 +204,76 @@ func TestRichRuntimeCloseHandsTerminalToInheritedChildProcess(t *testing.T) {
 	}
 }
 
+func TestRichRuntimeDoesNotLeakLateSynchronizedOutputReport(t *testing.T) {
+	const helperEnvironment = "YCY_TERMINAL_LATE_MODE_REPORT_HELPER"
+	if os.Getenv(helperEnvironment) == "1" {
+		experience := terminal.NewExperience(terminal.ExperienceOptions{
+			Capabilities: richTestCapabilities(true),
+			Input:        os.Stdin,
+			Output:       os.Stdout,
+			Diagnostics:  os.Stderr,
+		})
+		run := experience.Open(context.Background())
+		if err := run.Notice(terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{Text: "Preparing handoff"}}}); err != nil {
+			t.Fatalf("Notice() error = %v", err)
+		}
+		if err := run.Close(); err != nil {
+			t.Fatalf("Close() error = %v", err)
+		}
+		// The inherited child represents the shell that receives any terminal
+		// capability response left behind after the Rich runtime restores input.
+		_, _ = fmt.Fprintln(os.Stdout, "RUNTIME_CLOSED")
+		child := exec.Command("sh", "-c", `IFS= read -r line; printf 'inherited=%s\n' "$line"`)
+		child.Stdin = os.Stdin
+		child.Stdout = os.Stdout
+		child.Stderr = os.Stderr
+		if err := child.Run(); err != nil {
+			t.Fatalf("run inherited child: %v", err)
+		}
+		return
+	}
+
+	command := exec.Command(os.Args[0], "-test.run=^TestRichRuntimeDoesNotLeakLateSynchronizedOutputReport$")
+	command.Env = append(richPTYEnvironment(), helperEnvironment+"=1", "TERM=xterm-256color", "TERM_PROGRAM=WezTerm")
+	process, output, readDone := startRichPTYTest(t, command, "RUNTIME_CLOSED")
+	defer process.Close()
+
+	deadline := time.Now().Add(5 * time.Second)
+	sawQuery := false
+	for time.Now().Before(deadline) {
+		text := output.String()
+		if strings.Contains(text, "\x1b[?2026$p") {
+			sawQuery = true
+		}
+		if strings.Contains(text, "RUNTIME_CLOSED") {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !strings.Contains(output.String(), "RUNTIME_CLOSED") {
+		t.Fatalf("runtime did not restore terminal: %q", output.String())
+	}
+
+	if sawQuery {
+		// Delay until after Close has handed the cooked terminal to the child.
+		time.Sleep(100 * time.Millisecond)
+		if _, err := process.Terminal().Write([]byte("\x1b[?2026;2$y\r")); err != nil {
+			t.Fatalf("write late mode report: %v", err)
+		}
+	} else if _, err := process.Terminal().Write([]byte("ok\r")); err != nil {
+		t.Fatalf("write inherited input: %v", err)
+	}
+
+	finishRichPTYTest(t, process, readDone, output)
+	text := output.String()
+	if strings.Contains(text, "2026;2$y") {
+		t.Fatalf("late synchronized-output report leaked into inherited terminal input: %q", text)
+	}
+	if !strings.Contains(text, "inherited=") {
+		t.Fatalf("inherited child did not receive terminal input: %q", text)
+	}
+}
+
 func runRichLongListHelper(t *testing.T) {
 	t.Helper()
 	experience := terminal.NewExperience(terminal.ExperienceOptions{

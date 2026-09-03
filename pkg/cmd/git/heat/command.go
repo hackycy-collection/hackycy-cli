@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -12,6 +14,7 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/pkg/cmdutil"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 // Options contains the parsed git heat request and its leaf-owned adapters.
@@ -23,6 +26,7 @@ type Options struct {
 	Sort         Sort
 	RelativeTime bool
 	Query        string
+	Width        int
 	Terminal     *terminal.Runtime
 	Git          *gitprocess.Runner
 	Now          func() time.Time
@@ -85,6 +89,7 @@ func NewCmdHeat(factory *cmdutil.Factory, runF func(*Options) error) *cobra.Comm
 				}
 				options.Sort = parsed
 			}
+			options.Width = heatTerminalWidth(factory.IOStreams.Out)
 			return runF(options)
 		},
 	}
@@ -95,6 +100,21 @@ func NewCmdHeat(factory *cmdutil.Factory, runF func(*Options) error) *cobra.Comm
 	command.Flags().BoolVarP(&relativeTime, "relative-time", "r", false, "Show Changed at as relative time")
 	command.Flags().StringVarP(&query, "query", "q", "", "Highlight files or directories that contain text")
 	return command
+}
+
+// heatTerminalWidth captures the result stream's current width for the
+// command-owned responsive Rich projection. A non-file writer has no reliable
+// terminal geometry, so the renderer will use its stable fallback width.
+func heatTerminalWidth(output io.Writer) int {
+	file, ok := output.(*os.File)
+	if !ok || file == nil {
+		return 0
+	}
+	width, _, err := term.GetSize(int(file.Fd()))
+	if err != nil || width <= 0 {
+		return 0
+	}
+	return width
 }
 
 func parseInteger(value string) (int, error) {

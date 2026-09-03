@@ -3,6 +3,7 @@ package list
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
 	"github.com/hackycy/hackycy-cli/internal/terminal"
@@ -54,21 +55,106 @@ func runList(options *Options) error {
 	if options == nil || options.Store == nil || options.Terminal == nil {
 		return errors.New("config fork list options are incomplete")
 	}
-	store, err := options.Store()
-	if err != nil {
-		return err
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	module, err := New(Dependencies{Reader: store})
-	if err != nil {
-		return err
-	}
-	result, err := module.Run(options.Context, Input{})
-	if err != nil {
-		return err
-	}
-	run := options.Terminal.Open(options.Context)
+	run := options.Terminal.Open(ctx)
 	defer run.Close()
-	return run.Result(terminalForkListDocument(result))
+
+	caps := options.Terminal.Capabilities()
+	var updates chan terminal.OperationPhase
+	var trackDone chan error
+	if caps.Interaction == terminal.RichInteractive {
+		updates = make(chan terminal.OperationPhase, 4)
+		trackDone = make(chan error, 1)
+		go func() {
+			trackDone <- run.Track(terminal.TrackedOperation{
+				ID:    "config-fork-list",
+				Label: "Fork provider instances",
+				Phases: []terminal.PhaseDefinition{{
+					ID:   forkListPhaseID,
+					Name: forkListPhaseName,
+				}},
+				Updates: updates,
+			})
+		}()
+		updates <- terminal.OperationPhase{ID: forkListPhaseID, State: terminal.PhaseActive, Detail: "Loading fork provider instances"}
+	} else if caps.Interaction == terminal.PlainInteractive {
+		if err := run.Notice(terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{
+			Role: terminal.VisualRoleActive,
+			Text: "Loading fork provider instances...",
+		}}}); err != nil {
+			return finishForkList(run, terminal.Failed, nil, err)
+		}
+	}
+	result, workErr := func() (Result, error) {
+		if err := ctx.Err(); err != nil {
+			return Result{}, err
+		}
+		store, err := options.Store()
+		if err != nil {
+			return Result{}, err
+		}
+		module, err := New(Dependencies{Reader: store})
+		if err != nil {
+			return Result{}, err
+		}
+		return module.Run(ctx, Input{})
+	}()
+
+	terminalState := terminal.PhaseCompleted
+	detail := fmt.Sprintf("Loaded %d fork provider instances", len(result.Instances))
+	if workErr != nil {
+		terminalState = terminal.PhaseFailed
+		detail = "Unable to load fork provider instances"
+		if errors.Is(workErr, context.Canceled) || errors.Is(workErr, context.DeadlineExceeded) {
+			terminalState = terminal.PhaseCancelled
+			detail = "Cancelled while loading fork provider instances"
+		}
+	} else if err := ctx.Err(); err != nil {
+		workErr = err
+		terminalState = terminal.PhaseCancelled
+		detail = "Cancelled while loading fork provider instances"
+	}
+	var trackErr error
+	if caps.Interaction == terminal.RichInteractive {
+		updates <- terminal.OperationPhase{ID: forkListPhaseID, State: terminalState, Detail: detail}
+		close(updates)
+		trackErr = <-trackDone
+	}
+	if err := errors.Join(workErr, trackErr); err != nil {
+		outcome := terminal.Failed
+		if terminalState == terminal.PhaseCancelled {
+			outcome = terminal.Cancelled
+		}
+		return finishForkList(run, outcome, nil, err)
+	}
+
+	if caps.Interaction == terminal.RichInteractive {
+		if err := run.Milestone(terminalForkListSummaryDocument(result)); err != nil {
+			return finishForkList(run, terminal.Succeeded, nil, err)
+		}
+		if len(result.Instances) == 0 {
+			if err := run.Milestone(terminalForkListEmptyDocument()); err != nil {
+				return finishForkList(run, terminal.Succeeded, nil, err)
+			}
+		}
+	}
+	document := terminalForkListDocument(result)
+	if caps.Interaction == terminal.RichInteractive && caps.Stdout.Terminal {
+		document = terminalForkListRichDocument(result)
+	}
+	return run.Finish(terminal.Succeeded, &document)
+}
+
+const (
+	forkListPhaseID   = "load-fork-provider-instances"
+	forkListPhaseName = "Load fork provider instances"
+)
+
+func finishForkList(run terminal.ExperienceRun, outcome terminal.FinishOutcome, document *terminal.PresentationDocument, workErr error) error {
+	return errors.Join(workErr, run.Finish(outcome, document))
 }
 
 // Ensure the Factory's concrete Store remains the intended implementation of

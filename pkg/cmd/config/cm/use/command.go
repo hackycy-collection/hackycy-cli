@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
@@ -46,25 +49,116 @@ func executeUse(options *Options) error {
 	if options == nil || options.Store == nil || options.Terminal == nil {
 		return errors.New("config cm use options are incomplete")
 	}
-	writer, err := options.Store()
-	if err != nil {
-		return err
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	module, err := NewUse(UseDependencies{Writer: writer})
-	if err != nil {
-		return err
-	}
-	result, err := module.Run(options.Context, UseRequest{Profile: options.Profile})
-	if err != nil {
-		return err
-	}
-	run := options.Terminal.Open(options.Context)
+	run := options.Terminal.Open(ctx)
 	defer run.Close()
-	return run.Result(terminalCMUseDocument(result))
+
+	caps := options.Terminal.Capabilities()
+	if caps.Interaction == terminalexperience.PlainInteractive {
+		if err := run.Notice(terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
+			Role: terminalexperience.VisualRoleActive,
+			Text: "Setting default CM profile...",
+		}}}); err != nil {
+			return errors.Join(err, run.Finish(terminalexperience.Failed, nil))
+		}
+	}
+
+	var updates chan terminalexperience.OperationPhase
+	var trackDone chan error
+	if caps.Interaction == terminalexperience.RichInteractive {
+		updates = make(chan terminalexperience.OperationPhase, 4)
+		trackDone = make(chan error, 1)
+		go func() {
+			trackDone <- run.Track(terminalexperience.TrackedOperation{
+				ID:    "config-cm-use",
+				Label: "Set default CM profile",
+				Phases: []terminalexperience.PhaseDefinition{{
+					ID:   cmUsePhaseID,
+					Name: cmUsePhaseName,
+				}},
+				Updates: updates,
+			})
+		}()
+		updates <- terminalexperience.OperationPhase{ID: cmUsePhaseID, State: terminalexperience.PhaseActive, Detail: "Checking profile and saving selection"}
+	}
+
+	result, workErr := func() (UseResult, error) {
+		writer, err := options.Store()
+		if err != nil {
+			return UseResult{}, err
+		}
+		module, err := NewUse(UseDependencies{Writer: writer})
+		if err != nil {
+			return UseResult{}, err
+		}
+		return module.Run(ctx, UseRequest{Profile: options.Profile})
+	}()
+
+	if caps.Interaction == terminalexperience.RichInteractive {
+		state := terminalexperience.PhaseCompleted
+		detail := "Profile: " + safeCMUseProfile(options.Profile)
+		if workErr != nil {
+			state = terminalexperience.PhaseFailed
+			detail = "Unable to set default CM profile"
+		}
+		updates <- terminalexperience.OperationPhase{ID: cmUsePhaseID, State: state, Detail: detail}
+		close(updates)
+		if trackErr := <-trackDone; trackErr != nil {
+			workErr = errors.Join(workErr, trackErr)
+		}
+	}
+	if workErr != nil {
+		return errors.Join(workErr, run.Finish(terminalexperience.Failed, nil))
+	}
+
+	document := terminalCMUseDocument(result)
+	if caps.Interaction == terminalexperience.RichInteractive && caps.Stdout.Terminal {
+		document = terminalCMUseRichDocument(result)
+	}
+	return run.Finish(terminalexperience.Succeeded, &document)
 }
+
+const (
+	cmUsePhaseID   = "set-default-cm-profile"
+	cmUsePhaseName = "Set default CM profile"
+)
 
 func terminalCMUseDocument(result UseResult) terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleSuccess, Text: fmt.Sprintf("Default CM profile set to %s", result.Profile)}}}
+}
+
+func terminalCMUseRichDocument(result UseResult) terminalexperience.PresentationDocument {
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
+		{Role: terminalexperience.VisualRoleMuted, Text: "YCY / config cm use"},
+		{Role: terminalexperience.VisualRoleTitle, Text: "Set default CM profile"},
+		{Role: terminalexperience.VisualRoleMuted, Text: "Choose the stored profile used for commit message generation"},
+		{Role: terminalexperience.VisualRoleSuccess, Text: "Default CM profile set to " + safeCMUseProfile(result.Profile)},
+	}}
+}
+
+func safeCMUseProfile(value string) string {
+	if !utf8.ValidString(value) {
+		return "Requested profile"
+	}
+	var output strings.Builder
+	for _, character := range value {
+		if unicode.IsControl(character) {
+			return "Requested profile"
+		}
+		output.WriteRune(character)
+	}
+	value = strings.TrimSpace(output.String())
+	if value == "" {
+		return "Requested profile"
+	}
+	runes := []rune(value)
+	if len(runes) > 256 {
+		return string(runes[:256]) + "..."
+	}
+	return value
 }
 
 var _ UseWriter = (*appconfig.Store)(nil)

@@ -3,6 +3,7 @@ package list
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
 	"github.com/hackycy/hackycy-cli/internal/terminal"
@@ -49,21 +50,105 @@ func runList(options *Options) error {
 	if options == nil || options.Store == nil || options.Terminal == nil {
 		return errors.New("config cm list options are incomplete")
 	}
-	reader, err := options.Store()
-	if err != nil {
-		return err
+	ctx := options.Context
+	if ctx == nil {
+		ctx = context.Background()
 	}
-	module, err := New(Dependencies{Reader: reader})
-	if err != nil {
-		return err
-	}
-	result, err := module.Run(options.Context, Input{})
-	if err != nil {
-		return err
-	}
-	run := options.Terminal.Open(options.Context)
+	run := options.Terminal.Open(ctx)
 	defer run.Close()
-	return run.Result(terminalCMListDocument(result))
+
+	caps := options.Terminal.Capabilities()
+	var updates chan terminal.OperationPhase
+	var trackDone chan error
+	if caps.Interaction == terminal.RichInteractive {
+		updates = make(chan terminal.OperationPhase, 4)
+		trackDone = make(chan error, 1)
+		go func() {
+			trackDone <- run.Track(terminal.TrackedOperation{
+				ID:    "config-cm-list",
+				Label: "Commit message profiles",
+				Phases: []terminal.PhaseDefinition{{
+					ID:   cmListPhaseID,
+					Name: cmListPhaseName,
+				}},
+				Updates: updates,
+			})
+		}()
+		updates <- terminal.OperationPhase{ID: cmListPhaseID, State: terminal.PhaseActive, Detail: "Loading CM profiles"}
+	} else if caps.Interaction == terminal.PlainInteractive {
+		if err := run.Notice(terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{{
+			Role: terminal.VisualRoleActive,
+			Text: "Loading CM profiles...",
+		}}}); err != nil {
+			return errors.Join(err, run.Finish(terminal.Failed, nil))
+		}
+	}
+	result, workErr := func() (Result, error) {
+		if err := ctx.Err(); err != nil {
+			return Result{}, err
+		}
+		reader, err := options.Store()
+		if err != nil {
+			return Result{}, err
+		}
+		module, err := New(Dependencies{Reader: reader})
+		if err != nil {
+			return Result{}, err
+		}
+		return module.Run(ctx, Input{})
+	}()
+
+	terminalState := terminal.PhaseCompleted
+	detail := fmt.Sprintf("Loaded %d CM profiles", len(result.Profiles))
+	if len(result.Profiles) == 1 {
+		detail = "Loaded 1 CM profile"
+	}
+	if workErr != nil {
+		terminalState = terminal.PhaseFailed
+		detail = "Unable to load CM profiles"
+		if errors.Is(workErr, context.Canceled) || errors.Is(workErr, context.DeadlineExceeded) {
+			terminalState = terminal.PhaseCancelled
+			detail = "Cancelled while loading CM profiles"
+		}
+	} else if err := ctx.Err(); err != nil {
+		workErr = err
+		terminalState = terminal.PhaseCancelled
+		detail = "Cancelled while loading CM profiles"
+	}
+	var trackErr error
+	if caps.Interaction == terminal.RichInteractive {
+		updates <- terminal.OperationPhase{ID: cmListPhaseID, State: terminalState, Detail: detail}
+		close(updates)
+		trackErr = <-trackDone
+	}
+	if err := errors.Join(workErr, trackErr); err != nil {
+		outcome := terminal.Failed
+		if terminalState == terminal.PhaseCancelled {
+			outcome = terminal.Cancelled
+		}
+		return errors.Join(err, run.Finish(outcome, nil))
+	}
+
+	if caps.Interaction == terminal.RichInteractive {
+		if err := run.Milestone(terminalCMListSummaryDocument(result)); err != nil {
+			return errors.Join(err, run.Finish(terminal.Succeeded, nil))
+		}
+		if len(result.Profiles) == 0 {
+			if err := run.Milestone(terminalCMListEmptyDocument()); err != nil {
+				return errors.Join(err, run.Finish(terminal.Succeeded, nil))
+			}
+		}
+	}
+	document := terminalCMListDocument(result)
+	if caps.Interaction == terminal.RichInteractive && caps.Stdout.Terminal {
+		document = terminalCMListRichDocument(result)
+	}
+	return run.Finish(terminal.Succeeded, &document)
 }
+
+const (
+	cmListPhaseID   = "load-cm-profiles"
+	cmListPhaseName = "Load CM profiles"
+)
 
 var _ Reader = (*appconfig.Store)(nil)
