@@ -16,6 +16,35 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
+func TestConfigCMRemoveConsoleDescriptorProvidesSafeBoundedContext(t *testing.T) {
+	want := terminalexperience.ConsoleDescriptor{
+		Command: "YCY / config cm remove",
+		Target:  "commit message profile removal",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "scope", Value: "commit message configuration"},
+			{Label: "profile", Value: "work"},
+		},
+	}
+	if got := terminalCMRemoveConsoleDescriptor("work"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Console descriptor = %#v, want %#v", got, want)
+	}
+	unsafe := terminalCMRemoveConsoleDescriptor("bad\nprofile")
+	for _, field := range []string{unsafe.Command, unsafe.Target, unsafe.Status} {
+		if terminaltest.ContainsTerminalControl([]byte(field)) {
+			t.Fatalf("descriptor field contains terminal control: %q", field)
+		}
+	}
+	for _, metadata := range unsafe.Metadata {
+		if terminaltest.ContainsTerminalControl([]byte(metadata.Label)) || terminaltest.ContainsTerminalControl([]byte(metadata.Value)) {
+			t.Fatalf("descriptor metadata contains terminal control: %#v", metadata)
+		}
+	}
+	if got := unsafe.Metadata[1].Value; got != "Profile configured" {
+		t.Fatalf("unsafe profile projection = %q, want Profile configured", got)
+	}
+}
+
 func TestTerminalCMRemoveAdapterTranslatesConfirmation(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Confirmed: true}})
 	run := experience.Open(context.Background())

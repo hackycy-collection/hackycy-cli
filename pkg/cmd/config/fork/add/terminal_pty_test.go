@@ -25,21 +25,24 @@ func TestRunForkAddRichPTYRestoresScreenAndRedactsTranscript(t *testing.T) {
 	}
 
 	for _, testCase := range []struct {
-		name  string
-		extra string
-		color bool
+		name          string
+		width, height uint16
+		color         bool
 	}{
-		{name: "color", color: true},
-		{name: "no color", extra: "NO_COLOR=1", color: false},
+		{name: "wide color", width: 120, height: 40, color: true},
+		{name: "wide no color", width: 120, height: 40, color: false},
+		{name: "compact color", width: 40, height: 15, color: true},
+		{name: "compact no color", width: 40, height: 15, color: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			command := exec.Command(os.Args[0], "-test.run=^TestRunForkAddRichPTYRestoresScreenAndRedactsTranscript$")
-			command.Env = append(forkAddPTYEnvironment(), helperEnvironment+"=1", "TERM=xterm-256color")
-			if testCase.extra != "" {
-				command.Env = append(command.Env, testCase.extra)
+			command.Env = forkAddPTYEnvironment()
+			command.Env = append(command.Env, helperEnvironment+"=1", "TERM=xterm-256color")
+			if !testCase.color {
+				command.Env = append(command.Env, "NO_COLOR=1")
 			}
-			output := runForkAddPTYProcess(t, command)
-			assertForkAddRichPTYOutput(t, output, testCase.color)
+			output := runForkAddPTYProcess(t, command, testCase.width, testCase.height)
+			assertForkAddRichPTYOutput(t, output, testCase.color, testCase.width >= 70)
 		})
 	}
 }
@@ -72,7 +75,7 @@ func runForkAddRichPTYHelper(t *testing.T) {
 	}
 }
 
-func runForkAddPTYProcess(t *testing.T, command *exec.Cmd) string {
+func runForkAddPTYProcess(t *testing.T, command *exec.Cmd, width, height uint16) string {
 	t.Helper()
 	process, err := terminaltest.StartPTY(command)
 	if errors.Is(err, terminaltest.ErrPTYUnsupported) {
@@ -82,6 +85,9 @@ func runForkAddPTYProcess(t *testing.T, command *exec.Cmd) string {
 		t.Fatalf("start PTY helper: %v", err)
 	}
 	defer process.Close()
+	if err := process.Resize(width, height); err != nil {
+		t.Fatalf("resize PTY to %dx%d: %v", width, height, err)
+	}
 	var output lockedForkAddPTYBuffer
 	readDone := make(chan struct{})
 	go func() {
@@ -117,10 +123,10 @@ func runForkAddPTYProcess(t *testing.T, command *exec.Cmd) string {
 	return output.String()
 }
 
-func assertForkAddRichPTYOutput(t *testing.T, output string, color bool) {
+func assertForkAddRichPTYOutput(t *testing.T, output string, color, wide bool) {
 	t.Helper()
 	visible := strings.ReplaceAll(output, "\r\n", "\n")
-	for _, expected := range []string{
+	expected := []string{
 		"YCY / config fork add",
 		"Add fork provider instance",
 		"Store a provider connection for git fork operations",
@@ -133,7 +139,11 @@ func assertForkAddRichPTYOutput(t *testing.T, output string, color bool) {
 		"Access token: [redacted]",
 		"Instance work (gitlab.example) added successfully",
 		"FORK_ADD_WRITE_OK",
-	} {
+	}
+	if !wide {
+		expected = []string{"YCY / config fork add", "Collect provider details", "Save provider instance", "Access token: [redacted]", "FORK_ADD_WRITE_OK"}
+	}
+	for _, expected := range expected {
 		if !strings.Contains(visible, expected) {
 			t.Fatalf("Rich PTY output missing %q: %q", expected, output)
 		}
@@ -147,7 +157,11 @@ func assertForkAddRichPTYOutput(t *testing.T, output string, color bool) {
 		t.Fatalf("Rich PTY output did not restore the primary screen: %q", output)
 	}
 	transcript := strings.Index(visible[leave:], "Collect provider details (completed)")
-	result := strings.LastIndex(visible, "Instance work (gitlab.example) added successfully")
+	resultNeedle := "Instance work (gitlab.example) added successfully"
+	if !wide {
+		resultNeedle = "Instance work (gitlab.example) added"
+	}
+	result := strings.LastIndex(visible, resultNeedle)
 	if transcript < 0 || result < 0 || leave+transcript > result {
 		t.Fatalf("Rich PTY transcript/result ordering = %q", output)
 	}

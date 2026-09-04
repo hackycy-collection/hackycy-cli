@@ -66,7 +66,10 @@ func executeRemove(options *Options) (RemoveResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, terminalForkRemoveConsoleDescriptor())
+	if err != nil {
+		return RemoveResult{}, err
+	}
 	defer run.Close()
 	caps := options.Terminal.Capabilities()
 	if err := ctx.Err(); err != nil {
@@ -201,6 +204,18 @@ func executeRemove(options *Options) (RemoveResult, error) {
 
 var _ RemoveReader = (*appconfig.Store)(nil)
 var _ RemoveWriter = (*appconfig.Store)(nil)
+
+func terminalForkRemoveConsoleDescriptor() terminalexperience.ConsoleDescriptor {
+	return terminalexperience.ConsoleDescriptor{
+		Command: "YCY / config fork remove",
+		Target:  "provider connection removal",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{{
+			Label: "scope",
+			Value: "git fork configuration",
+		}},
+	}
+}
 
 type forkRemovePhaseSink struct {
 	run      terminalexperience.ExperienceRun

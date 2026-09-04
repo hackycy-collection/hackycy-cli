@@ -24,21 +24,23 @@ func TestRunCMAddRichPTYRestoresScreenAndRedactsTranscript(t *testing.T) {
 	}
 
 	for _, testCase := range []struct {
-		name  string
-		extra string
-		color bool
+		name          string
+		width, height uint16
+		color         bool
 	}{
-		{name: "color", color: true},
-		{name: "no color", extra: "NO_COLOR=1", color: false},
+		{name: "wide color", width: 120, height: 40, color: true},
+		{name: "wide no color", width: 120, height: 40, color: false},
+		{name: "compact color", width: 40, height: 15, color: true},
+		{name: "compact no color", width: 40, height: 15, color: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			command := exec.Command(os.Args[0], "-test.run=^TestRunCMAddRichPTYRestoresScreenAndRedactsTranscript$")
 			command.Env = append(cmAddPTYEnvironment(), helperEnvironment+"=1", "TERM=xterm-256color")
-			if testCase.extra != "" {
-				command.Env = append(command.Env, testCase.extra)
+			if !testCase.color {
+				command.Env = append(command.Env, "NO_COLOR=1")
 			}
-			output := runCMAddPTYProcess(t, command)
-			assertCMAddRichPTYOutput(t, output, testCase.color)
+			output := runCMAddPTYProcess(t, command, testCase.width, testCase.height)
+			assertCMAddRichPTYOutput(t, output, testCase.color, testCase.width >= 70)
 		})
 	}
 }
@@ -71,7 +73,7 @@ func runCMAddRichPTYHelper(t *testing.T) {
 	}
 }
 
-func runCMAddPTYProcess(t *testing.T, command *exec.Cmd) string {
+func runCMAddPTYProcess(t *testing.T, command *exec.Cmd, width, height uint16) string {
 	t.Helper()
 	process, err := terminaltest.StartPTY(command)
 	if errors.Is(err, terminaltest.ErrPTYUnsupported) {
@@ -81,13 +83,21 @@ func runCMAddPTYProcess(t *testing.T, command *exec.Cmd) string {
 		t.Fatalf("start PTY helper: %v", err)
 	}
 	defer process.Close()
+	if err := process.Resize(width, height); err != nil {
+		t.Fatalf("resize PTY to %dx%d: %v", width, height, err)
+	}
 	var output lockedCMAddPTYBuffer
 	readDone := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(&output, process.Terminal())
 		close(readDone)
 	}()
-	for _, step := range []struct {
+	needles := []string{"Profile name", "OpenAI-compatible base URL", "Model", "API key"}
+	if width < 70 {
+		// Compact B activity rows wrap long Huh labels across several lines.
+		needles = []string{"Profile name", "base", "Model", "API key"}
+	}
+	for index, step := range []struct {
 		needle string
 		input  string
 	}{
@@ -96,9 +106,9 @@ func runCMAddPTYProcess(t *testing.T, command *exec.Cmd) string {
 		{needle: "Model", input: "gpt-4.1-mini\r"},
 		{needle: "API key", input: "secret-api-key\r"},
 	} {
-		waitForCMAddPTYText(t, &output, step.needle)
+		waitForCMAddPTYText(t, &output, needles[index])
 		if _, err := process.Terminal().Write([]byte(step.input)); err != nil {
-			t.Fatalf("write PTY input for %q: %v", step.needle, err)
+			t.Fatalf("write PTY input for %q: %v", needles[index], err)
 		}
 	}
 	if err := process.Wait(); err != nil {
@@ -115,10 +125,10 @@ func runCMAddPTYProcess(t *testing.T, command *exec.Cmd) string {
 	return output.String()
 }
 
-func assertCMAddRichPTYOutput(t *testing.T, output string, color bool) {
+func assertCMAddRichPTYOutput(t *testing.T, output string, color, wide bool) {
 	t.Helper()
 	visible := strings.ReplaceAll(output, "\r\n", "\n")
-	for _, expected := range []string{
+	expected := []string{
 		"YCY / config cm add",
 		"Add commit message profile",
 		"Configure an OpenAI-compatible provider",
@@ -130,7 +140,11 @@ func assertCMAddRichPTYOutput(t *testing.T, output string, color bool) {
 		"API key: [redacted]",
 		"Profile work added",
 		"CM_ADD_WRITE_OK",
-	} {
+	}
+	if !wide {
+		expected = []string{"YCY / config cm add", "Collect CM profile details", "Save CM profile", "API key: [redacted]", "CM_ADD_WRITE_OK"}
+	}
+	for _, expected := range expected {
 		if !strings.Contains(visible, expected) {
 			t.Fatalf("Rich PTY output missing %q: %q", expected, output)
 		}

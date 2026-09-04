@@ -94,6 +94,26 @@ func TestTerminalForkAddAdapterTranslatesTheOrderedForm(t *testing.T) {
 	}
 }
 
+func TestConfigForkAddConsoleDescriptorProvidesSafeBoundedContext(t *testing.T) {
+	want := terminalexperience.ConsoleDescriptor{
+		Command: "YCY / config fork add",
+		Target:  "provider connection setup",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{{
+			Label: "scope",
+			Value: "git fork configuration",
+		}},
+	}
+	if got := terminalForkAddConsoleDescriptor(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Console descriptor = %#v, want %#v", got, want)
+	}
+	for _, field := range []string{want.Command, want.Target, want.Status, want.Metadata[0].Label, want.Metadata[0].Value} {
+		if strings.ContainsAny(field, "\r\n\t\x1b") {
+			t.Fatalf("descriptor field contains terminal control: %q", field)
+		}
+	}
+}
+
 func TestTerminalForkAddAdapterMapsTerminalCancellation(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrInteractionCancelled})
 	adapter := newTerminalForkAddAdapter(experience.Open(context.Background()))

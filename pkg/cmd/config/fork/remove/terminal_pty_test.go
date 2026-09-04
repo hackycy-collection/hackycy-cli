@@ -25,21 +25,23 @@ func TestRunForkRemoveRichPTYRestoresScreenAndProjectsTranscript(t *testing.T) {
 	}
 
 	for _, testCase := range []struct {
-		name  string
-		extra string
-		color bool
+		name          string
+		width, height uint16
+		color         bool
 	}{
-		{name: "color", color: true},
-		{name: "no color", extra: "NO_COLOR=1", color: false},
+		{name: "wide color", width: 120, height: 40, color: true},
+		{name: "wide no color", width: 120, height: 40, color: false},
+		{name: "compact color", width: 40, height: 15, color: true},
+		{name: "compact no color", width: 40, height: 15, color: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			command := exec.Command(os.Args[0], "-test.run=^TestRunForkRemoveRichPTYRestoresScreenAndProjectsTranscript$")
 			command.Env = append(forkRemovePTYEnvironment(), helperEnvironment+"=1", "TERM=xterm-256color")
-			if testCase.extra != "" {
-				command.Env = append(command.Env, testCase.extra)
+			if !testCase.color {
+				command.Env = append(command.Env, "NO_COLOR=1")
 			}
-			output := runForkRemovePTYProcess(t, command)
-			assertForkRemoveRichPTYOutput(t, output, testCase.color)
+			output := runForkRemovePTYProcess(t, command, testCase.width, testCase.height)
+			assertForkRemoveRichPTYOutput(t, output, testCase.color, testCase.width >= 70)
 		})
 	}
 }
@@ -80,7 +82,7 @@ func runForkRemoveRichPTYHelper(t *testing.T) {
 	}
 }
 
-func runForkRemovePTYProcess(t *testing.T, command *exec.Cmd) string {
+func runForkRemovePTYProcess(t *testing.T, command *exec.Cmd, width, height uint16) string {
 	t.Helper()
 	process, err := terminaltest.StartPTY(command)
 	if errors.Is(err, terminaltest.ErrPTYUnsupported) {
@@ -90,18 +92,29 @@ func runForkRemovePTYProcess(t *testing.T, command *exec.Cmd) string {
 		t.Fatalf("start PTY helper: %v", err)
 	}
 	defer process.Close()
+	if err := process.Resize(width, height); err != nil {
+		t.Fatalf("resize PTY to %dx%d: %v", width, height, err)
+	}
 	var output lockedForkRemovePTYBuffer
 	readDone := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(&output, process.Terminal())
 		close(readDone)
 	}()
+	firstNeedle := "Select instance to remove"
+	secondNeedle := `Remove instance "work"?`
+	if width < 70 {
+		// The compact live view bounds the prompt label; wait for its stable
+		// semantic context before submitting the default selection.
+		firstNeedle = "single selection"
+		secondNeedle = `"work"?`
+	}
 	for _, step := range []struct {
 		needle string
 		input  string
 	}{
-		{needle: "Select instance to remove", input: "\r"},
-		{needle: `Remove instance "work"?`, input: "y\r"},
+		{needle: firstNeedle, input: "\r"},
+		{needle: secondNeedle, input: "y\r"},
 	} {
 		waitForForkRemovePTYText(t, &output, step.needle)
 		if _, err := process.Terminal().Write([]byte(step.input)); err != nil {
@@ -122,22 +135,29 @@ func runForkRemovePTYProcess(t *testing.T, command *exec.Cmd) string {
 	return output.String()
 }
 
-func assertForkRemoveRichPTYOutput(t *testing.T, output string, color bool) {
+func assertForkRemoveRichPTYOutput(t *testing.T, output string, color, wide bool) {
 	t.Helper()
 	visible := strings.ReplaceAll(output, "\r\n", "\n")
-	for _, expected := range []string{
+	expected := []string{
 		"YCY / config fork remove",
 		"Remove fork provider instance",
-		"Choose a configured provider connection to remove",
 		"Load fork provider instances",
-		"Select instance to remove",
-		`Remove instance "work"?`,
-		"Host: gitlab.example/v1",
-		`Remove instance "work": confirmed`,
 		"Remove provider instance",
 		"FORK_REMOVE_WRITE_OK",
 		"Instance work removed",
-	} {
+	}
+	if wide {
+		expected = append(expected,
+			"Choose a configured provider connection to remove",
+			"Select instance to remove",
+			`Remove instance "work"?`,
+			"Host: gitlab.example/v1",
+			`Remove instance "work": confirmed`,
+		)
+	} else {
+		expected = append(expected, "STATE", "PHASE", "DETAIL", "single selection", "Remove instance", `"work"?`)
+	}
+	for _, expected := range expected {
 		if !strings.Contains(visible, expected) {
 			t.Fatalf("Rich PTY output missing %q: %q", expected, output)
 		}
@@ -169,6 +189,11 @@ func assertForkRemoveRichPTYOutput(t *testing.T, output string, color bool) {
 			t.Fatalf("Rich PTY transcript missing ordered event %q: %q", expected, output)
 		}
 		last += next + len(expected)
+	}
+	if !wide {
+		if !strings.Contains(visible, "Remove instance \"work\"?") && !strings.Contains(visible, "confirmation") {
+			t.Fatalf("compact fork remove confirmation missing: %q", output)
+		}
 	}
 	if !color {
 		for _, prefix := range []string{"\x1b[38;", "\x1b[3m", "\x1b[9m"} {

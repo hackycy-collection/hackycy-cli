@@ -1,4 +1,0 @@
-2026-09-04T07:38:06.584Z INFO fs: ●  File Browser started {"bindingAddress":"127.0.0.1","localURL":"http://127.0.0.1:61190","networkURLs":[],"port":61190}
-2026-09-04T07:38:06.585Z INFO fs: ●  Browse root configured {"directory":"/Users/qigong-it-1/Workspace/hackycy-cli/.scratch/terminal-experience-modernization/g2-acceptance/fs"}
-2026-09-04T07:38:06.585Z INFO fs: ●  File Browser capabilities configured {"chunkedUploadsEnabled":false,"htmlExecutionEnabled":true,"managementEnabled":false}
-2026-09-04T07:38:06.585Z INFO fs: ●  File Browser authentication configured {"authenticationEnabled":false}

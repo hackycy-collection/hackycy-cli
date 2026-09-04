@@ -52,7 +52,10 @@ func runSet(options *Options) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, terminalCMSetConsoleDescriptor(options.Profile, options.Key))
+	if err != nil {
+		return err
+	}
 	defer run.Close()
 	caps := options.Terminal.Capabilities()
 
@@ -212,3 +215,16 @@ func safeCMSetValueDetail(key, value string) string {
 }
 
 var _ SetWriter = (*appconfig.Store)(nil)
+
+func terminalCMSetConsoleDescriptor(profile, key string) terminalexperience.ConsoleDescriptor {
+	return terminalexperience.ConsoleDescriptor{
+		Command: "YCY / config cm set",
+		Target:  "commit message profile update",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "scope", Value: "commit message configuration"},
+			{Label: "profile", Value: safeCMSetProfile(profile)},
+			{Label: "setting", Value: safeCMSetKey(key)},
+		},
+	}
+}

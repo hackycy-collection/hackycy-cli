@@ -61,7 +61,10 @@ func runAdd(options *Options) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, terminalForkAddConsoleDescriptor())
+	if err != nil {
+		return err
+	}
 	defer run.Close()
 	caps := options.Terminal.Capabilities()
 	if err := ctx.Err(); err != nil {
@@ -118,6 +121,18 @@ func runAdd(options *Options) error {
 }
 
 var errConfigForkAddRequiresInteractive = errors.New("config fork add requires an interactive terminal")
+
+func terminalForkAddConsoleDescriptor() terminal.ConsoleDescriptor {
+	return terminal.ConsoleDescriptor{
+		Command: "YCY / config fork add",
+		Target:  "provider connection setup",
+		Status:  "READY",
+		Metadata: []terminal.ConsoleMetadata{{
+			Label: "scope",
+			Value: "git fork configuration",
+		}},
+	}
+}
 
 var _ AddWriter = (*appconfig.Store)(nil)
 

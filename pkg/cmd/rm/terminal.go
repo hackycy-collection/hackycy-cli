@@ -22,7 +22,10 @@ func runRM(options *Options) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, terminalRMConsoleDescriptor(options))
+	if err != nil {
+		return err
+	}
 	defer run.Close()
 	caps := options.Terminal.Capabilities()
 	if err := ctx.Err(); err != nil {
@@ -314,6 +317,27 @@ func terminalRMIntroDocument() terminalexperience.PresentationDocument {
 		{Role: terminalexperience.VisualRoleTitle, Text: "Remove"},
 		{Role: terminalexperience.VisualRoleMuted, Text: "Remove selected files or clean project artifacts"},
 	}}
+}
+
+func terminalRMConsoleDescriptor(options *Options) terminalexperience.ConsoleDescriptor {
+	route := "smart cleanup"
+	mode := "default-negative confirmation"
+	if options != nil && len(options.Paths) > 0 {
+		route = "explicit path removal"
+	}
+	if options != nil && options.Force {
+		mode = "force"
+	}
+	return terminalexperience.ConsoleDescriptor{
+		Command: "YCY / rm",
+		Target:  "Remove selected files or clean project artifacts",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "scope", Value: "destructive filesystem mutation"},
+			{Label: "route", Value: route},
+			{Label: "mode", Value: mode},
+		},
+	}
 }
 
 func terminalRMRichResult(title, message string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {

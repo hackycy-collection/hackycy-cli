@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"sync"
 	"unicode"
@@ -45,7 +46,10 @@ func runZIP(options *Options) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, terminalZipConsoleDescriptor(options))
+	if err != nil {
+		return err
+	}
 	defer run.Close()
 	caps := options.Terminal.Capabilities()
 	if caps.Interaction == terminalexperience.Automation {
@@ -111,6 +115,47 @@ func terminalZipIntroDocument() terminalexperience.PresentationDocument {
 		{Role: terminalexperience.VisualRoleTitle, Text: "Zip Directory"},
 		{Role: terminalexperience.VisualRoleMuted, Text: "Plan and publish a bounded archive"},
 	}}
+}
+
+func terminalZipConsoleDescriptor(options *Options) terminalexperience.ConsoleDescriptor {
+	directory := "workspace"
+	withDir := "disabled"
+	reveal := "disabled"
+	if options != nil {
+		directory = zipDescriptorDirectory(options.Directory)
+		if strings.TrimSpace(options.WithDir) != "" {
+			withDir = "enabled"
+		}
+		if options.Open {
+			reveal = "enabled"
+		}
+	}
+	return terminalexperience.ConsoleDescriptor{
+		Command: "YCY / zip",
+		Target:  "Plan and publish a bounded archive",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "summary", Value: "Zip Directory"},
+			{Label: "directory", Value: directory},
+			{Label: "with-dir", Value: withDir},
+			{Label: "reveal", Value: reveal},
+		},
+	}
+}
+
+func zipDescriptorDirectory(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "workspace"
+	}
+	if filepath.IsAbs(value) {
+		base := filepath.Base(filepath.Clean(value))
+		if base == "" || base == "." || base == string(filepath.Separator) {
+			return "workspace"
+		}
+		return safeZipText(base, "workspace")
+	}
+	return safeZipText(filepath.ToSlash(filepath.Clean(value)), "workspace")
 }
 
 func terminalZipPlanningNoteDocument(note PlanningNote) terminalexperience.PresentationDocument {

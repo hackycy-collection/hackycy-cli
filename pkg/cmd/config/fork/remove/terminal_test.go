@@ -61,6 +61,21 @@ func TestTerminalForkRemoveAdapterTranslatesSelectionAndConfirmation(t *testing.
 	}
 }
 
+func TestConfigForkRemoveConsoleDescriptorProvidesSafeBoundedContext(t *testing.T) {
+	want := terminalexperience.ConsoleDescriptor{
+		Command: "YCY / config fork remove",
+		Target:  "provider connection removal",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{{
+			Label: "scope",
+			Value: "git fork configuration",
+		}},
+	}
+	if got := terminalForkRemoveConsoleDescriptor(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Console descriptor = %#v, want %#v", got, want)
+	}
+}
+
 func TestTerminalForkRemoveAdapterMapsTerminalCancellation(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrInteractionCancelled})
 	adapter := newTerminalForkRemoveAdapter(experience.Open(context.Background()))

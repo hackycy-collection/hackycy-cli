@@ -54,7 +54,10 @@ func runAdd(options *Options) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, terminalCMAddConsoleDescriptor())
+	if err != nil {
+		return err
+	}
 	defer run.Close()
 	caps := options.Terminal.Capabilities()
 	if err := ctx.Err(); err != nil {
@@ -112,6 +115,19 @@ func runAdd(options *Options) error {
 }
 
 var errConfigCMAddRequiresInteractive = errors.New("config cm add requires an interactive terminal")
+
+func terminalCMAddConsoleDescriptor() terminal.ConsoleDescriptor {
+	return terminal.ConsoleDescriptor{
+		Command: "YCY / config cm add",
+		Target:  "commit message profile setup",
+		Status:  "READY",
+		Metadata: []terminal.ConsoleMetadata{{
+			Label: "scope",
+			Value: "commit message configuration",
+		}},
+	}
+}
+
 var _ AddWriter = (*appconfig.Store)(nil)
 
 type cmAddPhaseSink struct {

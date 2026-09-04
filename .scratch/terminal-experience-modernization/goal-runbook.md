@@ -72,8 +72,8 @@
 | G0: Production B Ops Console foundation | passed | none | `implementation-plan.md` -> `G0: Production B Ops Console foundation` | exit conditions 1-5 verified 2026-09-04 |
 | G1: Root and low-risk finite recovery | passed | G0 | `implementation-plan.md` -> `G1: Root and low-risk finite recovery` | exit conditions 1-4 verified 2026-09-04 |
 | G2: External-read and service-boundary recovery | passed | G1 | `implementation-plan.md` -> `G2: External-read and service-boundary recovery` | exit conditions 1-4 and manual acceptance verified 2026-09-04 |
-| G3: Mutation and archive recovery | active | G2 | `implementation-plan.md` -> `G3: Mutation and archive recovery` | G2 passed 2026-09-04 |
-| G4: Git mutation and process handoff | planned | G3 | `implementation-plan.md` -> `G4: Git mutation and process handoff` | G3 pending |
+| G3: Mutation and archive recovery | passed | G2 | `implementation-plan.md` -> `G3: Mutation and archive recovery` | exit conditions 1-4 and manual acceptance verified 2026-09-04 |
+| G4: Git mutation and process handoff | active | G3 | `implementation-plan.md` -> `G4: Git mutation and process handoff` | G3 passed 2026-09-04 |
 | G5: Service lifecycles and detached updater | planned | G4 | `implementation-plan.md` -> `G5: Service lifecycles and detached updater` | G4 pending |
 | G6: Release verification and full visual review | planned | G5 | `implementation-plan.md` -> `G6: Release verification and full visual review` | G5 pending |
 
@@ -658,10 +658,273 @@
 
 - 2026-09-04: initialized as `planned`; no recovery implementation evidence.
 - 2026-09-04: 已激活，尚未开始实施。
+- 2026-09-04: completed slice `config fork add descriptor/context`. The
+  command now opens the frozen Console seam before any store construction or
+  form, with `YCY / config fork add`, bounded `provider connection setup`
+  target, and static `git fork configuration` scope metadata. Existing five
+  prompts, validation, silent alias overwrite, encryption, cancellation, and
+  result/Automation boundaries remain unchanged. Modified:
+  `pkg/cmd/config/fork/add/{command.go,terminal_test.go}`. Directed
+  verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  -count=1 ./pkg/cmd/config/fork/add` passed. Risk: this command still needs
+  fresh wide/compact B PTY and mutation/race evidence. Next action: implement
+  only the `config fork remove` descriptor/context slice.
+- 2026-09-04: completed slice `config fork remove descriptor/context`. The
+  destructive route now opens the frozen Console seam before configuration
+  access, with `YCY / config fork remove`, bounded `provider connection
+  removal` target, and static git-fork scope metadata. Persisted ordering,
+  first-item selection, default-No confirmation, idempotent missing-write
+  result, cancellation, and Automation read-before-reject behavior remain
+  unchanged. Modified: `pkg/cmd/config/fork/remove/{command.go,
+  terminal_test.go}`. Directed verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/config/fork/remove` passed. Risk: fresh wide/compact B PTY,
+  failure/cancellation, and race evidence remain. Next action: implement only
+  the `config cm add` descriptor/context slice.
+- 2026-09-04: completed slice `config cm add descriptor/context`. The
+  four-field profile setup now opens the frozen Console seam before store
+  construction, with `YCY / config cm add`, bounded `commit message profile
+  setup` target, and static commit-message configuration scope. Prompt order,
+  validation retries, masked/encrypted API key, overwrite/default behavior,
+  cancellation, and Automation pre-store rejection remain unchanged.
+  Modified: `pkg/cmd/config/cm/add/{command.go,terminal_test.go}`. Directed
+  verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  -count=1 ./pkg/cmd/config/cm/add` passed. Risk: fresh wide/compact B PTY,
+  failure/cancellation, and race evidence remain. Next action: implement only
+  the `config cm set` descriptor/context and atomic-phase slice.
+- 2026-09-04: completed slice `config cm set descriptor/context`. The atomic
+  noninteractive update now opens the frozen Console seam before store
+  construction, with `YCY / config cm set`, bounded `commit message profile
+  update` target, static configuration scope, and safe bounded profile/setting
+  metadata; the requested value is never placed in the descriptor. Exact
+  three-argument writer semantics, key parsing/normalization, encryption,
+  failure precedence, Plain loading output, Automation silence, and the single
+  `update-cm-profile` phase remain unchanged. Modified:
+  `pkg/cmd/config/cm/set/{command.go,terminal_test.go}`. Directed verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/config/cm/set` passed. Risk: fresh Rich PTY and race evidence for
+  this command remain. Next action: implement only the `config cm remove`
+  descriptor/context slice.
+- 2026-09-04: completed slice `config cm remove descriptor/context`. The
+  validated destructive route now opens the frozen Console seam before store
+  access, with `YCY / config cm remove`, bounded `commit message profile
+  removal` target, static configuration scope, and a safe bounded profile
+  metadata projection. Exact profile lookup, validation-before-confirmation,
+  default-No confirmation, default reassignment, cancellation, Automation
+  read-before-reject behavior, and the two real Work Phases remain unchanged.
+  Modified: `pkg/cmd/config/cm/remove/{command.go,terminal_test.go}`. Directed
+  verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  -count=1 ./pkg/cmd/config/cm/remove` passed. Risk: fresh wide/compact B PTY
+  and race evidence for this command remain. Next action: implement only the
+  `rm` descriptor/context slice.
+- 2026-09-04: completed slice `rm descriptor/context`. The destructive cleanup
+  adapter now opens the frozen Console seam before working-directory access,
+  with `YCY / rm`, a safe static cleanup target, and bounded route/mode
+  metadata for explicit versus smart cleanup and force versus
+  default-negative confirmation. The established introduction wording remains
+  visible through the safe target projection; original paths are never put in
+  the descriptor. Path resolution, risk warnings, confirmation defaults,
+  concurrent deletion, partial-success results, cancellation, and Automation
+  boundaries remain unchanged. Modified:
+  `pkg/cmd/rm/{terminal.go,console_test.go}`. Directed verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 ./pkg/cmd/rm`
+  passed. Risk: fresh compact/wide B evidence is present for existing journeys,
+  but full mutation/race/repository evidence remains. Next action: implement
+  only the `zip` descriptor/context slice.
+- 2026-09-04: completed slice `zip descriptor/context`. The finite archive
+  adapter now opens the frozen Console seam before workspace discovery, with
+  `YCY / zip`, a bounded archive-planning target, safe summary/directory
+  metadata, and explicit `with-dir` and reveal mode labels. Absolute or
+  control-bearing directory arguments are reduced to safe labels while the
+  original directory, output-name, glob, archive, and revealer values remain
+  unchanged for command execution. Automation rejection and all existing
+  planning/phase/result boundaries remain unchanged. Modified:
+  `pkg/cmd/zip/{terminal.go,console_test.go}`. Directed verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 ./pkg/cmd/zip`
+  passed. Risk: fresh wide/compact B PTY archive evidence remains. Next
+  action: add the required fresh `config cm set` Rich PTY and stream evidence.
+- 2026-09-04: completed slice `config cm set Rich PTY and stream evidence`.
+  Added a real-PTY four-way journey (colored and `NO_COLOR=1`, `120x40` and
+  `40x15`) around a blocked atomic writer. The live B bar/table and compact
+  degradation are asserted before release; the completed phase, API-key
+  redaction, primary-screen restoration, Transcript-before-Result ordering,
+  and unchanged `Profile work updated` result are asserted afterward. The
+  existing Plain, Automation, failure, parser, encryption, and writer-boundary
+  tests remain green. Modified:
+  `pkg/cmd/config/cm/set/terminal_pty_test.go`. Directed verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/config/cm/set -run 'TestRunCMSetRichPTY|TestRunSet'` passed.
+  Risk: the complete CM-set package and race run remain in the Gate-level
+  verification. Next action: add fresh `config cm remove` Rich PTY and stream
+  evidence, including cancellation and default reassignment safety.
+- 2026-09-04: completed slice `config cm remove Rich PTY and stream evidence`.
+  Added a real-PTY four-way journey (colored and `NO_COLOR=1`, `120x40` and
+  `40x15`) around default-profile confirmation and a blocked removal writer.
+  The live B bar/table, bounded profile context, compact confirmation context,
+  default-removal guidance on wide screens, primary-screen restoration,
+  Transcript-before-Result ordering, completed removal phase, and safe
+  profile metadata projection are asserted; the writer marker proves the
+  mutation boundary and no profile credential/model fixture escapes. The
+  existing Plain, Automation, cancellation, failure, persistence, and
+  default-reassignment tests remain green. Modified:
+  `pkg/cmd/config/cm/remove/terminal_pty_extended_test.go`. Directed
+  verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  -count=1 ./pkg/cmd/config/cm/remove -run
+  '^TestRunCMRemoveRichPTYFourWayBJourney$'` passed. Risk: fresh `rm` and
+  `zip` PTY/behavior evidence plus Gate-level race and repository checks
+  remain. Next action: add only the `rm` fresh Rich PTY and cancellation slice.
+
+- 2026-09-04: completed slice `rm fresh Rich PTY mutation and cancellation
+  evidence`. Added real-PTY four-way explicit-path mutation and Esc-cancellation
+  journeys (colored and `NO_COLOR=1`, `120x40` and `40x15`). The mutation
+  fixture blocks the real remover until the parent observes the active
+  `Delete selected paths` phase, then verifies the file is deleted, the safe
+  newline path projection never leaks raw input, the B descriptor/table and
+  confirmation context are present, the primary screen is restored, and the
+  ordered Transcript precedes the single `Done!` Result. The cancellation
+  fixture verifies Esc leaves the target intact and never invokes the remover,
+  with bounded cancellation Transcript and restored terminal in every mode.
+  Existing smart-route, partial-deletion, missing-path, Plain, Automation, and
+  context-cancellation tests remain green. Modified:
+  `pkg/cmd/rm/terminal_pty_extended_test.go`. Directed verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/rm -run
+  '^TestRunRMExplicitRichPTYFourWay(Mutation|Cancellation)Journey$'` and the
+  complete `./pkg/cmd/rm` package both passed. Risk: fresh `zip` PTY/archive
+  evidence plus Gate-level race and repository checks remain. Next action: add
+  only the `zip` fresh Rich planning/archive slice.
+- 2026-09-04: completed slice `config fork add fresh four-way Rich PTY
+  evidence`. Extended the existing real-PTY journey to colored and
+  `NO_COLOR=1` `120x40` and `40x15` surfaces, preserving all five prompts,
+  provider/default selections, encrypted-token boundary, phase catalog,
+  restoration, Transcript ordering, and the single durable success result.
+  Compact assertions account for bounded wrapping while retaining the same
+  semantic evidence. Modified:
+  `pkg/cmd/config/fork/add/terminal_pty_test.go`. Directed verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/config/fork/add -run
+  '^TestRunForkAddRichPTYRestoresScreenAndRedactsTranscript$'` passed. Risk:
+  fresh `config fork remove` and `config cm add` four-way evidence plus
+  Gate-level race and repository checks remain. Next action: extend only the
+  `config fork remove` Rich PTY slice.
+- 2026-09-04: completed slice `config fork remove fresh four-way Rich PTY
+  evidence`. Extended the real-PTY removal journey to colored and
+  `NO_COLOR=1` `120x40` and `40x15` surfaces, preserving ordered selection,
+  default-negative confirmation, bounded host projection, removal phase,
+  primary-screen restoration, Transcript-before-Result ordering, and the
+  writer marker. Compact input waits on stable truncated selection and
+  confirmation markers while wide input retains the full labels. Modified:
+  `pkg/cmd/config/fork/remove/terminal_pty_test.go`. Directed verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/config/fork/remove -run
+  '^TestRunForkRemoveRichPTYRestoresScreenAndProjectsTranscript$'` passed.
+  Risk: fresh `config cm add` four-way evidence plus Gate-level race and
+  repository checks remain. Next action: extend only the `config cm add` Rich
+  PTY slice.
+- 2026-09-04: completed slice `config cm add fresh four-way Rich PTY
+  evidence`. Extended the four-field real-PTY journey to colored and
+  `NO_COLOR=1` `120x40` and `40x15` surfaces, preserving prompt order,
+  secret-input redaction, collection/save phase catalog, primary-screen
+  restoration, Transcript-before-Result ordering, and the writer marker.
+  Compact synchronization uses the bounded `base` field fragment while wide
+  synchronization retains the full URL label. Modified:
+  `pkg/cmd/config/cm/add/terminal_pty_test.go`. Directed verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/config/cm/add -run
+  '^TestRunCMAddRichPTYRestoresScreenAndRedactsTranscript$'` passed. Risk:
+  the fresh `zip` log entry and Gate-level race and repository checks remain.
+  Next action: record the completed fresh `zip` PTY/archive evidence, then run
+  the declared G3 repository verification.
+- 2026-09-04: completed slice `zip fresh four-way Rich PTY planning and
+  archive evidence`. The real-PTY journey passed colored and `NO_COLOR=1`
+  `120x40` and `40x15` surfaces, covering all four planning interactions,
+  ordered archive phases, bounded directory/with-dir/reveal metadata,
+  primary-screen restoration, Transcript-before-Result ordering, and the
+  reveal handoff. Disposable fixtures verified `with-dir` archive entries,
+  hidden-file exclusion, exact archive contents, and no absolute path, URL,
+  or hidden-content leakage. Modified:
+  `pkg/cmd/zip/terminal_pty_extended_test.go`. Directed verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 ./pkg/cmd/zip
+  -run '^TestRunZIPRichPTYFourWayPlanningArchiveJourney$'` passed. Risk:
+  Gate-level race and repository checks remain. Next action: run the declared
+  G3 repository verification sequence.
+- 2026-09-04: G3 Repository verification step 1 passed in the declared order:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./pkg/cmd/config/...
+  ./pkg/cmd/rm ./pkg/cmd/zip ./internal/terminal`. All configuration,
+  destructive, archive, and shared-terminal packages passed. Risk: targeted
+  race evidence and the remaining repository checks remain. Next action: run
+  G3 Repository verification step 2 for every touched mutation package.
+- 2026-09-04: G3 Repository verification step 2 passed: targeted `-race`
+  coverage for `config/fork/add`, `config/fork/remove`, `config/cm/add`,
+  `config/cm/set`, `config/cm/remove`, `rm`, and `zip` all passed with
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0`. No race reports were
+  emitted. Risk: command-surface, repository check, standalone acceptance,
+  and diff checks remain. Next action: run `make command-surface`.
+- 2026-09-04: G3 Repository verification step 3a passed: `make
+  command-surface` completed successfully (`pkg/cmd/root` tests green).
+  Risk: `make check`, standalone acceptance, and diff checks remain. Next
+  action: run `make check`.
+- 2026-09-04: G3 Repository verification step 3b passed: `make check`
+  completed successfully. Frontend lint, typecheck, Vitest, Vite asset
+  verification, and the full Go repository test suite passed; the existing
+  Vite chunk-size warning was non-fatal. Risk: standalone acceptance and diff
+  checks remain. Next action: run the declared G3 standalone acceptance
+  command set.
+- 2026-09-04: G3 Repository verification step 4 passed: the declared tagged
+  standalone acceptance set for `config fork add/remove`, `config cm
+  add/set/remove`, `rm`, and `zip` passed in `./acceptance`. Risk: only the
+  final `git diff --check` repository check remains before preparing the
+  manual acceptance fixtures. Next action: run `git diff --check`.
+- 2026-09-04: G3 Repository verification step 5 passed: `git diff --check`
+  reported no whitespace errors. All declared automated repository checks are
+  green. Risk: manual acceptance handoff remains; no further implementation
+  is authorized after the handoff record. Next action: build a fresh local
+  binary and create disposable G3 acceptance fixtures.
+- 2026-09-04: G3 manual acceptance handoff issued; explicit confirmation is
+  pending and G3 remains `active`. Acceptance entry:
+  `/Users/qigong-it-1/Workspace/hackycy-cli/.scratch/terminal-experience-modernization/g3-acceptance/README.md`.
+  The fresh local binary is
+  `/Users/qigong-it-1/Workspace/hackycy-cli/.scratch/terminal-experience-modernization/g3-acceptance/bin/ycy-g3`;
+  its isolated configuration and project fixtures are under the same
+  `g3-acceptance/{home,project}` directory and can be restored with
+  `reset-fixtures.sh`. Run all seven commands through the README's colored
+  `120x40` `wide` entry and `NO_COLOR=1` `40x15` `compact` entry: `config fork
+  add/remove`, `config cm add/set/remove`, `rm`, and `zip`. Include the listed
+  cancellation (`rm`: first `n`, then reset and `y`) and the listed Automation
+  invocation (`printf 'ignored\\n' | ... config cm add`); the latter was
+  freshly checked to reject before mutation, with the fixture config SHA-256
+  unchanged. Minimum acceptance checklist: bounded B descriptor/focus/phase
+  rows; understandable forms and destructive wording at both sizes; no
+  credential, raw URL, absolute-path, hidden-file, or raw-error leakage;
+  cancellation and Automation have no later side effect; primary-screen
+  restoration and exactly one Result after Transcript; and the ZIP contains
+  only the expected visible entries. Automated evidence: all G3 directed
+  command/PTY tests; repository configuration/destructive/archive test suite;
+  targeted `-race` for all seven mutation packages; `make command-surface`;
+  `make check`; tagged standalone acceptance for all seven commands; and
+  `git diff --check` all passed. Reply exactly once with `通过: <commands>` or
+  `未通过: <command and reason>`. Next action: only a new Goal carrying that
+  explicit result may resume G3; this Goal ends at this handoff.
+- 2026-09-04: G3 manual acceptance result received: the user replied
+  `验收通过`. Exit condition 3 is satisfied. Itemized final evidence: (1)
+  every listed configuration, destructive, and archive command has fresh B
+  form/phase/Transcript/PTY evidence with behavior baselines preserved; (2)
+  mutation, cancellation, Automation, redaction, archive/deletion, and
+  targeted race evidence passed for all applicable commands; (3) the recorded
+  manual review scenarios were explicitly accepted by the user; and (4) the
+  declared G3 repository sequence passed, including focused repository tests,
+  targeted `-race`, `make command-surface`, `make check`, tagged standalone
+  acceptance, and `git diff --check`. G3 Exit conditions 1-4 are therefore
+  complete. G3 is marked `passed`; its direct successor G4 is changed from
+  `planned` to `active` and recorded as `已激活，尚未开始实施`. No G4
+  reading, analysis, implementation, or verification was performed in this
+  Goal.
 
 ### G4: Git mutation and process handoff
 
 - 2026-09-04: initialized as `planned`; no recovery implementation evidence.
+- 2026-09-04: 已激活，尚未开始实施。本条仅记录 G3 完成后的直接后继
+  激活；G4 不属于本次 Goal。
 
 ### G5: Service lifecycles and detached updater
 

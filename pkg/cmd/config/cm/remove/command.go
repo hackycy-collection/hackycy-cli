@@ -54,7 +54,10 @@ func executeRemove(options *Options) (RemoveResult, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, terminalCMRemoveConsoleDescriptor(options.Profile))
+	if err != nil {
+		return RemoveResult{}, err
+	}
 	defer run.Close()
 	caps := options.Terminal.Capabilities()
 	if err := ctx.Err(); err != nil {
@@ -164,6 +167,18 @@ func executeRemove(options *Options) (RemoveResult, error) {
 
 var _ Reader = (*appconfig.Store)(nil)
 var _ RemoveWriter = (*appconfig.Store)(nil)
+
+func terminalCMRemoveConsoleDescriptor(profile string) terminalexperience.ConsoleDescriptor {
+	return terminalexperience.ConsoleDescriptor{
+		Command: "YCY / config cm remove",
+		Target:  "commit message profile removal",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "scope", Value: "commit message configuration"},
+			{Label: "profile", Value: safeCMRemoveName(profile)},
+		},
+	}
+}
 
 type cmRemovePhaseSink struct {
 	run      terminalexperience.ExperienceRun

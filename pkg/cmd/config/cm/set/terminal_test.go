@@ -4,12 +4,46 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
+
+func TestConfigCMSetConsoleDescriptorProvidesSafeBoundedContext(t *testing.T) {
+	want := terminalexperience.ConsoleDescriptor{
+		Command: "YCY / config cm set",
+		Target:  "commit message profile update",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "scope", Value: "commit message configuration"},
+			{Label: "profile", Value: "work"},
+			{Label: "setting", Value: "apiKey"},
+		},
+	}
+	if got := terminalCMSetConsoleDescriptor("work", "apiKey"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Console descriptor = %#v, want %#v", got, want)
+	}
+	unsafe := terminalCMSetConsoleDescriptor("bad\nprofile", "bad\tsetting")
+	for _, field := range []string{unsafe.Command, unsafe.Target, unsafe.Status} {
+		if terminaltest.ContainsTerminalControl([]byte(field)) {
+			t.Fatalf("descriptor field contains terminal control: %q", field)
+		}
+	}
+	for _, metadata := range unsafe.Metadata {
+		if terminaltest.ContainsTerminalControl([]byte(metadata.Label)) || terminaltest.ContainsTerminalControl([]byte(metadata.Value)) {
+			t.Fatalf("descriptor metadata contains terminal control: %#v", metadata)
+		}
+	}
+	if got := unsafe.Metadata[1].Value; got != "Profile" {
+		t.Fatalf("unsafe profile projection = %q, want Profile", got)
+	}
+	if got := unsafe.Metadata[2].Value; got != "Setting" {
+		t.Fatalf("unsafe setting projection = %q, want Setting", got)
+	}
+}
 
 func TestRunSetTracksOneAtomicUpdateAndKeepsPlainStreamsControlFree(t *testing.T) {
 	var stdout, diagnostics bytes.Buffer

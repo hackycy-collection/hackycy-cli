@@ -88,6 +88,21 @@ func TestTerminalCMAddAdapterTranslatesTheOrderedForm(t *testing.T) {
 	}
 }
 
+func TestConfigCMAddConsoleDescriptorProvidesSafeBoundedContext(t *testing.T) {
+	want := terminalexperience.ConsoleDescriptor{
+		Command: "YCY / config cm add",
+		Target:  "commit message profile setup",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{{
+			Label: "scope",
+			Value: "commit message configuration",
+		}},
+	}
+	if got := terminalCMAddConsoleDescriptor(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Console descriptor = %#v, want %#v", got, want)
+	}
+}
+
 func TestTerminalCMAddAdapterMapsTerminalCancellation(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: terminalexperience.ErrInteractionCancelled})
 	adapter := newTerminalCMAddAdapter(experience.Open(context.Background()))
