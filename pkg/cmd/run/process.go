@@ -30,7 +30,7 @@ func (runner *osRunChildRunner) Run(ctx context.Context, request ChildRequest) (
 	child.Stdin = runner.input
 	child.Stdout = runner.output
 	child.Stderr = runner.errors
-	configureRunChild(child)
+	configureRunChild(child, runner.input)
 	if err := child.Start(); err != nil {
 		return Result{}, normalizeProcessStartError(err)
 	}

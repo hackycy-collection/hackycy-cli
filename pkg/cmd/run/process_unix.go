@@ -4,10 +4,13 @@ package run
 
 import (
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"syscall"
 	"time"
+
+	"golang.org/x/term"
 )
 
 const (
@@ -15,8 +18,15 @@ const (
 	runGroupSignalRetryDelay = 10 * time.Millisecond
 )
 
-func configureRunChild(child *exec.Cmd) {
-	child.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+func configureRunChild(child *exec.Cmd, input io.Reader) {
+	attributes := &syscall.SysProcAttr{Setpgid: true}
+	if terminal, ok := input.(*os.File); ok && term.IsTerminal(int(terminal.Fd())) {
+		// The child keeps its isolated process group for cancellation, but it
+		// must own the foreground terminal before it reads inherited stdin.
+		attributes.Foreground = true
+		attributes.Ctty = int(terminal.Fd())
+	}
+	child.SysProcAttr = attributes
 }
 
 func defaultRunTerminationSignal() os.Signal {

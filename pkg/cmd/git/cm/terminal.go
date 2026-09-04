@@ -4,9 +4,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
+	"unicode"
+	"unicode/utf8"
 
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 )
@@ -24,13 +27,17 @@ func executeCM(options *Options) (Result, error) {
 	}
 	ctx, cancel := context.WithCancel(options.Context)
 	defer cancel()
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, gitCMConsoleDescriptor(options.Input))
+	if err != nil {
+		return Result{}, err
+	}
 	defer run.Close()
 	adapter := newTerminalGitCMAdapter(run, cancel)
+	adapter.enableDetailed()
 
 	store, err := options.Config()
 	if err != nil {
-		return Result{}, err
+		return Result{}, errors.Join(err, run.Finish(terminalexperience.Failed, nil))
 	}
 	module, err := New(Dependencies{
 		Git:       gitRunnerAdapter{runner: options.Git},
@@ -42,50 +49,67 @@ func executeCM(options *Options) (Result, error) {
 		Tracker:   adapter,
 	})
 	if err != nil {
-		return Result{}, err
+		return Result{}, errors.Join(err, run.Finish(terminalexperience.Failed, nil))
 	}
 	if options.Terminal.Capabilities().Interaction == terminalexperience.Automation {
 		requiresInteraction, err := RequiresInteraction(options.Input)
 		if err != nil {
-			return Result{}, err
+			return Result{}, errors.Join(err, run.Finish(terminalexperience.Failed, nil))
 		}
 		if requiresInteraction {
-			return Result{}, errGitCMRequiresInteractive
+			return Result{}, errors.Join(errGitCMRequiresInteractive, run.Finish(terminalexperience.Failed, nil))
 		}
 	}
 
 	result, err := module.Run(ctx, options.Input)
+	if finishErr := adapter.finishDetailed(); finishErr != nil {
+		err = errors.Join(err, finishErr)
+	}
 	if err != nil {
 		if result.Generated == nil && result.Profile != (ProfileDiagnostic{}) {
-			if err := adapter.PresentFailure(result); err != nil {
-				return result, err
-			}
+			_ = adapter.PresentFailure(result)
 		}
 		if result.Committed && !result.Pushed {
-			if err := adapter.PresentOutcome(result); err != nil {
-				return result, err
-			}
+			_ = adapter.PresentOutcome(result)
 		}
-		return result, err
+		return result, errors.Join(err, run.Finish(terminalexperience.Failed, adapter.finalDocument(result, true)))
 	}
 	if result.Generated != nil && !result.PromptedCommit {
-		if err := adapter.PresentGenerated(result); err != nil {
-			return result, err
-		}
+		_ = adapter.PresentGenerated(result)
 	}
-	if err := adapter.PresentOutcome(result); err != nil {
-		return result, err
+	_ = adapter.PresentOutcome(result)
+	outcome := terminalexperience.Succeeded
+	if result.Cancelled || result.NothingSelected {
+		outcome = terminalexperience.Cancelled
 	}
-	return result, nil
+	return result, run.Finish(outcome, adapter.finalDocument(result, false))
 }
 
 type terminalGitCMAdapter struct {
 	run           terminalexperience.ExperienceRun
 	requestCancel context.CancelFunc
+
+	mu            sync.Mutex
+	detailed      bool
+	activeUpdates chan terminalexperience.OperationPhase
+	activeDone    chan error
+	active        bool
+	segment       int
+	pending       []terminalexperience.OperationPhase
+	milestones    []terminalexperience.PresentationDocument
+	generated     *terminalexperience.PresentationDocument
+	failure       *terminalexperience.PresentationDocument
+	outcome       *terminalexperience.PresentationDocument
 }
 
 func newTerminalGitCMAdapter(run terminalexperience.ExperienceRun, requestCancel context.CancelFunc) *terminalGitCMAdapter {
 	return &terminalGitCMAdapter{run: run, requestCancel: requestCancel}
+}
+
+func (adapter *terminalGitCMAdapter) enableDetailed() {
+	adapter.mu.Lock()
+	adapter.detailed = true
+	adapter.mu.Unlock()
 }
 
 func (adapter *terminalGitCMAdapter) SelectFiles(prompt StagePrompt) ([]string, bool, error) {
@@ -97,7 +121,15 @@ func (adapter *terminalGitCMAdapter) SelectFiles(prompt StagePrompt) ([]string, 
 }
 
 func (adapter *terminalGitCMAdapter) ConfirmCommit(prompt CommitPrompt) (bool, bool, error) {
-	if err := adapter.run.Notice(gitCMGeneratedDocument(prompt.Generated, prompt.Profile)); err != nil {
+	document := gitCMGeneratedDocument(prompt.Generated, prompt.Profile)
+	adapter.mu.Lock()
+	detailed := adapter.detailed
+	adapter.mu.Unlock()
+	if !detailed {
+		if err := adapter.run.Notice(document); err != nil {
+			return false, false, err
+		}
+	} else if err := adapter.run.Milestone(document); err != nil {
 		return false, false, err
 	}
 	answer, cancelled, err := adapter.ask(gitCMCommitRequest(prompt))
@@ -108,6 +140,43 @@ func (adapter *terminalGitCMAdapter) ConfirmCommit(prompt CommitPrompt) (bool, b
 }
 
 func (adapter *terminalGitCMAdapter) Start(_ context.Context) (PhaseReporter, error) {
+	adapter.mu.Lock()
+	if adapter.detailed {
+		if adapter.active {
+			adapter.mu.Unlock()
+			return nil, errors.New("git cm tracker segment is already active")
+		}
+		definitions := cmPhaseDefinitionsForSegment(adapter.segment)
+		if len(definitions) == 0 {
+			adapter.mu.Unlock()
+			return nil, errors.New("git cm tracker has no remaining phase segment")
+		}
+		adapter.segment++
+		updates := make(chan terminalexperience.OperationPhase, 256)
+		done := make(chan error, 1)
+		adapter.activeUpdates = updates
+		adapter.activeDone = done
+		adapter.active = true
+		pending := append([]terminalexperience.OperationPhase(nil), adapter.pending...)
+		adapter.pending = nil
+		adapter.mu.Unlock()
+		go func() {
+			err := adapter.run.Track(terminalexperience.TrackedOperation{
+				ID:            "git-cm",
+				OperationID:   "git-cm",
+				Label:         "Git CM",
+				Phases:        definitions,
+				Updates:       updates,
+				RequestCancel: adapter.requestCancel,
+			})
+			done <- err
+		}()
+		for _, update := range pending {
+			updates <- update
+		}
+		return &terminalGitCMPhaseReporter{adapter: adapter, detailed: true, detailUpdates: updates, detailDone: done}, nil
+	}
+	adapter.mu.Unlock()
 	reporter := &terminalGitCMPhaseReporter{
 		updates:  make(chan terminalexperience.OperationPhase, 1),
 		finished: make(chan struct{}),
@@ -127,11 +196,27 @@ func (adapter *terminalGitCMAdapter) PresentGenerated(result Result) error {
 	if result.Generated == nil {
 		return nil
 	}
-	return adapter.run.Result(gitCMGeneratedDocument(*result.Generated, result.Profile))
+	document := gitCMGeneratedDocument(*result.Generated, result.Profile)
+	adapter.mu.Lock()
+	if adapter.detailed {
+		adapter.generated = &document
+		adapter.mu.Unlock()
+		return nil
+	}
+	adapter.mu.Unlock()
+	return adapter.run.Result(document)
 }
 
 func (adapter *terminalGitCMAdapter) PresentFailure(result Result) error {
-	return adapter.run.Result(gitCMFailureDocument(result.Profile))
+	document := gitCMFailureDocument(result.Profile)
+	adapter.mu.Lock()
+	if adapter.detailed {
+		adapter.failure = &document
+		adapter.mu.Unlock()
+		return nil
+	}
+	adapter.mu.Unlock()
+	return adapter.run.Result(document)
 }
 
 func (adapter *terminalGitCMAdapter) PresentOutcome(result Result) error {
@@ -139,7 +224,158 @@ func (adapter *terminalGitCMAdapter) PresentOutcome(result Result) error {
 	if len(document.Blocks) == 0 {
 		return nil
 	}
+	adapter.mu.Lock()
+	if adapter.detailed {
+		adapter.outcome = &document
+		adapter.mu.Unlock()
+		return nil
+	}
+	adapter.mu.Unlock()
 	return adapter.run.Result(document)
+}
+
+func (adapter *terminalGitCMAdapter) reportCMPhase(id string, state PhaseState, detail string) {
+	update := terminalexperience.OperationPhase{ID: id, State: terminalGitCMPhaseState(state), Detail: safeCMText(detail, "phase")}
+	adapter.mu.Lock()
+	if !adapter.detailed {
+		adapter.mu.Unlock()
+		return
+	}
+	if !adapter.active {
+		adapter.pending = append(adapter.pending, update)
+		if state == PhaseActive {
+			adapter.milestones = append(adapter.milestones, terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleActive, Text: cmLegacyPhaseLabel(id)}}})
+		}
+		adapter.mu.Unlock()
+		return
+	}
+	if state == PhaseActive {
+		adapter.milestones = append(adapter.milestones, terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleActive, Text: cmLegacyPhaseLabel(id)}}})
+	}
+	updates := adapter.activeUpdates
+	adapter.mu.Unlock()
+	updates <- update
+}
+
+func cmLegacyPhaseLabel(id string) string {
+	switch id {
+	case cmInspectChangesPhaseID:
+		return "Inspecting changes"
+	case cmStageSelectedPhaseID:
+		return "Staging selected files"
+	case cmStageAllPhaseID:
+		return "Staging all changes"
+	case cmCaptureEvidencePhaseID:
+		return "Collecting changes"
+	case cmResolveProfilePhaseID:
+		return "Resolving provider profile"
+	case cmGenerateMessagePhaseID:
+		return "Generating commit message"
+	case cmVerifyScopePhaseID:
+		return "Verifying unchanged scope"
+	case cmCreateCommitPhaseID:
+		return "Creating commit"
+	case cmPushCommitPhaseID:
+		return "Pushing commit"
+	default:
+		return "Git CM"
+	}
+}
+
+func (adapter *terminalGitCMAdapter) reportCMMilestone(text string) {
+	if strings.TrimSpace(text) == "" {
+		return
+	}
+	adapter.mu.Lock()
+	if adapter.detailed {
+		adapter.milestones = append(adapter.milestones, terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleWarning, Text: safeCMText(text, "CM update")}}})
+	}
+	adapter.mu.Unlock()
+}
+
+func (adapter *terminalGitCMAdapter) sendDetailed(update terminalexperience.OperationPhase) {
+	adapter.mu.Lock()
+	if !adapter.detailed || !adapter.active || adapter.activeUpdates == nil {
+		adapter.mu.Unlock()
+		return
+	}
+	updates := adapter.activeUpdates
+	adapter.mu.Unlock()
+	updates <- update
+}
+
+func (adapter *terminalGitCMAdapter) finishDetailed() error {
+	adapter.mu.Lock()
+	if !adapter.detailed {
+		adapter.mu.Unlock()
+		return nil
+	}
+	if adapter.active {
+		adapter.mu.Unlock()
+		return errors.New("git cm tracker segment was not closed")
+	}
+	pending := append([]terminalexperience.OperationPhase(nil), adapter.pending...)
+	adapter.pending = nil
+	milestones := append([]terminalexperience.PresentationDocument(nil), adapter.milestones...)
+	adapter.milestones = nil
+	adapter.mu.Unlock()
+
+	// Selection or an early failure can finish before the first compatibility
+	// tracker segment starts. Replay those reached catalog entries so the
+	// semantic Transcript still records the work that actually ran.
+	var trackErr error
+	if len(pending) > 0 {
+		updates := make(chan terminalexperience.OperationPhase, len(pending))
+		done := make(chan error, 1)
+		go func() {
+			done <- adapter.run.Track(terminalexperience.TrackedOperation{
+				ID:          "git-cm-final",
+				OperationID: "git-cm-final",
+				Label:       "Git CM",
+				Phases:      cmPhaseDefinitionsForSegment(0),
+				Updates:     updates,
+			})
+		}()
+		for _, update := range pending {
+			updates <- update
+		}
+		close(updates)
+		trackErr = <-done
+	}
+	var presentationErr error
+	for _, milestone := range milestones {
+		presentationErr = errors.Join(presentationErr, adapter.run.Milestone(milestone))
+	}
+	return errors.Join(trackErr, presentationErr)
+}
+
+func (adapter *terminalGitCMAdapter) finalDocument(result Result, failed bool) *terminalexperience.PresentationDocument {
+	adapter.mu.Lock()
+	defer adapter.mu.Unlock()
+	if failed {
+		if result.Committed && !result.Pushed && adapter.outcome != nil {
+			document := *adapter.outcome
+			return &document
+		}
+		if adapter.failure != nil {
+			document := *adapter.failure
+			return &document
+		}
+		return nil
+	}
+	if result.Generated != nil && !result.PromptedCommit && adapter.generated != nil {
+		document := *adapter.generated
+		return &document
+	}
+	if adapter.outcome != nil {
+		document := *adapter.outcome
+		return &document
+	}
+	document := gitCMOutcomeDocument(result)
+	if len(document.Blocks) == 0 {
+		return nil
+	}
+	return &document
 }
 
 func (adapter *terminalGitCMAdapter) ask(request terminalexperience.InteractionRequest) (terminalexperience.InteractionAnswer, bool, error) {
@@ -229,8 +465,13 @@ func selectGitCMOptions(value string, options []StageOption) ([]string, bool) {
 }
 
 type terminalGitCMPhaseReporter struct {
-	updates  chan terminalexperience.OperationPhase
-	finished chan struct{}
+	adapter       *terminalGitCMAdapter
+	detailed      bool
+	detailUpdates chan terminalexperience.OperationPhase
+	detailDone    chan error
+	detailClosed  bool
+	updates       chan terminalexperience.OperationPhase
+	finished      chan struct{}
 
 	mu     sync.Mutex
 	closed bool
@@ -238,6 +479,12 @@ type terminalGitCMPhaseReporter struct {
 }
 
 func (reporter *terminalGitCMPhaseReporter) Report(phase Phase) {
+	if reporter.detailed {
+		// Detailed Work Phase boundaries are emitted by the optional observer
+		// hooks in the module. Suppressing the compatibility Phase stream here
+		// avoids duplicate/overlapping transitions in the immutable catalog.
+		return
+	}
 	update := terminalGitCMPhase(phase)
 	select {
 	case reporter.updates <- update:
@@ -246,6 +493,22 @@ func (reporter *terminalGitCMPhaseReporter) Report(phase Phase) {
 }
 
 func (reporter *terminalGitCMPhaseReporter) Close() error {
+	if reporter.detailed {
+		if reporter.detailClosed {
+			return nil
+		}
+		reporter.detailClosed = true
+		close(reporter.detailUpdates)
+		err := <-reporter.detailDone
+		reporter.adapter.mu.Lock()
+		if reporter.adapter.activeUpdates == reporter.detailUpdates {
+			reporter.adapter.active = false
+			reporter.adapter.activeUpdates = nil
+			reporter.adapter.activeDone = nil
+		}
+		reporter.adapter.mu.Unlock()
+		return err
+	}
 	reporter.mu.Lock()
 	if !reporter.closed {
 		close(reporter.updates)
@@ -331,8 +594,23 @@ func gitCMGeneratedText(generated GeneratedMessage, profile ProfileDiagnostic) s
 func gitCMFailureDocument(profile ProfileDiagnostic) terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
 		Role: terminalexperience.VisualRoleMuted,
-		Text: fmt.Sprintf("Provider: %s\nBase URL: %s\nModel: %s", profile.Name, profile.BaseURL, profile.Model),
+		Text: fmt.Sprintf("Provider: %s\nBase URL: %s\nModel: %s", safeCMText(profile.Name, "provider"), safeCMProfileURL(profile.BaseURL), safeCMText(profile.Model, "model")),
 	}}}
+}
+
+func safeCMProfileURL(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "<unavailable>"
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" {
+		return "<configured>"
+	}
+	parsed.User = nil
+	parsed.RawQuery = ""
+	parsed.Fragment = ""
+	return safeCMText(strings.TrimSuffix(parsed.String(), "/"), "<configured>")
 }
 
 func gitCMOutcomeDocument(result Result) terminalexperience.PresentationDocument {
@@ -362,6 +640,85 @@ func gitCMOutcomeDocument(result Result) terminalexperience.PresentationDocument
 		return terminalexperience.PresentationDocument{}
 	}
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
+}
+
+func gitCMConsoleDescriptor(input Input) terminalexperience.ConsoleDescriptor {
+	mode := "generate"
+	if input.Stage || input.StagePush != nil {
+		mode = "stage and commit"
+	} else if input.StageAll {
+		mode = "stage all and commit"
+	} else if input.Staged {
+		mode = "staged and commit"
+	} else if input.Push != nil {
+		mode = "commit and push"
+	}
+	if input.DryRun {
+		mode = "generate only"
+	}
+	language := input.Language
+	if language == "" {
+		language = "en"
+	}
+	remote := ""
+	if value, ok := firstTruthyOptional(input.StagePush, input.Push); ok {
+		remote = safeCMRemote(value)
+	}
+	metadata := []terminalexperience.ConsoleMetadata{
+		{Label: "mode", Value: safeCMText(mode, "generate")},
+		{Label: "language", Value: safeCMText(language, "en")},
+	}
+	if remote != "" {
+		metadata = append(metadata, terminalexperience.ConsoleMetadata{Label: "remote", Value: remote})
+	}
+	if strings.TrimSpace(input.Profile) != "" {
+		metadata = append(metadata, terminalexperience.ConsoleMetadata{Label: "profile", Value: safeCMText(input.Profile, "configured")})
+	}
+	return terminalexperience.ConsoleDescriptor{
+		Command:  "YCY / git cm",
+		Target:   "Generate and optionally create a commit",
+		Status:   "READY",
+		Metadata: metadata,
+	}
+}
+
+func safeCMRemote(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "origin"
+	}
+	return safeCMText(value, "remote")
+}
+
+func safeCMText(value, fallback string) string {
+	if !utf8.ValidString(value) {
+		return fallback
+	}
+	var builder strings.Builder
+	for _, r := range value {
+		switch r {
+		case '\n':
+			builder.WriteString(`\n`)
+		case '\r':
+			builder.WriteString(`\r`)
+		case '\t':
+			builder.WriteString(`\t`)
+		default:
+			if unicode.IsControl(r) {
+				return fallback
+			}
+			builder.WriteRune(r)
+		}
+	}
+	value = strings.TrimSpace(builder.String())
+	if value == "" {
+		return fallback
+	}
+	runes := []rune(value)
+	if len(runes) > 160 {
+		return string(runes[:160]) + "..."
+	}
+	return value
 }
 
 func formatGitCMTokenUsage(usage *TokenUsage) string {

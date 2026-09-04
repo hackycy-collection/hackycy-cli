@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"path/filepath"
+
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 )
 
 // Dependencies are the command-owned boundaries required by run.
@@ -69,10 +71,14 @@ func (module *Module) Run(context context.Context, input Input) (Result, error) 
 	if err != nil {
 		return Result{}, err
 	}
+	observer := detailedRunObserver(module.presenter)
+	reportRunPhase(observer, runResolveProjectPhaseID, terminalexperience.PhaseActive, "Discovering package.json and runnable scripts")
 	discovery, err := DiscoverProject(workingDirectory, input.Directory, module.reader)
 	if err != nil {
+		reportRunPhase(observer, runResolveProjectPhaseID, runPhaseError(context, err), "Project discovery failed")
 		return Result{}, err
 	}
+	reportRunPhase(observer, runResolveProjectPhaseID, terminalexperience.PhaseCompleted, runProjectDetail(discovery))
 
 	presentIntroduction(module.presenter)
 	script, cancelled, err := selectScript(module.prompter, discovery.Scripts)
@@ -80,21 +86,26 @@ func (module *Module) Run(context context.Context, input Input) (Result, error) 
 		return Result{}, err
 	}
 	if cancelled {
+		reportRunMilestone(observer, "Script selection cancelled")
 		presentCancellation(module.presenter)
 		return Result{}, nil
 	}
 	if err := context.Err(); err != nil {
 		return Result{}, err
 	}
+	reportRunPhase(observer, runResolveManagerPhaseID, terminalexperience.PhaseActive, "Inspecting lockfiles")
 	managers, err := PackageManagerOrder(discovery.Directory, module.exists)
 	if err != nil {
+		reportRunPhase(observer, runResolveManagerPhaseID, runPhaseError(context, err), "Package manager resolution failed")
 		return Result{}, err
 	}
+	reportRunPhase(observer, runResolveManagerPhaseID, terminalexperience.PhaseCompleted, runManagerDetail(managers))
 	manager, cancelled, err := selectPackageManager(module.prompter, managers)
 	if err != nil {
 		return Result{}, err
 	}
 	if cancelled {
+		reportRunMilestone(observer, "Package manager selection cancelled")
 		presentCancellation(module.presenter)
 		return Result{}, nil
 	}
@@ -102,6 +113,8 @@ func (module *Module) Run(context context.Context, input Input) (Result, error) 
 		return Result{}, err
 	}
 	request := childRequest(discovery.Directory, manager, script)
+	reportRunPhase(observer, runPrepareCommandPhaseID, terminalexperience.PhaseActive, runChildDetail(request))
 	presentLaunch(module.presenter, request)
+	reportRunPhase(observer, runPrepareCommandPhaseID, terminalexperience.PhaseCompleted, runChildDetail(request))
 	return module.runner.Run(context, request)
 }

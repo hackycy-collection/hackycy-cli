@@ -4,11 +4,12 @@ package run
 
 import (
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 )
 
-func configureRunChild(*exec.Cmd) {}
+func configureRunChild(*exec.Cmd, io.Reader) {}
 
 func defaultRunTerminationSignal() os.Signal {
 	return os.Interrupt

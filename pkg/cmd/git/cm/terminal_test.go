@@ -140,6 +140,62 @@ func TestGitCMPlainJourneyKeepsFormsAndPhasesOnStderr(t *testing.T) {
 	}
 }
 
+func TestGitCMPlainSelectionCancellationReplaysReachedInspectionPhase(t *testing.T) {
+	repository := newGitCMRepository(t)
+	withGitCMWorkingDirectory(t, repository)
+	writeGitCMFile(t, filepath.Join(repository, "README.md"), "cancel before staging\n")
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader("cancel\n"),
+		Output:       stdout,
+		Diagnostics:  stderr,
+	})
+
+	result, err := executeCMForTest(context.Background(), experience, Input{Stage: true})
+	if err != nil || !result.Cancelled || result.Committed {
+		t.Fatalf("Run() = (%#v, %v)", result, err)
+	}
+	if got, want := stdout.String(), "Cancelled\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if !strings.Contains(stderr.String(), "Inspect changes") || !strings.Contains(stderr.String(), "File selection cancelled") {
+		t.Fatalf("stderr did not replay reached work: %q", stderr.String())
+	}
+	if status := gitCMOutput(t, repository, "status", "--short"); status != "?? README.md\n" {
+		t.Fatalf("selection cancellation changed index = %q", status)
+	}
+}
+
+func TestGitCMPlainStageAllCompletesCatalogBeforeMutation(t *testing.T) {
+	repository := newGitCMRepository(t)
+	withGitCMWorkingDirectory(t, repository)
+	writeGitCMFile(t, filepath.Join(repository, "README.md"), "stage all\n")
+	server, provider := newGitCMMessageProvider(t, "feat(cm): stage all catalog")
+	defer server.Close()
+	configureGitCMProvider(t, server.URL)
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader("\n"),
+		Output:       stdout,
+		Diagnostics:  stderr,
+	})
+
+	result, err := executeCMForTest(context.Background(), experience, Input{StageAll: true})
+	if err != nil || !result.Committed || provider.calls != 1 {
+		t.Fatalf("Run() = (%#v, %v), provider calls = %d", result, err, provider.calls)
+	}
+	if !strings.Contains(stderr.String(), "Inspect changes") || !strings.Contains(stderr.String(), "Stage all changes") {
+		t.Fatalf("stage-all phases = %q", stderr.String())
+	}
+	if got, want := stdout.String(), "Commit created\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+}
+
 func TestGitCMAutomationFailsBeforePromptDependentMutationOrOutput(t *testing.T) {
 	for _, testCase := range []struct {
 		name       string

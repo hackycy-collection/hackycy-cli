@@ -73,8 +73,8 @@
 | G1: Root and low-risk finite recovery | passed | G0 | `implementation-plan.md` -> `G1: Root and low-risk finite recovery` | exit conditions 1-4 verified 2026-09-04 |
 | G2: External-read and service-boundary recovery | passed | G1 | `implementation-plan.md` -> `G2: External-read and service-boundary recovery` | exit conditions 1-4 and manual acceptance verified 2026-09-04 |
 | G3: Mutation and archive recovery | passed | G2 | `implementation-plan.md` -> `G3: Mutation and archive recovery` | exit conditions 1-4 and manual acceptance verified 2026-09-04 |
-| G4: Git mutation and process handoff | active | G3 | `implementation-plan.md` -> `G4: Git mutation and process handoff` | G3 passed 2026-09-04 |
-| G5: Service lifecycles and detached updater | planned | G4 | `implementation-plan.md` -> `G5: Service lifecycles and detached updater` | G4 pending |
+| G4: Git mutation and process handoff | passed | G3 | `implementation-plan.md` -> `G4: Git mutation and process handoff` | exit conditions 1-4 and manual acceptance verified 2026-09-05 |
+| G5: Service lifecycles and detached updater | active | G4 | `implementation-plan.md` -> `G5: Service lifecycles and detached updater` | G4 passed 2026-09-05 |
 | G6: Release verification and full visual review | planned | G5 | `implementation-plan.md` -> `G6: Release verification and full visual review` | G5 pending |
 
 ## Progress Log
@@ -925,10 +925,181 @@
 - 2026-09-04: initialized as `planned`; no recovery implementation evidence.
 - 2026-09-04: 已激活，尚未开始实施。本条仅记录 G3 完成后的直接后继
   激活；G4 不属于本次 Goal。
+- 2026-09-04: completed slice `Git Fork archive-first four-way Rich PTY
+  journey`. Added a disposable real-PTY fixture covering colored and
+  `NO_COLOR=1` `120x40` and `40x15` surfaces, default-branch resolution,
+  archive acquisition, bounded repository/destination/route metadata, the B
+  `STATE / PHASE / DETAIL` projection, primary-screen restoration, safe
+  provider projection, and Transcript-before-Result ordering. The fixture
+  verified archive contents and destination creation without exposing the
+  configured token or HTTP URL. Modified:
+  `pkg/cmd/git/fork/terminal_pty_extended_test.go`. Directed verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./pkg/cmd/git/fork
+  -run '^TestGitForkRichPTYFourWayArchiveJourney$' -count=1` passed for all
+  four surfaces. Risk: fallback, overwrite-decline/cancel, Git CM, Run, and
+  Gate-level repository verification remain. Next action: add the Git Fork
+  fallback and non-mutating cancellation PTY slice.
+
+- 2026-09-04: completed slice `Git Fork fallback and overwrite safety
+  four-way Rich PTY journeys`. Added disposable real-PTY fixtures covering
+  archive failure to clone fallback with Git metadata removal, and both
+  default-yes overwrite responses (decline and Esc cancellation) at colored
+  and `NO_COLOR=1` `120x40` and `40x15` sizes. The fixtures asserted clone
+  argv/ref, disk preservation on non-mutating exits, no network or credential
+  leakage, B restoration, and safe cancellation/fallback Transcript facts.
+  Modified: `pkg/cmd/git/fork/terminal_pty_extended_test.go`. Directed
+  verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/git/fork -run '^TestGitForkRichPTYFourWay(FallbackJourney|OverwriteDeclineAndCancel)$'
+  -count=1` passed for all eight scenarios. Risk: Git CM push/partial and
+  Run handoff PTY evidence plus Gate-level repository verification remain.
+  Next action: complete the Git CM Rich PTY slice.
+
+- 2026-09-04: reverified slice `Git Fork fallback and overwrite safety` after
+  the shared G4 fixture cleanup. The archive-first, clone-fallback,
+  destination-preservation, default-yes decline, and Esc cancellation journeys
+  still pass on colored and `NO_COLOR=1` wide/compact PTYs. Modified:
+  `pkg/cmd/git/fork/terminal_pty_extended_test.go`. Directed verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/git/fork -run
+  '^TestGitForkRichPTYFourWay(ArchiveJourney|FallbackJourney|OverwriteDeclineAndCancel)$'
+  -count=1` passed. Risk: Git CM and Run slices still need their logged
+  evidence and the Gate-level repository sequence. Next action: record Git CM
+  stage/commit, push, and partial-result evidence.
+
+- 2026-09-04: completed slice `Git CM stage/commit, push, and partial-result
+  Rich PTY evidence`. Added four-way colored/no-color PTY journeys for staged
+  selection plus commit and staged commit plus push, asserting phase order,
+  confirmation, exactly-once durable results, provider/API-key redaction, and
+  the committed partial boundary covered by the existing push-failure tests.
+  The push fixture stages its change and creates a disposable bare remote before
+  invoking the unchanged `Staged + Push` workflow. Modified:
+  `pkg/cmd/git/cm/{terminal_pty_extended_test.go,terminal.go,run.go,commit.go,tracking.go}`.
+  Directed verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go
+  test ./pkg/cmd/git/cm -run
+  '^TestGitCMRichPTYFourWay(StageAndCommitJourney|PushJourney)$' -count=1`
+  passed; package partial-push coverage remains in `terminal_test.go` and
+  `run_test.go`. Risk: Run selection and child handoff evidence plus the
+  Gate-level repository sequence remain. Next action: record finite Run
+  selection and Transcript replay evidence.
+
+- 2026-09-04: completed slice `Run finite selection and Transcript replay
+  evidence`. Added real-PTY four-way script/package-manager selection
+  journeys, preserving declaration and lockfile order while asserting the B
+  phase table, bounded project context, primary-screen restoration, ordered
+  replay, and control-free `NO_COLOR=1` output. Modified:
+  `pkg/cmd/run/{adapter.go,run.go,tracking.go,terminal_pty_extended_test.go}`.
+  Directed verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go
+  test ./pkg/cmd/run -run '^TestRunRichPTYFourWaySelectionAndTranscript$'
+  -count=1` passed. Risk: release-before-exec and inherited child stream,
+  cwd, signal, and exit evidence remain. Next action: record the real child
+  handoff matrix.
+
+- 2026-09-04: completed slice `Run release-before-exec and inherited-child
+  evidence`. Added a real child PTY matrix for normal, exit-7, and SIGTERM/143
+  outcomes across colored/no-color wide/compact surfaces. It asserts exact
+  argv, inherited stdin/stdout/stderr and cwd, terminal release before
+  `CHILD_START`, no parent decoration after startup, and child-owned exit
+  behavior. The Unix process adapter places an inherited terminal child in the
+  foreground while retaining an isolated process group for cancellation.
+  Modified:
+  `pkg/cmd/run/{process.go,process_unix.go,process_windows.go,adapter.go,run.go,terminal_pty_extended_test.go}`.
+  Directed verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go
+  test ./pkg/cmd/run -run
+  '^TestRunRichPTYFourWayHandoffAndChildStreams$' -count=1` passed after
+  removing temporary diagnostic scaffolding. Risk: only the declared G4
+  repository verification and manual acceptance handoff remain. Next action:
+  run repository verification in the plan's exact order.
+
+- 2026-09-04: G4 repository verification step 1 passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/git/fork ./pkg/cmd/git/cm ./pkg/cmd/run ./internal/gitprocess
+  ./internal/terminal`. Git Fork, Git CM, Run, process, and shared terminal
+  tests all passed. Risk: command-surface, full repository, standalone
+  acceptance, and diff checks remain. Next action: run `make
+  command-surface`.
+
+- 2026-09-04: G4 repository verification step 2 passed: `make
+  command-surface` completed with the root command-surface suite green. Risk:
+  the full `make check`, tagged G4 standalone acceptance, and diff check
+  remain. Next action: run `make check`.
+
+- 2026-09-04: G4 repository verification step 3 passed: `make check`
+  completed the lock/toolchain isolation checks, Web lint/typecheck/Vitest,
+  Vite asset verification, Go vet, and the full Go repository test suite.
+  The existing Vite chunk-size advisory was non-fatal. Risk: tagged G4
+  standalone acceptance and `git diff --check` remain. Next action: run the
+  declared Git Fork, Git CM, and Run standalone acceptance tests.
+
+- 2026-09-04: G4 repository verification step 4 passed: the declared tagged
+  standalone acceptance command
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  -tags=acceptance ./acceptance -run
+  '^(TestGitForkStandaloneBinary|TestGitCMStandaloneBinary|TestRunStandaloneBinary)'`
+  passed for all three binaries. Risk: only the final whitespace/diff check
+  remains before preparing manual G4 fixtures. Next action: run `git diff
+  --check`.
+
+- 2026-09-04: G4 repository verification step 5 passed: `git diff --check`
+  reported no whitespace errors. The full declared automated set is green:
+  directed Git Fork archive/fallback/overwrite PTYs, Git CM stage/commit and
+  push PTYs plus partial-push package coverage, Run selection and child
+  handoff PTYs; repository step 1; `make command-surface`; `make check`; and
+  tagged standalone Git Fork/Git CM/Run acceptance. Risk: only the required
+  human review remains. Next action: start the disposable local fixture and
+  issue one G4 acceptance handoff.
+
+- 2026-09-04: G4 manual acceptance handoff issued; explicit confirmation is
+  pending and G4 remains `active`. Acceptance entry:
+  `/Users/qigong-it-1/Workspace/hackycy-cli/.scratch/terminal-experience-modernization/g4-acceptance/README.md`.
+  The fresh CGO-free binary is
+  `/Users/qigong-it-1/Workspace/hackycy-cli/.scratch/terminal-experience-modernization/g4-acceptance/bin/ycy`.
+  The disposable fixture server is running at
+  `http://github.localhost:8765` (launchctl label `ycy-g4-fixture`, current
+  PID 2733); its GitHub-style archive and CM provider endpoints were health
+  checked, and the local CM repository/bare remote and Run child fixture were
+  reset successfully. Review the three recorded scenarios from the README:
+  Git Fork archive-first acquisition, Git CM staged commit and push (or the
+  documented committed-partial push failure), and a real `run` child handoff.
+  Execute each at `120x40` and `40x15`, using `NO_COLOR=1` for the compact
+  pass. Minimum acceptance checklist: (1) B command/status bar, safe context,
+  truthful phases, and readable forms at both sizes; (2) primary-screen
+  restoration, ordered Transcript before exactly one durable result, and no
+  credential/raw URL/absolute-path/hidden-entry leakage; (3) Git Fork archive
+  contents and destination behavior; (4) Git CM commit/push or committed
+  partial state and redacted provider data; (5) Run release-before-exec with
+  child-owned argv, cwd, stdin/stdout/stderr, and no parent decoration after
+  `RUN_CHILD_START`. Reply exactly once with `通过: <scenarios>` or
+  `未通过: <scenario and reason>`. Next action: only a new Goal carrying
+  that explicit result may resume G4; this Goal ends at this handoff.
+
+- 2026-09-05: G4 manual acceptance result received: the user replied
+  `验收通过`. The recorded Git Fork archive/fallback/overwrite scenarios,
+  Git CM staged commit/push and partial-result scenarios, and Run
+  release-before-exec child-handoff scenarios are accepted at the requested
+  wide/compact and color/no-color surfaces. Exit condition 3 is satisfied.
+  No additional implementation or verification was performed after the
+  handoff.
+
+- 2026-09-05: G4 final acceptance completed and Gate status changed to
+  `passed`. Exit condition 1 evidence: Git Fork and Git CM mutation,
+  cancellation, Result, and redaction contracts are covered by the recorded
+  four-way PTY journeys and package tests. Exit condition 2 evidence: Run
+  release-before-exec, inherited argv/stdin/stdout/stderr/cwd, normal,
+  non-zero, and SIGTERM/143 child outcomes are covered by the recorded PTY
+  matrix and process tests; no parent decoration appears after child startup.
+  Exit condition 3 evidence: the explicit user acceptance above covers all
+  recorded manual scenarios. Exit condition 4 evidence: the declared G4
+  repository sequence passed, including focused package/process tests, `make
+  command-surface`, `make check`, tagged standalone Git Fork/Git CM/Run
+  acceptance, and `git diff --check`. G4 is complete; its direct successor
+  G5 is activated below and has no implementation or verification in this
+  Goal.
 
 ### G5: Service lifecycles and detached updater
 
 - 2026-09-04: initialized as `planned`; no recovery implementation evidence.
+- 2026-09-05: 已激活，尚未开始实施。本条仅记录 G4 通过后的直接后继
+  激活；G5 不属于本次 Goal。
 
 ### G6: Release verification and full visual review
 

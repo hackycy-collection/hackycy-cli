@@ -1,6 +1,84 @@
 package cm
 
-import "context"
+import (
+	"context"
+	"errors"
+
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+)
+
+func phaseStateForCMError(ctx context.Context, err error) PhaseState {
+	if err != nil && ctx != nil && ctx.Err() != nil && errors.Is(err, ctx.Err()) {
+		return PhaseCancelled
+	}
+	return PhaseFailed
+}
+
+const (
+	cmInspectChangesPhaseID  = "inspect-changes"
+	cmStageSelectedPhaseID   = "stage-selected-files"
+	cmStageAllPhaseID        = "stage-all-changes"
+	cmCaptureEvidencePhaseID = "capture-commit-evidence"
+	cmResolveProfilePhaseID  = "resolve-provider-profile"
+	cmGenerateMessagePhaseID = "generate-commit-message"
+	cmVerifyScopePhaseID     = "verify-unchanged-scope"
+	cmCreateCommitPhaseID    = "create-commit"
+	cmPushCommitPhaseID      = "push-commit"
+)
+
+var cmPhaseDefinitions = []terminalexperience.PhaseDefinition{
+	{ID: cmInspectChangesPhaseID, Name: "Inspect changes"},
+	{ID: cmStageSelectedPhaseID, Name: "Stage selected files"},
+	{ID: cmStageAllPhaseID, Name: "Stage all changes"},
+	{ID: cmCaptureEvidencePhaseID, Name: "Capture commit evidence"},
+	{ID: cmResolveProfilePhaseID, Name: "Resolve provider profile"},
+	{ID: cmGenerateMessagePhaseID, Name: "Generate commit message"},
+	{ID: cmVerifyScopePhaseID, Name: "Verify unchanged scope"},
+	{ID: cmCreateCommitPhaseID, Name: "Create commit"},
+	{ID: cmPushCommitPhaseID, Name: "Push commit"},
+}
+
+// Git CM pauses tracking while it presents its selection and confirmation
+// forms. Each contiguous tracker segment therefore receives only its own
+// ordered slice of the catalog; passing all phases to every segment would
+// duplicate rows in the persistent Console table.
+func cmPhaseDefinitionsForSegment(segment int) []terminalexperience.PhaseDefinition {
+	var definitions []terminalexperience.PhaseDefinition
+	switch segment {
+	case 0:
+		definitions = cmPhaseDefinitions[:6]
+	case 1:
+		definitions = cmPhaseDefinitions[6:]
+	default:
+		return nil
+	}
+	return append([]terminalexperience.PhaseDefinition(nil), definitions...)
+}
+
+// cmDetailedObserver is an optional terminal projection. The module keeps
+// its typed Tracker contract for legacy callers while the command adapter can
+// expose the finer Work Phase boundaries required by the B Console.
+type cmDetailedObserver interface {
+	reportCMPhase(string, PhaseState, string)
+	reportCMMilestone(string)
+}
+
+func (module *Module) detailedObserver() cmDetailedObserver {
+	observer, _ := module.tracker.(cmDetailedObserver)
+	return observer
+}
+
+func reportCMPhase(observer cmDetailedObserver, id string, state PhaseState, detail string) {
+	if observer != nil {
+		observer.reportCMPhase(id, state, detail)
+	}
+}
+
+func reportCMMilestone(observer cmDetailedObserver, text string) {
+	if observer != nil && text != "" {
+		observer.reportCMMilestone(text)
+	}
+}
 
 // PhaseKind identifies one externally meaningful Git CM work phase.
 type PhaseKind uint8
@@ -29,6 +107,9 @@ type Phase struct {
 	State     PhaseState
 	FileCount int
 	Remote    string
+	// StageAll distinguishes the bulk staging phase for detailed terminal
+	// projections without changing the legacy PhaseKind contract.
+	StageAll bool
 }
 
 // PhaseReporter consumes the updates for one contiguous Git CM work segment.

@@ -3,6 +3,7 @@ package cm
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
 )
@@ -86,12 +87,16 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 	if err != nil {
 		return Result{}, err
 	}
+	observer := module.detailedObserver()
 	result := Result{Scope: mode.Scope}
 	if mode.PromptStage {
+		reportCMPhase(observer, cmInspectChangesPhaseID, PhaseActive, "Reading repository status")
 		plan, err := prepareStage(ctx, module.git)
 		if err != nil {
+			reportCMPhase(observer, cmInspectChangesPhaseID, phaseStateForCMError(ctx, err), "Repository inspection failed")
 			return Result{}, err
 		}
+		reportCMPhase(observer, cmInspectChangesPhaseID, PhaseCompleted, fmt.Sprintf("%d changed files available", len(plan.state.Files)))
 		result.RepositoryRoot = plan.state.Root
 		if len(plan.state.Files) == 0 {
 			result.NoChanges = true
@@ -104,6 +109,7 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 		}
 		if cancelled {
 			result.Cancelled = true
+			reportCMMilestone(observer, "File selection cancelled")
 			return result, nil
 		}
 		if len(selected) == 0 {
@@ -112,10 +118,13 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 		}
 		result, err = module.track(ctx, func(report func(Phase)) (Result, error) {
 			report(Phase{Kind: PhaseStage, State: PhaseActive, FileCount: len(selected)})
+			reportCMPhase(observer, cmStageSelectedPhaseID, PhaseActive, fmt.Sprintf("%d files selected", len(selected)))
 			if _, err := applyStagePlan(ctx, module.git, module.files, plan, selected); err != nil {
+				reportCMPhase(observer, cmStageSelectedPhaseID, phaseStateForCMError(ctx, err), "Index update failed")
 				return Result{}, err
 			}
 			report(Phase{Kind: PhaseStage, State: PhaseCompleted, FileCount: len(selected)})
+			reportCMPhase(observer, cmStageSelectedPhaseID, PhaseCompleted, fmt.Sprintf("%d files staged", len(selected)))
 			return module.generate(ctx, input, mode, result, report)
 		})
 		if err != nil {
@@ -125,12 +134,19 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 		result, err = module.track(ctx, func(report func(Phase)) (Result, error) {
 			if mode.StageAll {
 				report(Phase{Kind: PhaseStage, State: PhaseActive})
+				reportCMPhase(observer, cmInspectChangesPhaseID, PhaseActive, "Reading repository status")
+				// The catalog permits only one active Work Phase. Finish the
+				// inspection boundary before entering the stage-all mutation.
+				reportCMPhase(observer, cmInspectChangesPhaseID, PhaseCompleted, "Repository status read")
+				reportCMPhase(observer, cmStageAllPhaseID, PhaseActive, "Running git add -A")
 				root, err := StageAllChanges(ctx, module.git)
 				if err != nil {
+					reportCMPhase(observer, cmStageAllPhaseID, phaseStateForCMError(ctx, err), "Index update failed")
 					return Result{}, err
 				}
 				result.RepositoryRoot = root
 				report(Phase{Kind: PhaseStage, State: PhaseCompleted})
+				reportCMPhase(observer, cmStageAllPhaseID, PhaseCompleted, "All changes staged")
 			}
 			return module.generate(ctx, input, mode, result, report)
 		})
@@ -153,40 +169,62 @@ func (module *Module) Run(ctx context.Context, input Input) (Result, error) {
 	}
 	if cancelled || !confirmed {
 		result.Cancelled = true
+		if cancelled {
+			reportCMMilestone(observer, "Commit creation cancelled")
+		} else {
+			reportCMMilestone(observer, "Commit creation declined")
+		}
 		return result, nil
 	}
 	return module.track(ctx, func(report func(Phase)) (Result, error) {
-		report(Phase{Kind: PhaseCommit, State: PhaseActive})
-		if err := CommitSnapshot(ctx, module.git, module.files, CommitRequest{
+		reportCMPhase(observer, cmVerifyScopePhaseID, PhaseActive, "Checking unchanged commit scope")
+		request := CommitRequest{
 			RepositoryRoot: result.RepositoryRoot,
 			Scope:          result.Scope,
 			SnapshotID:     generated.SnapshotID,
 			Message:        generated.Message,
-		}); err != nil {
+		}
+		if err := AssertSnapshotCurrent(ctx, module.git, module.files, request.Scope, request.SnapshotID); err != nil {
+			reportCMPhase(observer, cmVerifyScopePhaseID, phaseStateForCMError(ctx, err), "Commit scope changed or could not be checked")
+			return result, err
+		}
+		reportCMPhase(observer, cmVerifyScopePhaseID, PhaseCompleted, "Commit scope unchanged")
+		report(Phase{Kind: PhaseCommit, State: PhaseActive})
+		reportCMPhase(observer, cmCreateCommitPhaseID, PhaseActive, "Creating commit")
+		if err := commitSnapshotMutation(ctx, module.git, request); err != nil {
+			reportCMPhase(observer, cmCreateCommitPhaseID, phaseStateForCMError(ctx, err), "Commit creation failed")
 			return result, err
 		}
 		result.Committed = true
 		report(Phase{Kind: PhaseCommit, State: PhaseCompleted})
+		reportCMPhase(observer, cmCreateCommitPhaseID, PhaseCompleted, "Commit created")
 		if !mode.Push {
 			return result, nil
 		}
 		report(Phase{Kind: PhasePush, State: PhaseActive, Remote: mode.PushRemote})
+		reportCMPhase(observer, cmPushCommitPhaseID, PhaseActive, "Remote: "+safeCMRemote(mode.PushRemote))
 		if err := PushCommit(ctx, module.git, result.RepositoryRoot, mode.PushRemote); err != nil {
+			reportCMPhase(observer, cmPushCommitPhaseID, phaseStateForCMError(ctx, err), "Push failed")
 			return result, err
 		}
 		result.Pushed = true
 		result.PushRemote = mode.PushRemote
 		report(Phase{Kind: PhasePush, State: PhaseCompleted, Remote: mode.PushRemote})
+		reportCMPhase(observer, cmPushCommitPhaseID, PhaseCompleted, "Commit pushed")
 		return result, nil
 	})
 }
 
 func (module *Module) generate(ctx context.Context, input Input, mode executionMode, result Result, report func(Phase)) (Result, error) {
 	report(Phase{Kind: PhaseCollect, State: PhaseActive})
+	observer := module.detailedObserver()
+	reportCMPhase(observer, cmCaptureEvidencePhaseID, PhaseActive, "Capturing Git scope and evidence")
 	snapshot, err := CaptureSnapshot(ctx, module.git, module.files, mode.Scope)
 	if err != nil {
+		reportCMPhase(observer, cmCaptureEvidencePhaseID, phaseStateForCMError(ctx, err), "Git evidence capture failed")
 		return Result{}, err
 	}
+	reportCMPhase(observer, cmCaptureEvidencePhaseID, PhaseCompleted, fmt.Sprintf("%d changed files captured", len(snapshot.Files)))
 	result.RepositoryRoot = snapshot.RepositoryRoot
 	if len(snapshot.Files) == 0 {
 		report(Phase{Kind: PhaseCollect, State: PhaseCompleted})
@@ -195,13 +233,16 @@ func (module *Module) generate(ctx context.Context, input Input, mode executionM
 		return result, nil
 	}
 	report(Phase{Kind: PhaseCollect, State: PhaseCompleted, FileCount: len(snapshot.Files)})
+	reportCMPhase(observer, cmResolveProfilePhaseID, PhaseActive, "Resolving provider profile")
 	profile, err := module.resolver.ResolveCMProfile(appconfig.CMResolveOptions{
 		ProfileName:       input.Profile,
 		TimeoutOverrideMS: input.TimeoutMS,
 	})
 	if err != nil {
+		reportCMPhase(observer, cmResolveProfilePhaseID, phaseStateForCMError(ctx, err), "Provider profile unavailable")
 		return Result{}, err
 	}
+	reportCMPhase(observer, cmResolveProfilePhaseID, PhaseCompleted, "Provider profile resolved")
 	language, err := normalizeLanguage(input.Language)
 	if err != nil {
 		return Result{}, err
@@ -209,19 +250,23 @@ func (module *Module) generate(ctx context.Context, input Input, mode executionM
 	result.Profile = profileDiagnostic(profile)
 	model, err := NewOpenAICompatibleModel(profile, module.transport)
 	if err != nil {
+		reportCMPhase(observer, cmResolveProfilePhaseID, phaseStateForCMError(ctx, err), "Provider profile unavailable")
 		return Result{}, err
 	}
 	report(Phase{Kind: PhaseGenerate, State: PhaseActive, FileCount: len(snapshot.Files)})
+	reportCMPhase(observer, cmGenerateMessagePhaseID, PhaseActive, fmt.Sprintf("Generating from %d files", len(snapshot.Files)))
 	generated, err := GenerateCommitMessage(ctx, model, GenerationInput{
 		Snapshot:    snapshot,
 		Language:    language,
 		IncludeBody: input.Body,
 	})
 	if err != nil {
+		reportCMPhase(observer, cmGenerateMessagePhaseID, phaseStateForCMError(ctx, err), "Commit message generation failed")
 		return result, err
 	}
 	result.Generated = &generated
 	report(Phase{Kind: PhaseGenerate, State: PhaseCompleted, FileCount: len(snapshot.Files)})
+	reportCMPhase(observer, cmGenerateMessagePhaseID, PhaseCompleted, "Commit message generated")
 	return result, nil
 }
 

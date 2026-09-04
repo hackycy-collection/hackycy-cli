@@ -141,6 +141,42 @@ func TestRunPlainSelectionReleasesFormBeforeRawChildIO(t *testing.T) {
 	assertRunProcessFile(t, workingDirectoryPath, resolvedProject+"\n")
 }
 
+func TestRunPlainCancellationWritesOneCancellationResultBeforeClosing(t *testing.T) {
+	root := t.TempDir()
+	project := filepath.Join(root, "project")
+	writeStandaloneRunFile(t, project, "package.json", `{"scripts":{"check":"echo check"}}`)
+	withRunWorkingDirectory(t, project)
+	input := strings.NewReader("\n")
+	stdout, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        input,
+		Output:       stdout,
+		Diagnostics:  diagnostics,
+	})
+	started := false
+	err := runRun(&Options{
+		Context:          context.Background(),
+		WorkingDirectory: os.Getwd,
+		Terminal:         experience,
+		Reader:           osRunFileReader{},
+		Exists:           osRunPathExists,
+		Runner: runChildRunnerFunc(func(context.Context, ChildRequest) (Result, error) {
+			started = true
+			return Result{}, nil
+		}),
+	})
+	if err != nil || started {
+		t.Fatalf("runRun() = (%v, started=%t)", err, started)
+	}
+	if got, want := stdout.String(), "Operation cancelled.\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if terminaltest.ContainsTerminalControl(append(stdout.Bytes(), diagnostics.Bytes()...)) {
+		t.Fatalf("Plain cancellation emitted terminal control: (%q, %q)", stdout.String(), diagnostics.String())
+	}
+}
+
 func TestReleasedRunChildRunnerReleasesBeforeStartingChild(t *testing.T) {
 	steps := []string{}
 	runner := releasedRunChildRunner{

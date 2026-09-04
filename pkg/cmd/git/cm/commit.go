@@ -26,6 +26,14 @@ func CommitSnapshot(ctx context.Context, runner GitRunner, fileSystem SnapshotFi
 	if err := AssertSnapshotCurrent(ctx, runner, fileSystem, request.Scope, request.SnapshotID); err != nil {
 		return err
 	}
+	return commitSnapshotMutation(ctx, runner, request)
+}
+
+// commitSnapshotMutation performs only the Git commit after the caller has
+// completed the immutable-scope check. It is kept private so the command
+// adapter can expose truthful verify/create phase boundaries without changing
+// the public CommitSnapshot contract.
+func commitSnapshotMutation(ctx context.Context, runner GitRunner, request CommitRequest) error {
 	return runGitMutation(ctx, runner, commitArguments(request.RepositoryRoot, request.Message), nil, "git commit failed")
 }
 

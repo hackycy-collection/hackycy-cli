@@ -26,11 +26,31 @@ type DirectoryRemover interface {
 
 // CloneFallback performs the legacy shallow-clone fallback and removes its Git metadata.
 func CloneFallback(ctx context.Context, runner CloneRunner, remover DirectoryRemover, repository Repository, destination string) error {
+	return cloneFallbackWithProgress(ctx, runner, remover, repository, destination, nil)
+}
+
+type cloneFallbackStage uint8
+
+const (
+	cloneFallbackStarted cloneFallbackStage = iota
+	cloneFallbackCompleted
+	cloneFallbackFailed
+	cloneMetadataRemovalStarted
+	cloneMetadataRemovalCompleted
+	cloneMetadataRemovalFailed
+)
+
+// cloneFallbackWithProgress keeps the public legacy helper intact while
+// exposing the two real mutation boundaries to the terminal adapter.
+func cloneFallbackWithProgress(ctx context.Context, runner CloneRunner, remover DirectoryRemover, repository Repository, destination string, progress func(cloneFallbackStage, error)) error {
 	if runner == nil {
 		return errors.New("git fork clone runner is required")
 	}
 	if remover == nil {
 		return errors.New("git fork clone metadata remover is required")
+	}
+	if progress != nil {
+		progress(cloneFallbackStarted, nil)
 	}
 	arguments := []string{"clone", "--depth=1", "--single-branch"}
 	if repository.Ref != "" {
@@ -39,6 +59,9 @@ func CloneFallback(ctx context.Context, runner CloneRunner, remover DirectoryRem
 	arguments = append(arguments, CloneURL(repository), destination)
 	output, err := runner.Run(ctx, arguments)
 	if err != nil {
+		if progress != nil {
+			progress(cloneFallbackFailed, err)
+		}
 		return err
 	}
 	if output.ExitCode != 0 {
@@ -46,7 +69,23 @@ func CloneFallback(ctx context.Context, runner CloneRunner, remover DirectoryRem
 		if message == "" {
 			message = fmt.Sprintf("git clone failed with exit code %d", output.ExitCode)
 		}
-		return errors.New(message)
+		err = errors.New(message)
+		if progress != nil {
+			progress(cloneFallbackFailed, err)
+		}
+		return err
 	}
-	return remover.RemoveAll(filepath.Join(destination, ".git"))
+	if progress != nil {
+		progress(cloneFallbackCompleted, nil)
+		progress(cloneMetadataRemovalStarted, nil)
+	}
+	err = remover.RemoveAll(filepath.Join(destination, ".git"))
+	if progress != nil {
+		if err != nil {
+			progress(cloneMetadataRemovalFailed, err)
+		} else {
+			progress(cloneMetadataRemovalCompleted, nil)
+		}
+	}
+	return err
 }

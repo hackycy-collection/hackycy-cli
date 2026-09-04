@@ -246,6 +246,9 @@ func TestGitForkHandlerUsesEncryptedConfigAndALocalProviderArchive(t *testing.T)
 		t.Fatalf("archive mode = (%v, %v), want no executable bit", info, err)
 	}
 	text := output.String()
+	if !strings.Contains(text, "Done! Project created at "+destination) {
+		t.Fatalf("Plain result lost the requested destination: %q", text)
+	}
 	for _, expected := range []string{"Resolved:", "Branch: main", "Archive downloaded and extracted", "Done! Project created at"} {
 		if !strings.Contains(text, expected) {
 			t.Fatalf("output does not contain %q:\n%s", expected, text)

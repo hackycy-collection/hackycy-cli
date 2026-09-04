@@ -1,6 +1,57 @@
 package fork
 
-import "context"
+import (
+	"context"
+
+	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
+)
+
+const (
+	forkResolveRepositoryPhaseID    = "resolve-repository"
+	forkInspectDestinationPhaseID   = "inspect-destination"
+	forkReplaceDestinationPhaseID   = "replace-destination"
+	forkResolveDefaultBranchPhaseID = "resolve-default-branch"
+	forkDownloadArchivePhaseID      = "download-archive"
+	forkExtractArchivePhaseID       = "extract-archive"
+	forkCloneFallbackPhaseID        = "clone-fallback"
+	forkRemoveGitMetadataPhaseID    = "remove-git-metadata"
+)
+
+var forkPhaseDefinitions = []terminalexperience.PhaseDefinition{
+	{ID: forkResolveRepositoryPhaseID, Name: "Resolve repository"},
+	{ID: forkInspectDestinationPhaseID, Name: "Inspect destination"},
+	{ID: forkReplaceDestinationPhaseID, Name: "Replace destination"},
+	{ID: forkResolveDefaultBranchPhaseID, Name: "Resolve default branch"},
+	{ID: forkDownloadArchivePhaseID, Name: "Download archive"},
+	{ID: forkExtractArchivePhaseID, Name: "Extract archive"},
+	{ID: forkCloneFallbackPhaseID, Name: "Clone fallback"},
+	{ID: forkRemoveGitMetadataPhaseID, Name: "Remove Git metadata"},
+}
+
+// forkDetailedObserver is implemented only by the terminal adapter. Keeping
+// it optional lets the command module retain its frozen typed Tracker contract
+// for callers that do not need a terminal projection.
+type forkDetailedObserver interface {
+	reportForkPhase(string, PhaseState, string)
+	reportForkMilestone(string)
+}
+
+func (module *Module) detailedObserver() forkDetailedObserver {
+	observer, _ := module.tracker.(forkDetailedObserver)
+	return observer
+}
+
+func reportForkPhase(observer forkDetailedObserver, id string, state PhaseState, detail string) {
+	if observer != nil {
+		observer.reportForkPhase(id, state, detail)
+	}
+}
+
+func reportForkMilestone(observer forkDetailedObserver, text string) {
+	if observer != nil && text != "" {
+		observer.reportForkMilestone(text)
+	}
+}
 
 // PhaseKind identifies one externally meaningful Git Fork acquisition phase.
 type PhaseKind uint8
