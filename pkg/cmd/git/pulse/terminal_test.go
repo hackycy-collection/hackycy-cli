@@ -15,6 +15,30 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
 
+func TestGitPulseConsoleDescriptorUsesSafeBoundedContext(t *testing.T) {
+	days := 7
+	got := terminalPulseConsoleDescriptor(&Options{Directory: "/private/workspace", Days: &days})
+	want := terminalexperience.ConsoleDescriptor{
+		Command: "YCY / git pulse",
+		Target:  "workspace commit activity",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "scope", Value: "workspace Git history"},
+			{Label: "directory", Value: "workspace"},
+			{Label: "range", Value: "7 days"},
+		},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Console descriptor = %#v, want %#v", got, want)
+	}
+	unsafe := terminalPulseConsoleDescriptor(&Options{Directory: "bad\x1b[31m\npath"})
+	for _, field := range []string{unsafe.Command, unsafe.Target, unsafe.Status, unsafe.Metadata[0].Label, unsafe.Metadata[0].Value, unsafe.Metadata[1].Label, unsafe.Metadata[1].Value, unsafe.Metadata[2].Label, unsafe.Metadata[2].Value} {
+		if strings.ContainsAny(field, "\r\n\t\x1b") {
+			t.Fatalf("unsafe descriptor field contains terminal control: %q", field)
+		}
+	}
+}
+
 func TestTerminalPulseAdapterTranslatesFormsPhasesAndPresentation(t *testing.T) {
 	experience := terminaltest.NewRecordingExperience(
 		terminaltest.SemanticAnswer{Value: terminalexperience.InteractionAnswer{Value: "7"}},

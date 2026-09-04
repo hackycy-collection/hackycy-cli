@@ -1,0 +1,5 @@
+2026-09-04T07:38:06.585Z INFO diff: ●  Directory diff started {"localURL":"http://127.0.0.1:61189","port":61189,"public":false}
+2026-09-04T07:38:06.585Z INFO diff: ●  Diff endpoints available {"mcpURL":"http://127.0.0.1:61189/mcp","networkURLs":[]}
+2026-09-04T07:38:06.585Z INFO diff: ●  Comparison workspace configured {"baselineDirectory":"/Users/qigong-it-1/Workspace/hackycy-cli/.scratch/terminal-experience-modernization/g2-acceptance/diff/baseline","targetDirectory":"/Users/qigong-it-1/Workspace/hackycy-cli/.scratch/terminal-experience-modernization/g2-acceptance/diff/target"}
+2026-09-04T07:38:06.585Z INFO diff: ●  Initial comparison refresh started {"refresh":1,"source":"initial"}
+2026-09-04T07:38:06.586Z INFO diff: ✓  Comparison snapshot ready {"added":0,"comparedBytes":0,"comparedEntries":1,"deleted":0,"discoveredEntries":2,"durationMs":1,"issues":0,"modified":1,"refresh":1,"snapshotID":"e4b77f92-7314-427d-b806-0a030b361370","source":"initial","totalBytes":0,"totalEntries":1,"unchanged":0}

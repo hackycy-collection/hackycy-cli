@@ -71,8 +71,8 @@
 | --- | --- | --- | --- | --- |
 | G0: Production B Ops Console foundation | passed | none | `implementation-plan.md` -> `G0: Production B Ops Console foundation` | exit conditions 1-5 verified 2026-09-04 |
 | G1: Root and low-risk finite recovery | passed | G0 | `implementation-plan.md` -> `G1: Root and low-risk finite recovery` | exit conditions 1-4 verified 2026-09-04 |
-| G2: External-read and service-boundary recovery | active | G1 | `implementation-plan.md` -> `G2: External-read and service-boundary recovery` | G1 passed 2026-09-04 |
-| G3: Mutation and archive recovery | planned | G2 | `implementation-plan.md` -> `G3: Mutation and archive recovery` | G2 pending |
+| G2: External-read and service-boundary recovery | passed | G1 | `implementation-plan.md` -> `G2: External-read and service-boundary recovery` | exit conditions 1-4 and manual acceptance verified 2026-09-04 |
+| G3: Mutation and archive recovery | active | G2 | `implementation-plan.md` -> `G3: Mutation and archive recovery` | G2 passed 2026-09-04 |
 | G4: Git mutation and process handoff | planned | G3 | `implementation-plan.md` -> `G4: Git mutation and process handoff` | G3 pending |
 | G5: Service lifecycles and detached updater | planned | G4 | `implementation-plan.md` -> `G5: Service lifecycles and detached updater` | G4 pending |
 | G6: Release verification and full visual review | planned | G5 | `implementation-plan.md` -> `G6: Release verification and full visual review` | G5 pending |
@@ -444,10 +444,220 @@
 
 - 2026-09-04: initialized as `planned`; no recovery implementation evidence.
 - 2026-09-04: 已激活，尚未开始实施。
+- 2026-09-04: completed slice `export env descriptor/context`. The finite
+  adapter now opens the frozen Console seam before discovery or interaction,
+  with `YCY / export env`, target `environment JSON`, and bounded directory
+  plus merge metadata. Dotenv selection, parsing, file ordering, output bytes,
+  and Automation behavior remain unchanged. Modified:
+  `pkg/cmd/export/env/{terminal.go,terminal_test.go}`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/export/env` passed. Risk: fresh Rich PTY evidence and the other
+  finite adapters remain pending. Next action: add only the `config cm test`
+  descriptor/context slice.
+
+- 2026-09-04: completed slice `config cm test descriptor/context`. The
+  connection check now opens the frozen Console seam before store resolution,
+  with `YCY / config cm test`, target `provider connection`, static
+  non-mutating scope, and an optional bounded requested-profile projection.
+  Resolver ordering, provider request/timeout semantics, redaction, result
+  documents, and exit behavior are unchanged. Modified:
+  `pkg/cmd/config/cm/test/{terminal.go,terminal_test.go}`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/config/cm/test` passed. Risk: fresh Rich PTY evidence and the
+  Git Pulse/Upgrade adapter contexts remain pending. Next action: add only the
+  `git pulse` descriptor/context slice.
+
+- 2026-09-04: completed slice `git pulse descriptor/context`. The finite Git
+  activity adapter now opens the frozen Console seam before workspace
+  discovery, with `YCY / git pulse`, a workspace-activity target, static
+  history scope, bounded directory projection, and explicit/interactive date
+  mode. Repository discovery, Git concurrency, date/author filtering, report
+  bytes, and signal behavior remain unchanged. Modified:
+  `pkg/cmd/git/pulse/{terminal.go,terminal_test.go}`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/git/pulse` passed. Risk: fresh wide/compact PTY evidence and the
+  parent Upgrade descriptor remain pending. Next action: add only the parent
+  `upgrade` descriptor/context slice.
+
+- 2026-09-04: completed slice `upgrade descriptor/context`. The parent
+  updater now opens the frozen Console seam before release resolution, with
+  `YCY / upgrade`, a release-update target, detached-updater scope, and a
+  bounded current-version field. Release, candidate, transaction, detached
+  spawn, startup-state, and stdout semantics remain unchanged. Modified:
+  `pkg/cmd/upgrade/{command.go,terminal_test.go}`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/upgrade` passed. Risk: command-specific PTY/stream evidence and
+  service exclusion evidence remain pending. Next action: add only fresh
+  `export env` Rich PTY and stream evidence.
+
+- 2026-09-04: completed slice `export env` Rich PTY and stream evidence. Added
+  a four-way colored/`NO_COLOR` PTY journey at `120x40` and `40x15`, covering
+  the bounded B bar/metadata, phase table, compact degradation, primary-screen
+  restoration, ordered redacted Transcript, and unchanged JSON Result. The
+  journey exposed a Rich operation-lock re-entry when the command published
+  its selection or variable-count milestone while a phase Track was active;
+  the adapter now closes the discovery Track before the selection milestone
+  and defers the variable-count milestone until the output Track closes.
+  This is presentation synchronization only; dotenv selection, parsing,
+  merge/order, output bytes, and Automation behavior remain unchanged.
+  Modified: `pkg/cmd/export/env/{terminal.go,terminal_pty_test.go}`.
+  Verification: the four PTY cases and full
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/export/env` package suite passed. Risk: the other three finite
+  adapters still need fresh wide/compact PTY evidence, and diff/FS Lifecycle
+  Log regressions remain pending. Next action: add only `config cm test`
+  Rich PTY and stream evidence.
+
+- 2026-09-04: completed slice `config cm test` Rich PTY and stream evidence.
+  Expanded the provider-check journey to colored/`NO_COLOR` `120x40` and
+  `40x15` PTYs with synchronized sizing. Evidence covers the frozen Console
+  descriptor, complete wide provider scope, bounded compact projection, both
+  real phases and B table headings, primary-screen restoration, redacted
+  Transcript-before-result ordering, unchanged response/usage Result, and
+  no-color control suppression. Existing Plain, Automation, redirected, error,
+  cancellation, and redaction tests remain green. Modified:
+  `pkg/cmd/config/cm/test/terminal_pty_test.go`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/config/cm/test` passed. Risk: `git pulse` and `upgrade` still
+  need fresh wide/compact PTY evidence; diff/FS Lifecycle Log regressions
+  remain pending. Next action: add only `git pulse` Rich PTY and stream
+  evidence.
+
+- 2026-09-04: completed slice `git pulse` Rich PTY and stream evidence.
+  Expanded the existing journey to colored/`NO_COLOR` `120x40` and `40x15`
+  PTYs with synchronized sizing and actual-width Rich report projection.
+  Evidence covers the descriptor/bar, all four workspace phases, B table
+  headings, compact target degradation, primary-screen restoration, ordered
+  redacted Transcript, complete narrow/wide commit report, and color-control
+  behavior. Existing date/author cancellation, Automation boundary, Plain
+  stderr/stdout split, partial-fetch warnings, redaction, and one-result tests
+  remain green. Modified: `pkg/cmd/git/pulse/terminal_pty_test.go`.
+  Verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  -count=1 ./pkg/cmd/git/pulse` passed. Risk: `upgrade` still needs fresh
+  wide/compact PTY evidence; diff/FS Lifecycle Log regressions remain pending.
+  Next action: add only `upgrade` Rich PTY and stream evidence.
+
+- 2026-09-04: completed slice `upgrade` Rich PTY and stream evidence. Expanded
+  the parent updater journey to colored/`NO_COLOR` `120x40` and `40x15` PTYs,
+  covering the bounded B descriptor/bar, phase table, compact height
+  degradation, primary-screen restoration, redacted ordered Transcript, and
+  unchanged scheduled-update Result. The live viewport assertions use stable
+  phase prefixes where the renderer legitimately truncates a wide column, and
+  require the final `Complete` phase only when it is visible in the wide
+  viewport; the Transcript retains full phase names in every case. Modified:
+  `pkg/cmd/upgrade/terminal_pty_test.go`. Verification: targeted four-way PTY
+  test and full
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/upgrade` passed. Risk: only the independent diff/FS Lifecycle Log
+  regression slices and final repository checks remain. Next action: add and
+  verify only the `diff` no-Console service boundary slice.
+
+- 2026-09-04: completed slice `diff` no-Console service boundary regression.
+  Added a Rich-capability adapter test proving the existing line-oriented
+  startup result remains outside AltScreen; the service still does not create
+  a Console or Interaction Transcript. Existing lifecycle evidence covers
+  ordered startup, initial and subsequent Refresh records, phase de-duplication,
+  cancellation/failure, shutdown ownership, redaction/bounds, text symbols,
+  configured levels, NDJSON envelope, request silence, and concurrent
+  exactly-once terminal records. Modified:
+  `pkg/cmd/diff/terminal_test.go`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/diff` passed (including the focused lifecycle/no-Console run).
+  Risk: the independent FS no-Console regression slice remains. Next action:
+  add and verify only the `fs` no-Console service boundary slice.
+
+- 2026-09-04: completed slice `fs` no-Console service boundary regression.
+  Added a Rich-capability adapter test proving the existing startup and
+  stopped Result Checkpoints remain line-oriented and outside AltScreen; no
+  Console or Interaction Transcript is introduced. Existing FS lifecycle
+  evidence covers ordered startup/capability/authentication records, public
+  warning, Managed Task acceptance/start/terminal/retry/expiry behavior,
+  bounded redaction, text symbols and levels, NDJSON schema, startup/task
+  ordering, shutdown folding/counts, serve/release/checkpoint failures, and
+  request/progress silence. Modified: `pkg/cmd/fs/terminal_test.go`.
+  Verification: focused lifecycle/no-Console run and full
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 ./pkg/cmd/fs`
+  passed. Risk: none within the service exclusion slice; the declared G2
+  repository verification and manual acceptance remain. Next action: run
+  repository verification in the plan's exact order.
+
+- 2026-09-04: repository verification step 1 passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./pkg/cmd/export/env
+  ./pkg/cmd/config/cm/test ./pkg/cmd/git/pulse ./pkg/cmd/upgrade
+  ./pkg/cmd/diff ./pkg/cmd/fs ./internal/terminal`.
+  Repository verification step 2 initially stopped at the Go format check for
+  the new FS test; `gofmt` corrected the touched terminal tests, and the full
+  `make check` rerun passed, including command-surface prerequisites, all Go
+  packages, architecture checks, Web lint/type/test/build, and asset
+  verification. Modified by the formatting repair:
+  `pkg/cmd/{diff,fs}/terminal_test.go` and
+  `pkg/cmd/upgrade/terminal_pty_test.go`. Risk: tagged standalone acceptance
+  and final diff hygiene remain. Next action: run the declared acceptance
+  subset.
+
+- 2026-09-04: repository verification step 3 passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 -tags=acceptance
+  ./acceptance -run '^(TestExportEnvStandaloneBinary|TestConfigCMTestStandaloneBinary|TestGitPulseStandaloneBinary|TestDiffStandaloneBinary|TestFSStandaloneBinary)'`.
+  Repository verification step 4 passed: `git diff --check` reported no
+  whitespace errors. Automated G2 evidence is complete across all four finite
+  B journeys and both service Lifecycle Log exclusions. Risk: manual visual
+  acceptance is the only remaining Gate condition. Next action: build and
+  launch the isolated G2 acceptance entry, then hand off once.
+
+- 2026-09-04: manual acceptance handoff for `G2` recorded. Automated Exit
+  conditions 1, 2, and 4 are complete; no manual result has been asserted.
+  Acceptance entry: local binary
+  `.scratch/terminal-experience-modernization/g2-acceptance/ycy` (`--version`
+  reports `1.0.0`) with isolated fixture
+  `.scratch/terminal-experience-modernization/g2-acceptance/`. The loopback
+  Diff service is ready at `http://127.0.0.1:61189` in detached screen
+  session `21729.g2-diff-clean`; the loopback FS service is ready at
+  `http://127.0.0.1:61190` in detached screen session `21726.g2-fs-clean`.
+  Their durable stdout and Lifecycle Log captures are
+  `.scratch/terminal-experience-modernization/g2-acceptance/{diff,fs}.{stdout,stderr}`.
+  The fixture contains dotenv selection files, a CM failure-safe local
+  profile, one committed Git Pulse repository, Diff baseline/target trees,
+  and an FS browse root.
+
+  Automated evidence supplied for review: the four finite adapters have
+  colored and `NO_COLOR` `120x40`/`40x15` Rich PTY journeys with B
+  descriptor/phase/Transcript/Result and stream/redaction assertions;
+  Diff and FS have Lifecycle Log text/NDJSON, startup/task-or-refresh,
+  failure/shutdown, ordering, bounds, request-silence, and no-AltScreen
+  regressions; the declared package suite, `make command-surface`, rerun
+  `make check`, tagged standalone acceptance subset, and `git diff --check`
+  all passed. Minimal manual checklist: (1) inspect `export env`, `config cm
+  test`, `git pulse`, and `upgrade` in a real PTY at colored `120x40` and
+  `NO_COLOR=1` `40x15`, confirming the B bar/metadata/phase hierarchy,
+  compact degradation, Transcript-before-Result ordering, and no secret
+  leakage; cancel `upgrade` before any update is scheduled; (2) inspect one
+  text Diff session and one text FS session from the running entry, confirming
+  one-line bounded records and final stopping/stopped order; (3) run each
+  service once with `--log-format=json` and confirm the stable NDJSON envelope,
+  no ANSI/AltScreen controls, and unchanged HTTP/stdout behavior. Expected
+  explicit reply format: `通过: <scenarios>` or `未通过: <scenario and reason>`.
+  Next action: this Goal ends at the handoff; only a new Goal carrying an
+  explicit acceptance result may continue G2 or change its state. G2 remains
+  `active`; no successor Gate is activated.
+
+- 2026-09-04: explicit manual acceptance result received: `验收通过`.
+  This accepts every scenario in the recorded checklist: colored `120x40` and
+  `NO_COLOR=1` `40x15` PTYs for `export env`, `config cm test`, `git pulse`,
+  and `upgrade` (including the pre-schedule cancellation); one bounded text
+  session and one NDJSON session for both `diff` and `fs`; and unchanged
+  stream, HTTP, redaction, Transcript/Result, and no-AltScreen behavior.
+  Manual Exit condition 3 therefore passed. Together with the recorded
+  automated evidence, Exit conditions 1-4 are all satisfied. Final evidence:
+  the declared package suite, `make command-surface`, rerun `make check`, the
+  tagged standalone acceptance subset, and `git diff --check` all passed.
+  G2 is marked `passed`. Direct successor G3 is marked `active` and recorded
+  as `已激活，尚未开始实施`; no G3 reading, analysis, implementation, or
+  verification was performed in this Goal.
 
 ### G3: Mutation and archive recovery
 
 - 2026-09-04: initialized as `planned`; no recovery implementation evidence.
+- 2026-09-04: 已激活，尚未开始实施。
 
 ### G4: Git mutation and process handoff
 

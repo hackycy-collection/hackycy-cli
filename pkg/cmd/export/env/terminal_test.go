@@ -55,6 +55,35 @@ func TestTerminalExportEnvAdapterTranslatesSelectionAndPresentation(t *testing.T
 	}
 }
 
+func TestExportEnvConsoleDescriptorProvidesBoundedSafeContext(t *testing.T) {
+	options := &Options{Directory: " ./workspace ", Merge: true}
+	want := terminalexperience.ConsoleDescriptor{
+		Command: "YCY / export env",
+		Target:  "environment JSON",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "directory", Value: "./workspace"},
+			{Label: "merge base .env", Value: "on"},
+		},
+	}
+	if got := terminalExportEnvConsoleDescriptor(options); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Console descriptor = %#v, want %#v", got, want)
+	}
+
+	unsafe := terminalExportEnvConsoleDescriptor(&Options{Directory: "secret\x1b[31m\nvalue"})
+	for _, field := range append([]string{unsafe.Command, unsafe.Target, unsafe.Status}, func() []string {
+		values := make([]string, 0, len(unsafe.Metadata)*2)
+		for _, metadata := range unsafe.Metadata {
+			values = append(values, metadata.Label, metadata.Value)
+		}
+		return values
+	}()...) {
+		if strings.ContainsAny(field, "\r\n\t\x1b") {
+			t.Fatalf("unsafe descriptor field contains terminal control: %q", field)
+		}
+	}
+}
+
 func TestTerminalExportEnvAdapterRoutesPlainSelectionValidationAndCancellation(t *testing.T) {
 	choices := []EnvironmentChoice{
 		{Value: ".env.local", Label: "local"},

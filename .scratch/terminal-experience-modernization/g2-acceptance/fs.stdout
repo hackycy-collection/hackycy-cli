@@ -1,0 +1,8 @@
+File Browser
+Local: http://127.0.0.1:61190
+Directory: /Users/qigong-it-1/Workspace/hackycy-cli/.scratch/terminal-experience-modernization/g2-acceptance/fs
+Bind: 127.0.0.1:61190
+Management: false
+Chunked uploads: false
+HTML execution: true
+Authentication: false

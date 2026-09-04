@@ -14,6 +14,7 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/gitprocess"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/internal/terminaltest"
+	"golang.org/x/term"
 )
 
 func TestRunPulseRichPTYRestoresPrimaryScreenAndReplaysFourPhaseTranscript(t *testing.T) {
@@ -24,21 +25,25 @@ func TestRunPulseRichPTYRestoresPrimaryScreenAndReplaysFourPhaseTranscript(t *te
 	}
 
 	for _, testCase := range []struct {
-		name  string
-		extra string
-		color bool
+		name          string
+		width, height uint16
+		color         bool
 	}{
-		{name: "color", color: true},
-		{name: "no color", extra: "NO_COLOR=1", color: false},
+		{name: "wide color", width: 120, height: 40, color: true},
+		{name: "wide no color", width: 120, height: 40, color: false},
+		{name: "compact color", width: 40, height: 15, color: true},
+		{name: "compact no color", width: 40, height: 15, color: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			command := exec.Command(os.Args[0], "-test.run=^TestRunPulseRichPTYRestoresPrimaryScreenAndReplaysFourPhaseTranscript$")
-			command.Env = append(pulsePTYEnvironment(), helperEnvironment+"=1", "TERM=xterm-256color")
-			if testCase.extra != "" {
-				command.Env = append(command.Env, testCase.extra)
-			}
-			output := runPulsePTYProcess(t, command)
-			assertPulseRichPTYOutput(t, output, testCase.color)
+			command.Env = pulsePTYEnvironmentWith(map[string]string{
+				"NO_COLOR":                map[bool]string{true: "", false: "1"}[testCase.color],
+				"TERM":                    "xterm-256color",
+				helperEnvironment:         "1",
+				"YCY_GIT_PULSE_PTY_START": "1",
+			})
+			output := runPulsePTYProcess(t, command, testCase.width, testCase.height)
+			assertPulseRichPTYOutput(t, output, testCase.color, testCase.width >= 70)
 		})
 	}
 }
@@ -47,6 +52,16 @@ func runPulseRichPTYHelper(t *testing.T) {
 	t.Helper()
 	workspace := t.TempDir()
 	initializeStandalonePulseRepository(t, workspace, "Ada", "ada@example.test", "safe commit")
+	if os.Getenv("YCY_GIT_PULSE_PTY_START") == "1" {
+		var start [2]byte
+		if _, err := io.ReadFull(os.Stdin, start[:]); err != nil {
+			t.Fatalf("wait for PTY sizing: %v", err)
+		}
+	}
+	width := 80
+	if value, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && value > 0 {
+		width = value
+	}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
 		Capabilities: terminalexperience.Capabilities{
 			Interaction: terminalexperience.RichInteractive,
@@ -66,13 +81,14 @@ func runPulseRichPTYHelper(t *testing.T) {
 		Terminal:         experience,
 		Git:              &gitprocess.Runner{},
 		Now:              time.Now,
+		Width:            width,
 	})
 	if err != nil {
 		t.Fatalf("runPulse() error = %v", err)
 	}
 }
 
-func runPulsePTYProcess(t *testing.T, command *exec.Cmd) string {
+func runPulsePTYProcess(t *testing.T, command *exec.Cmd, width, height uint16) string {
 	t.Helper()
 	process, err := terminaltest.StartPTY(command)
 	if errors.Is(err, terminaltest.ErrPTYUnsupported) {
@@ -82,12 +98,18 @@ func runPulsePTYProcess(t *testing.T, command *exec.Cmd) string {
 		t.Fatalf("start PTY helper: %v", err)
 	}
 	defer process.Close()
+	if err := process.Resize(width, height); err != nil {
+		t.Fatalf("resize PTY to %dx%d: %v", width, height, err)
+	}
 	var output lockedPulsePTYBuffer
 	readDone := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(&output, process.Terminal())
 		close(readDone)
 	}()
+	if _, err := process.Terminal().Write([]byte("x\n")); err != nil {
+		t.Fatalf("release PTY helper after sizing: %v", err)
+	}
 	if err := process.Wait(); err != nil {
 		t.Fatalf("wait PTY helper: %v\n%s", err, output.String())
 	}
@@ -102,31 +124,49 @@ func runPulsePTYProcess(t *testing.T, command *exec.Cmd) string {
 	return output.String()
 }
 
-func assertPulseRichPTYOutput(t *testing.T, output string, color bool) {
+func assertPulseRichPTYOutput(t *testing.T, output string, color, wide bool) {
 	t.Helper()
 	visible := strings.ReplaceAll(output, "\r\n", "\n")
-	for _, expected := range []string{
-		"YCY / git pulse",
-		"Prepare workspace",
-		"Scan repositories",
-		"Fetch commits",
-		"Build commit tree",
-		"Workspace commit activity",
-		"safe commit",
-	} {
-		if !strings.Contains(visible, expected) {
-			t.Fatalf("Rich PTY output missing %q: %q", expected, output)
-		}
-	}
-	enter := strings.LastIndex(visible, "\x1b[?1049h")
+	enter := strings.Index(visible, "\x1b[?1049h")
 	leave := strings.LastIndex(visible, "\x1b[?1049l")
 	if strings.Count(visible, "\x1b[?1049h") != 1 || strings.Count(visible, "\x1b[?1049l") != 1 || enter < 0 || leave < enter || !strings.Contains(visible, "\x1b[?25h") {
 		t.Fatalf("Rich PTY output did not restore the primary screen: %q", output)
 	}
-	transcript := strings.Index(visible[leave:], "Prepare workspace (completed)")
-	result := strings.LastIndex(visible, "safe commit")
-	if transcript < 0 || result < 0 || leave+transcript > result {
-		t.Fatalf("Rich PTY transcript/result ordering = %q", output)
+	live := pulsePTYText(visible[enter:leave])
+	for _, expected := range []string{"YCY / git pulse", "Prepare workspace", "Scan repositories", "Fetch commits", "Build commit tree", "STATE", "PHASE", "DETAIL"} {
+		if !strings.Contains(live, expected) {
+			t.Fatalf("Rich PTY live Console missing %q: %q", expected, output)
+		}
+	}
+	if wide && !strings.Contains(live, "workspace commit activity") {
+		t.Fatalf("wide Rich PTY omitted complete target context: %q", output)
+	}
+	if !wide && !strings.Contains(live, "workspace") {
+		t.Fatalf("compact Rich PTY omitted bounded target context: %q", output)
+	}
+	if strings.Contains(live, "FLOW") || strings.Contains(live, "[done]") || strings.Contains(live, "[active]") {
+		t.Fatalf("Rich PTY live Console retained a non-B hierarchy: %q", output)
+	}
+	postLive := visible[leave:]
+	resultStart := strings.LastIndex(postLive, "YCY / git pulse")
+	if resultStart < 0 {
+		t.Fatalf("Rich PTY result did not start after the Transcript: %q", output)
+	}
+	transcript := pulsePTYText(postLive[:resultStart])
+	result := pulsePTYText(postLive[resultStart:])
+	for _, expected := range []string{"Prepare workspace (completed)", "Scan repositories (completed)", "Fetch commits (completed)", "Build commit tree (completed)", "succeeded"} {
+		if !strings.Contains(transcript, expected) {
+			t.Fatalf("Rich PTY Transcript omitted %q: %q", expected, output)
+		}
+	}
+	if !strings.Contains(result, "safe commit") || !strings.Contains(result, "Workspace commit activity") {
+		t.Fatalf("Rich PTY durable report omitted expected commit/result: %q", output)
+	}
+	if strings.Contains(transcript, "safe commit") {
+		t.Fatalf("Rich PTY Transcript leaked report subject: %q", output)
+	}
+	if color && !strings.Contains(output, "\x1b[38") {
+		t.Fatalf("color Rich PTY omitted B styling: %q", output)
 	}
 	if !color {
 		for _, prefix := range []string{"\x1b[38;", "\x1b[3m", "\x1b[9m"} {
@@ -137,14 +177,23 @@ func assertPulseRichPTYOutput(t *testing.T, output string, color bool) {
 	}
 }
 
-func pulsePTYEnvironment() []string {
-	ignored := map[string]struct{}{"CI": {}, "CLICOLOR": {}, "CLICOLOR_FORCE": {}, "COLORTERM": {}, "NO_COLOR": {}, "TERM": {}}
-	environment := make([]string, 0, len(os.Environ()))
+func pulsePTYText(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	return strings.Join(strings.Fields(terminaltest.StripANSI(value)), " ")
+}
+
+func pulsePTYEnvironmentWith(overrides map[string]string) []string {
+	environment := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if _, skip := ignored[key]; !skip {
-			environment = append(environment, entry)
+		key, _, found := strings.Cut(entry, "=")
+		if found {
+			if _, replaced := overrides[key]; !replaced {
+				environment = append(environment, entry)
+			}
 		}
+	}
+	for key, value := range overrides {
+		environment = append(environment, key+"="+value)
 	}
 	return environment
 }

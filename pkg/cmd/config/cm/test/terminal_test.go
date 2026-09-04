@@ -3,12 +3,38 @@ package test
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"strings"
 	"testing"
 
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
+
+func TestCMTestConsoleDescriptorProvidesSafeStaticAndRequestedContext(t *testing.T) {
+	want := terminalexperience.ConsoleDescriptor{
+		Command: "YCY / config cm test",
+		Target:  "provider connection",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "scope", Value: "non-mutating provider check"},
+			{Label: "profile", Value: "work"},
+		},
+	}
+	if got := terminalCMTestConsoleDescriptor(" work "); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Console descriptor = %#v, want %#v", got, want)
+	}
+	withoutProfile := terminalCMTestConsoleDescriptor("")
+	if len(withoutProfile.Metadata) != 1 || withoutProfile.Metadata[0].Label != "scope" {
+		t.Fatalf("empty profile descriptor = %#v", withoutProfile)
+	}
+	unsafe := terminalCMTestConsoleDescriptor("profile\x1b[31m\nname")
+	for _, field := range []string{unsafe.Command, unsafe.Target, unsafe.Status, unsafe.Metadata[0].Label, unsafe.Metadata[0].Value, unsafe.Metadata[1].Label, unsafe.Metadata[1].Value} {
+		if strings.ContainsAny(field, "\r\n\t\x1b") {
+			t.Fatalf("unsafe descriptor field contains terminal control: %q", field)
+		}
+	}
+}
 
 func TestTerminalCMTestPresentationPreservesPlainAndAutomationResults(t *testing.T) {
 	tests := []struct {

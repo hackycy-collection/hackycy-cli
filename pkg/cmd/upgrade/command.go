@@ -51,7 +51,10 @@ func runUpgrade(options *Options) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, terminalUpgradeConsoleDescriptor(options.CurrentVersion))
+	if err != nil {
+		return err
+	}
 	defer run.Close()
 	if options.Terminal.Capabilities().Interaction == terminal.RichInteractive {
 		if err := run.Notice(terminalUpgradeIntroDocument()); err != nil {
@@ -70,4 +73,20 @@ func runUpgrade(options *Options) error {
 	sink.close()
 	resultErr = errors.Join(resultErr, sink.err())
 	return finishUpgradeRun(run, options.Terminal.DiagnosticWriter(), sink.previousDocument(), result, resultErr)
+}
+
+func terminalUpgradeConsoleDescriptor(currentVersion string) terminal.ConsoleDescriptor {
+	current := terminalUpgradeSafeDetail(currentVersion)
+	if current == "" {
+		current = "current release"
+	}
+	return terminal.ConsoleDescriptor{
+		Command: "YCY / upgrade",
+		Target:  "release update",
+		Status:  "READY",
+		Metadata: []terminal.ConsoleMetadata{
+			{Label: "scope", Value: "detached updater"},
+			{Label: "current", Value: current},
+		},
+	}
 }

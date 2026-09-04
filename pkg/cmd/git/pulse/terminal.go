@@ -39,7 +39,10 @@ func runPulse(options *Options) error {
 	}
 	ctx, cancel := context.WithCancel(options.Context)
 	defer cancel()
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, terminalPulseConsoleDescriptor(options))
+	if err != nil {
+		return err
+	}
 	defer run.Close()
 	adapter := newTerminalPulseAdapter(run, cancel, terminalPulseAdapterConfig{
 		Capabilities: options.Terminal.Capabilities(),
@@ -73,6 +76,42 @@ func runPulse(options *Options) error {
 		outcome = terminalexperience.Cancelled
 	}
 	return errors.Join(workErr, run.Finish(outcome, document))
+}
+
+func terminalPulseConsoleDescriptor(options *Options) terminalexperience.ConsoleDescriptor {
+	directory := "workspace"
+	rangeLabel := "interactive date range"
+	if options != nil {
+		directory = pulseDescriptorDirectory(options.Directory)
+		if options.Days != nil {
+			rangeLabel = fmt.Sprintf("%d days", *options.Days)
+		}
+	}
+	return terminalexperience.ConsoleDescriptor{
+		Command: "YCY / git pulse",
+		Target:  "workspace commit activity",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "scope", Value: "workspace Git history"},
+			{Label: "directory", Value: directory},
+			{Label: "range", Value: safePulseField(rangeLabel, 80)},
+		},
+	}
+}
+
+func pulseDescriptorDirectory(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "workspace"
+	}
+	if filepath.IsAbs(value) {
+		base := filepath.Base(filepath.Clean(value))
+		if base == string(filepath.Separator) || base == "." || base == "" {
+			return "workspace"
+		}
+		return safePulseField(base, 120)
+	}
+	return safePulseField(filepath.Clean(value), 120)
 }
 
 type osPathStater struct{}

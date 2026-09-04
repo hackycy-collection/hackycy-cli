@@ -109,6 +109,41 @@ func TestTerminalFSPresentationUsesRichSemanticRoles(t *testing.T) {
 	}
 }
 
+func TestTerminalFSRichServiceCheckpointsRemainOutsideAltScreen(t *testing.T) {
+	var output bytes.Buffer
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Capabilities: terminalexperience.Capabilities{
+			Interaction: terminalexperience.RichInteractive,
+			Stdout:      terminalexperience.StreamCapability{Terminal: true, Color: true},
+		},
+		Output: &output,
+	})
+	run := experience.Open(context.Background())
+	startup := Startup{
+		URLs:           []StartupURL{{Label: "Local", URL: "http://localhost:43124"}},
+		Directory:      "/workspace",
+		BindingAddress: "127.0.0.1",
+		Port:           43124,
+	}
+	if err := run.ResultCheckpoint("fs-startup", terminalFSStartupDocument(startup)); err != nil {
+		t.Fatalf("Rich startup checkpoint = %v", err)
+	}
+	if err := run.ResultCheckpoint("fs-stopped", terminalFSStoppedDocument()); err != nil {
+		t.Fatalf("Rich stopped checkpoint = %v", err)
+	}
+	if err := run.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+	if got := terminaltest.StripANSI(output.String()); !strings.Contains(got, "File Browser") || !strings.Contains(got, "File Browser stopped.") {
+		t.Fatalf("Rich service checkpoints = %q", got)
+	}
+	for _, sequence := range []string{"\x1b[?1049h", "\x1b[?1049l", "\x1b[?1047h", "\x1b[?1047l", "\x1b[?47h", "\x1b[?47l"} {
+		if strings.Contains(output.String(), sequence) {
+			t.Fatalf("Rich service checkpoints entered AltScreen with %q: %q", sequence, output.String())
+		}
+	}
+}
+
 func TestRunFSClosesTheOperationWhenStartupPresentationFails(t *testing.T) {
 	output := &failingFSWriter{}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{

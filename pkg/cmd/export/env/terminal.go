@@ -22,7 +22,10 @@ func runEnv(options *Options) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, terminalExportEnvConsoleDescriptor(options))
+	if err != nil {
+		return err
+	}
 	defer run.Close()
 	caps := options.Terminal.Capabilities()
 	adapter := newTerminalExportEnvAdapter(run, caps.Interaction == terminalexperience.Automation)
@@ -83,13 +86,37 @@ func runEnv(options *Options) error {
 	return run.Finish(terminalexperience.Succeeded, &document)
 }
 
+func terminalExportEnvConsoleDescriptor(options *Options) terminalexperience.ConsoleDescriptor {
+	directory := "."
+	merge := "off"
+	if options != nil {
+		directory = options.Directory
+		if strings.TrimSpace(directory) == "" {
+			directory = "."
+		}
+		if options.Merge {
+			merge = "on"
+		}
+	}
+	return terminalexperience.ConsoleDescriptor{
+		Command: "YCY / export env",
+		Target:  "environment JSON",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "directory", Value: safeExportText(directory)},
+			{Label: "merge base .env", Value: merge},
+		},
+	}
+}
+
 type exportEnvPhaseSink struct {
-	run        terminalexperience.ExperienceRun
-	caps       terminalexperience.Capabilities
-	withOutput bool
-	current    *exportEnvTrack
-	cluster    string
-	err        error
+	run              terminalexperience.ExperienceRun
+	caps             terminalexperience.Capabilities
+	withOutput       bool
+	current          *exportEnvTrack
+	cluster          string
+	pendingVariables *terminalexperience.PresentationDocument
+	err              error
 }
 
 type exportEnvTrack struct {
@@ -145,6 +172,13 @@ func (sink *exportEnvPhaseSink) selected(selection Selection, source string, mer
 	if sink.caps.Interaction != terminalexperience.RichInteractive || sink.err != nil {
 		return
 	}
+	// Selection is the boundary between discovery and output. Close the
+	// discovery Track before publishing its milestone so the runtime operation
+	// lock is not re-entered while the Track is still consuming updates.
+	sink.closeTrack()
+	if sink.err != nil {
+		return
+	}
 	sink.milestone(terminalExportEnvSelectionDocument(selection, source, merge))
 }
 
@@ -152,7 +186,11 @@ func (sink *exportEnvPhaseSink) variables(count int) {
 	if sink.caps.Interaction != terminalexperience.RichInteractive || sink.err != nil {
 		return
 	}
-	sink.milestone(terminalExportEnvVariableDocument(count))
+	// The observer reports the variable count while the output Track is still
+	// consuming its parse phase. Defer the milestone until that Track closes so
+	// the runtime operation lock is never re-entered from an active Track.
+	document := terminalExportEnvVariableDocument(count)
+	sink.pendingVariables = &document
 }
 
 func (sink *exportEnvPhaseSink) startTrack(firstID string) {
@@ -201,6 +239,11 @@ func (sink *exportEnvPhaseSink) closeTrack() {
 	err := <-sink.current.done
 	sink.err = errors.Join(sink.err, err)
 	sink.current = nil
+	if sink.pendingVariables != nil && sink.err == nil {
+		document := *sink.pendingVariables
+		sink.pendingVariables = nil
+		sink.err = errors.Join(sink.err, sink.run.Milestone(document))
+	}
 }
 
 func (sink *exportEnvPhaseSink) notice(name, detail string, role terminalexperience.VisualRole) {

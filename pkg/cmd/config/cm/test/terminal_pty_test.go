@@ -24,27 +24,37 @@ func TestRunTestRichPTYRestoresPrimaryScreenAndReplaysSafeTranscript(t *testing.
 	}
 
 	for _, testCase := range []struct {
-		name  string
-		extra string
-		color bool
+		name          string
+		width, height uint16
+		color         bool
 	}{
-		{name: "color", color: true},
-		{name: "no color", extra: "NO_COLOR=1", color: false},
+		{name: "wide color", width: 120, height: 40, color: true},
+		{name: "wide no color", width: 120, height: 40, color: false},
+		{name: "compact color", width: 40, height: 15, color: true},
+		{name: "compact no color", width: 40, height: 15, color: false},
 	} {
 		t.Run(testCase.name, func(t *testing.T) {
 			command := exec.Command(os.Args[0], "-test.run=^TestRunTestRichPTYRestoresPrimaryScreenAndReplaysSafeTranscript$")
-			command.Env = append(cmTestPTYEnvironment(), helperEnvironment+"=1", "TERM=xterm-256color")
-			if testCase.extra != "" {
-				command.Env = append(command.Env, testCase.extra)
-			}
-			output := runCMTestPTYProcess(t, command)
-			assertCMTestRichPTYOutput(t, output, testCase.color)
+			command.Env = cmTestPTYEnvironmentWith(map[string]string{
+				"NO_COLOR":                     map[bool]string{true: "", false: "1"}[testCase.color],
+				"TERM":                         "xterm-256color",
+				helperEnvironment:              "1",
+				"YCY_CONFIG_CM_TEST_PTY_START": "1",
+			})
+			output := runCMTestPTYProcess(t, command, testCase.width, testCase.height)
+			assertCMTestRichPTYOutput(t, output, testCase.color, testCase.width >= 70)
 		})
 	}
 }
 
 func runCMTestRichPTYHelper(t *testing.T) {
 	t.Helper()
+	if os.Getenv("YCY_CONFIG_CM_TEST_PTY_START") == "1" {
+		var start [2]byte
+		if _, err := io.ReadFull(os.Stdin, start[:]); err != nil {
+			t.Fatalf("wait for PTY sizing: %v", err)
+		}
+	}
 	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
 		Capabilities: terminalexperience.Capabilities{
 			Interaction: terminalexperience.RichInteractive,
@@ -74,7 +84,7 @@ func runCMTestRichPTYHelper(t *testing.T) {
 	}
 }
 
-func runCMTestPTYProcess(t *testing.T, command *exec.Cmd) string {
+func runCMTestPTYProcess(t *testing.T, command *exec.Cmd, width, height uint16) string {
 	t.Helper()
 	process, err := terminaltest.StartPTY(command)
 	if errors.Is(err, terminaltest.ErrPTYUnsupported) {
@@ -84,12 +94,18 @@ func runCMTestPTYProcess(t *testing.T, command *exec.Cmd) string {
 		t.Fatalf("start PTY helper: %v", err)
 	}
 	defer process.Close()
+	if err := process.Resize(width, height); err != nil {
+		t.Fatalf("resize PTY to %dx%d: %v", width, height, err)
+	}
 	var output lockedCMTestPTYBuffer
 	readDone := make(chan struct{})
 	go func() {
 		_, _ = io.Copy(&output, process.Terminal())
 		close(readDone)
 	}()
+	if _, err := process.Terminal().Write([]byte("x\n")); err != nil {
+		t.Fatalf("release PTY helper after sizing: %v", err)
+	}
 	if err := process.Wait(); err != nil {
 		t.Fatalf("wait PTY helper: %v\n%s", err, output.String())
 	}
@@ -104,26 +120,46 @@ func runCMTestPTYProcess(t *testing.T, command *exec.Cmd) string {
 	return output.String()
 }
 
-func assertCMTestRichPTYOutput(t *testing.T, output string, color bool) {
+func assertCMTestRichPTYOutput(t *testing.T, output string, color, wide bool) {
 	t.Helper()
 	visible := strings.ReplaceAll(output, "\r\n", "\n")
-	if !strings.Contains(visible, "YCY / config cm test") || !strings.Contains(visible, "Resolve CM test profile") || !strings.Contains(visible, "Test CM provider") || !strings.Contains(visible, "Response received") {
-		t.Fatalf("Rich PTY output missing phase/context evidence: %q", output)
-	}
-	for _, expected := range []string{"Test commit message provider", "Response:\nok", "Done", "Prompt tokens: 3", "Completion tokens: 2", "Total tokens: 5"} {
-		if !strings.Contains(visible, expected) {
-			t.Fatalf("Rich PTY output missing %q: %q", expected, output)
-		}
-	}
-	enter := strings.LastIndex(visible, "\x1b[?1049h")
+	enter := strings.Index(visible, "\x1b[?1049h")
 	leave := strings.LastIndex(visible, "\x1b[?1049l")
 	if strings.Count(visible, "\x1b[?1049h") != 1 || strings.Count(visible, "\x1b[?1049l") != 1 || enter < 0 || leave < enter || !strings.Contains(visible, "\x1b[?25h") {
 		t.Fatalf("Rich PTY output did not restore the primary screen: %q", output)
 	}
-	transcript := strings.Index(visible[leave:], "Resolve CM test profile (completed)")
-	result := strings.LastIndex(visible, "Response:\nok")
-	if transcript < 0 || result < 0 || leave+transcript > result {
-		t.Fatalf("Rich PTY transcript/result ordering = %q", output)
+	live := cmTestPTYText(visible[enter:leave])
+	for _, expected := range []string{"YCY / config cm test", "Resolve CM test profile", "Test CM provider", "STATE", "PHASE", "DETAIL"} {
+		if !strings.Contains(live, expected) {
+			t.Fatalf("Rich PTY live Console missing %q: %q", expected, output)
+		}
+	}
+	if wide {
+		if !strings.Contains(live, "provider connection") || !strings.Contains(live, "non-mutating provider check") {
+			t.Fatalf("wide Rich PTY omitted complete context metadata: %q", output)
+		}
+	} else if !strings.Contains(live, "provider") {
+		t.Fatalf("compact Rich PTY omitted bounded provider context: %q", output)
+	}
+	if strings.Contains(live, "FLOW") || strings.Contains(live, "[done]") || strings.Contains(live, "[active]") {
+		t.Fatalf("Rich PTY live Console retained a non-B hierarchy: %q", output)
+	}
+	postLive := visible[leave:]
+	resultStart := strings.LastIndex(postLive, "YCY / config cm test")
+	if resultStart < 0 {
+		t.Fatalf("Rich PTY result missing after primary-screen restoration: %q", output)
+	}
+	transcript := cmTestPTYText(postLive[:resultStart])
+	result := cmTestPTYText(postLive[resultStart:])
+	for _, expected := range []string{"Resolve CM test profile (completed)", "Test CM provider (completed)", "Response received", "succeeded"} {
+		if !strings.Contains(transcript, expected) {
+			t.Fatalf("Rich PTY Transcript missing %q: %q", expected, output)
+		}
+	}
+	for _, expected := range []string{"Test commit message provider", "Response:", "ok", "Done"} {
+		if !strings.Contains(result, expected) {
+			t.Fatalf("Rich PTY result missing %q: %q", expected, output)
+		}
 	}
 	if strings.Contains(output, "test-api-key") {
 		t.Fatalf("Rich PTY output leaked API key: %q", output)
@@ -137,14 +173,23 @@ func assertCMTestRichPTYOutput(t *testing.T, output string, color bool) {
 	}
 }
 
-func cmTestPTYEnvironment() []string {
-	ignored := map[string]struct{}{"CI": {}, "CLICOLOR": {}, "CLICOLOR_FORCE": {}, "COLORTERM": {}, "NO_COLOR": {}, "TERM": {}}
-	environment := make([]string, 0, len(os.Environ()))
+func cmTestPTYText(value string) string {
+	value = strings.ReplaceAll(value, "\r\n", "\n")
+	return strings.Join(strings.Fields(terminaltest.StripANSI(value)), " ")
+}
+
+func cmTestPTYEnvironmentWith(overrides map[string]string) []string {
+	environment := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {
-		key, _, _ := strings.Cut(entry, "=")
-		if _, skip := ignored[key]; !skip {
-			environment = append(environment, entry)
+		key, _, found := strings.Cut(entry, "=")
+		if found {
+			if _, replaced := overrides[key]; !replaced {
+				environment = append(environment, entry)
+			}
 		}
+	}
+	for key, value := range overrides {
+		environment = append(environment, key+"="+value)
 	}
 	return environment
 }

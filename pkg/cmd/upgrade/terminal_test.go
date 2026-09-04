@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -11,6 +12,27 @@ import (
 	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 	"github.com/hackycy/hackycy-cli/internal/updater"
 )
+
+func TestUpgradeConsoleDescriptorProvidesSafeCurrentVersionContext(t *testing.T) {
+	want := terminalexperience.ConsoleDescriptor{
+		Command: "YCY / upgrade",
+		Target:  "release update",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "scope", Value: "detached updater"},
+			{Label: "current", Value: "1.2.3"},
+		},
+	}
+	if got := terminalUpgradeConsoleDescriptor(" 1.2.3 "); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Console descriptor = %#v, want %#v", got, want)
+	}
+	unsafe := terminalUpgradeConsoleDescriptor("bad\x1b[31m\nversion")
+	for _, field := range []string{unsafe.Command, unsafe.Target, unsafe.Status, unsafe.Metadata[0].Label, unsafe.Metadata[0].Value, unsafe.Metadata[1].Label, unsafe.Metadata[1].Value} {
+		if strings.ContainsAny(field, "\r\n\t\x1b") {
+			t.Fatalf("unsafe descriptor field contains terminal control: %q", field)
+		}
+	}
+}
 
 func TestRunUpgradeProjectsParentPhasesAndSubmitsOneResult(t *testing.T) {
 	stdout, stderr := &countingUpgradeWriter{}, &bytes.Buffer{}

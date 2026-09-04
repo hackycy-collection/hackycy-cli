@@ -7,6 +7,7 @@ import (
 	"net"
 	"net/netip"
 	"reflect"
+	"strings"
 	"testing"
 
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
@@ -76,6 +77,38 @@ func TestTerminalDiffPresentationUsesRichSemanticRoles(t *testing.T) {
 	for index, role := range want {
 		if document.Blocks[index].Role != role {
 			t.Fatalf("block %d role = %v, want %v", index, document.Blocks[index].Role, role)
+		}
+	}
+}
+
+func TestTerminalDiffRichServiceResultRemainsOutsideAltScreen(t *testing.T) {
+	var output bytes.Buffer
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Capabilities: terminalexperience.Capabilities{
+			Interaction: terminalexperience.RichInteractive,
+			Stdout:      terminalexperience.StreamCapability{Terminal: true, Color: true},
+		},
+		Output: &output,
+	})
+	run := experience.Open(context.Background())
+	startup := Startup{
+		LocalURL:          "http://localhost:43123",
+		BaselineDirectory: "/workspace/baseline",
+		TargetDirectory:   "/workspace/target",
+		Port:              43123,
+	}
+	if err := run.Result(terminalDiffStartupDocument(startup)); err != nil {
+		t.Fatalf("Rich service result = %v", err)
+	}
+	if err := run.Close(); err != nil {
+		t.Fatalf("Close() = %v", err)
+	}
+	if got := terminaltest.StripANSI(output.String()); !strings.Contains(got, "Directory diff: http://localhost:43123") || !strings.Contains(got, "Baseline: /workspace/baseline") {
+		t.Fatalf("Rich service result = %q", got)
+	}
+	for _, sequence := range []string{"\x1b[?1049h", "\x1b[?1049l", "\x1b[?1047h", "\x1b[?1047l", "\x1b[?47h", "\x1b[?47l"} {
+		if strings.Contains(output.String(), sequence) {
+			t.Fatalf("Rich service result entered AltScreen with %q: %q", sequence, output.String())
 		}
 	}
 }

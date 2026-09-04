@@ -27,7 +27,10 @@ func runTest(options *Options) error {
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, terminalCMTestConsoleDescriptor(options.Profile))
+	if err != nil {
+		return err
+	}
 	defer run.Close()
 	caps := options.Terminal.Capabilities()
 	var presentationErr error
@@ -80,7 +83,7 @@ func runTest(options *Options) error {
 			return finish(terminalexperience.Cancelled, nil, ctx.Err())
 		}
 	}
-	err := resolved.err
+	err = resolved.err
 	module := resolved.module
 	profile := resolved.profile
 	if err != nil {
@@ -136,6 +139,25 @@ func runTest(options *Options) error {
 		document = terminalCMTestDocument(result)
 	}
 	return finish(terminalexperience.Succeeded, &document, nil)
+}
+
+func terminalCMTestConsoleDescriptor(profile string) terminalexperience.ConsoleDescriptor {
+	metadata := []terminalexperience.ConsoleMetadata{{
+		Label: "scope",
+		Value: "non-mutating provider check",
+	}}
+	if strings.TrimSpace(profile) != "" {
+		metadata = append(metadata, terminalexperience.ConsoleMetadata{
+			Label: "profile",
+			Value: safeCMTestProfile(profile),
+		})
+	}
+	return terminalexperience.ConsoleDescriptor{
+		Command:  "YCY / config cm test",
+		Target:   "provider connection",
+		Status:   "READY",
+		Metadata: metadata,
+	}
 }
 
 type cmTestPhaseSink struct {
