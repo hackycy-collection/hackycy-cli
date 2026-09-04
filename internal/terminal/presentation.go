@@ -58,22 +58,54 @@ func writeComplete(output io.Writer, value string) error {
 
 func renderRich(document PresentationDocument, options RichOptions) string {
 	var output strings.Builder
-	styles := richStyles(options.Color)
-	for index, block := range document.Blocks {
-		if index > 0 && output.Len() > 0 && !strings.HasSuffix(output.String(), "\n") {
-			output.WriteByte('\n')
-		}
+	styles := durableRichStyles(options.Color)
+	grouped := make([]struct {
+		role VisualRole
+		text string
+	}, 0, len(document.Blocks))
+	for _, block := range document.Blocks {
 		text := block.Text
 		if block.Sensitive {
 			text = "[redacted]"
 		}
 		text = wrapText(stripTerminalControl(text), options.Width)
-		output.WriteString(styles[block.Role].Render(text))
+		if len(grouped) > 0 && grouped[len(grouped)-1].role == block.Role {
+			if grouped[len(grouped)-1].text != "" && text != "" && !strings.HasSuffix(grouped[len(grouped)-1].text, "\n") {
+				grouped[len(grouped)-1].text += "\n"
+			}
+			grouped[len(grouped)-1].text += text
+			continue
+		}
+		grouped = append(grouped, struct {
+			role VisualRole
+			text string
+		}{role: block.Role, text: text})
+	}
+	for index, block := range grouped {
+		if index > 0 && output.Len() > 0 && !strings.HasSuffix(output.String(), "\n") {
+			output.WriteByte('\n')
+		}
+		output.WriteString(styles[block.role].Render(block.text))
 	}
 	if len(document.Blocks) > 0 && !strings.HasSuffix(output.String(), "\n") {
 		output.WriteByte('\n')
 	}
 	return output.String()
+}
+
+// durableRichStyles projects command-owned documents with the same B palette
+// as the Live View without introducing Console layout or terminal-mode control.
+// Cyan distinguishes document section/active hierarchy from the amber Console
+// bar and live state marker.
+func durableRichStyles(color bool) map[VisualRole]lipgloss.Style {
+	styles := richStyles(color)
+	if color {
+		// Keep ordinary document text on the terminal's default foreground so
+		// adjacent result blocks retain their established byte-level layout.
+		styles[VisualRolePlain] = lipgloss.NewStyle()
+		styles[VisualRoleActive] = lipgloss.NewStyle().Foreground(lipgloss.Color(bConsoleAccent)).Bold(true)
+	}
+	return styles
 }
 
 func richStyles(color bool) map[VisualRole]lipgloss.Style {
@@ -91,12 +123,13 @@ func richStyles(color bool) map[VisualRole]lipgloss.Style {
 		return styles
 	}
 
-	styles[VisualRoleTitle] = plain.Foreground(lipgloss.Color("6")).Bold(true)
-	styles[VisualRoleActive] = plain.Foreground(lipgloss.Color("6")).Bold(true)
-	styles[VisualRoleSuccess] = plain.Foreground(lipgloss.Color("10"))
-	styles[VisualRoleWarning] = plain.Foreground(lipgloss.Color("11"))
-	styles[VisualRoleError] = plain.Foreground(lipgloss.Color("9")).Bold(true)
-	styles[VisualRoleMuted] = plain.Foreground(lipgloss.Color("8")).Faint(true)
+	styles[VisualRolePlain] = plain.Foreground(lipgloss.Color(bConsoleText))
+	styles[VisualRoleTitle] = plain.Foreground(lipgloss.Color(bConsolePrimary)).Bold(true)
+	styles[VisualRoleActive] = plain.Foreground(lipgloss.Color(bConsolePrimary)).Bold(true)
+	styles[VisualRoleSuccess] = plain.Foreground(lipgloss.Color(bConsoleSuccess)).Bold(true)
+	styles[VisualRoleWarning] = plain.Foreground(lipgloss.Color(bConsoleWarning)).Bold(true)
+	styles[VisualRoleError] = plain.Foreground(lipgloss.Color(bConsoleError)).Bold(true)
+	styles[VisualRoleMuted] = plain.Foreground(lipgloss.Color(bConsoleMuted)).Faint(true)
 	return styles
 }
 

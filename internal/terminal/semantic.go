@@ -31,6 +31,23 @@ type InteractionAnswer struct {
 	Confirmed bool
 }
 
+// ConsoleMetadata is one command-owned, safe display field in a Rich Console.
+// The terminal owns the bounded projection and never receives a Charm model.
+type ConsoleMetadata struct {
+	Label string
+	Value string
+}
+
+// ConsoleDescriptor supplies the semantic identity and safe context for one
+// Rich Console run. Command adapters must provide bounded safe projections;
+// terminal owns all rendering and terminal-mode behavior.
+type ConsoleDescriptor struct {
+	Command  string
+	Target   string
+	Status   string
+	Metadata []ConsoleMetadata
+}
+
 // FinishOutcome is the durable semantic outcome for one finite command run.
 type FinishOutcome uint8
 
@@ -168,6 +185,7 @@ type TrackedOperation struct {
 // Experience opens independently closable terminal runs and owns diagnostics.
 type Experience interface {
 	Open(context.Context) ExperienceRun
+	OpenConsole(context.Context, ConsoleDescriptor) (ExperienceRun, error)
 	DiagnosticWriter() io.Writer
 }
 

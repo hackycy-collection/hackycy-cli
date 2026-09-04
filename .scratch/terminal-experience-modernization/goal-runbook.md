@@ -69,8 +69,8 @@
 
 | Gate | Status | Depends on | Plan contract | Unlock evidence |
 | --- | --- | --- | --- | --- |
-| G0: Production B Ops Console foundation | active | none | `implementation-plan.md` -> `G0: Production B Ops Console foundation` | no predecessor |
-| G1: Root and low-risk finite recovery | planned | G0 | `implementation-plan.md` -> `G1: Root and low-risk finite recovery` | G0 pending |
+| G0: Production B Ops Console foundation | passed | none | `implementation-plan.md` -> `G0: Production B Ops Console foundation` | exit conditions 1-5 verified 2026-09-04 |
+| G1: Root and low-risk finite recovery | active | G0 | `implementation-plan.md` -> `G1: Root and low-risk finite recovery` | G0 passed 2026-09-04 |
 | G2: External-read and service-boundary recovery | planned | G1 | `implementation-plan.md` -> `G2: External-read and service-boundary recovery` | G1 pending |
 | G3: Mutation and archive recovery | planned | G2 | `implementation-plan.md` -> `G3: Mutation and archive recovery` | G2 pending |
 | G4: Git mutation and process handoff | planned | G3 | `implementation-plan.md` -> `G4: Git mutation and process handoff` | G3 pending |
@@ -91,9 +91,151 @@
   the source set. Risk: production Rich rendering remains structurally generic.
   Next action: execute the descriptor/state-model slice defined by G0.
 
+- 2026-09-04: completed slice `descriptor/state model`. Added the semantic
+  `ConsoleDescriptor`/`ConsoleMetadata` seam, bounded safe-field validation,
+  and `Runtime.OpenConsole`; legacy `Open` now receives a B-compatible default
+  descriptor so no command package changed. The descriptor is captured before
+  Rich controller construction and exposed through the `Experience` interface
+  for later command-owned adapters. Modified: `internal/terminal/{semantic.go,
+  experience.go,rich.go,console.go,console_test.go}` and
+  `internal/terminaltest/semantic_recording.go`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/terminal
+  ./internal/terminaltest` passed. Risk: the production Rich root still uses
+  the generic composition until the wide-shell slice replaces it. Next action:
+  implement and test the B wide shell only.
+
+- 2026-09-04: completed slice `wide shell`. At `70x20` and above, the Rich
+  root now renders the B command/status bar, bounded metadata row, divider,
+  aligned `STATE / PHASE / DETAIL` table, and a single active region below the
+  table. The table owns complete phase history; the active region now contains
+  only the current work summary while preserving Esc's second-press
+  cancellation prompt and cancellation state. Modified:
+  `internal/terminal/{rich.go,console_test.go}`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/terminal
+  ./internal/terminaltest` passed after correcting a missing Lip Gloss import,
+  removing duplicate generic phase rows, and restoring the existing Esc
+  confirmation prompt. Risk: sub-`70x20` terminals still use the old compact
+  projection and can omit reached phase rows. Next action: implement and test
+  the B compact shell only.
+
+- 2026-09-04: completed slice `compact shell`. Below `70x20`, the Rich root
+  now uses a single-column B projection with the command/status bar, bounded
+  metadata, `STATE / PHASE / DETAIL` heading, every catalog row in order, and
+  the active region underneath. The active work summary retains the operation
+  label, current phase detail, and Esc cancellation prompts. Modified:
+  `internal/terminal/rich.go`, `internal/terminal/console_test.go`, and the
+  narrow-model expectations in `internal/terminal/tracked_model_test.go`.
+  Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/terminal
+  ./internal/terminaltest` passed. Risk: the B palette and Huh bottom-focus
+  theme are still pending; compact output currently uses the existing generic
+  semantic role colors. Next action: replace the shared Rich palette and Huh
+  theme with the B contract only.
+
+- 2026-09-04: completed slice `B palette and Huh theme`. Replaced generic
+  Rich roles with the accepted B amber `#FFB454`, cyan `#4CC9F0`, green,
+  yellow, red, text, and muted colors. Added the sole production Huh theme:
+  it has the B bottom focus rule, no left rail, paired select/multi-select
+  symbols, and capability-gated emphasis/background styling so `NO_COLOR=1`
+  emits no ANSI bytes. Modified: `internal/terminal/{presentation.go,
+  rich_form.go,theme.go,console_test.go}`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/terminal
+  ./internal/terminaltest` passed after correcting no-color bold ANSI output.
+  Risk: reached form steps are still represented by one generic table row;
+  they need their own semantic catalog projection. Next action: implement and
+  test form-step projection only.
+
+- 2026-09-04: completed slice `form-step projection`. Each successfully
+  reached Rich interaction now adds one ordered Console table row from its safe
+  `TranscriptLabel` (or safe message fallback); text, select, multi-select,
+  confirm, and secret interaction kinds expose only their generic safe step
+  detail. Completion and cancellation update the corresponding row without
+  exposing answers or secret values, while the active Huh form remains below
+  the table. Modified: `internal/terminal/{rich.go,console_test.go}`.
+  Verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./internal/terminal ./internal/terminaltest` passed. Risk: Work Phase
+  catalog rows still need an explicit lasting table projection after their
+  active region is replaced. Next action: implement and test phase-table
+  projection only.
+
+- 2026-09-04: completed slice `phase-table projection`. A Track now projects
+  its immutable catalog in order into the one Console status table; updates
+  replace only that row's state/detail, and final rows persist after a later
+  Notice or Form replaces the active region. The old generic final-phase
+  Notice projection was removed, so completed phases cannot appear twice or
+  displace the B hierarchy. Modified:
+  `internal/terminal/{rich.go,tracked.go,console_test.go}`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./internal/terminal ./internal/terminaltest` passed. Risk: durable Rich
+  documents still use generic role sequencing rather than the B-derived
+  hierarchy required for root/help in its later Gate. Next action: implement
+  and test direct durable B hierarchy only, without changing document content
+  or terminal mode behavior.
+
+- 2026-09-04: completed slice `direct durable B hierarchy`. Direct `WriteRich`
+  documents now derive their roles from the production B palette, using cyan
+  for document section/active hierarchy while retaining amber for the live
+  Console bar and state marker. This is a styling-only terminal projection:
+  document text, Plain output, stdout ownership, and non-AltScreen behavior
+  remain unchanged. Modified:
+  `internal/terminal/{presentation.go,presentation_test.go}`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./internal/terminal ./internal/terminaltest` passed. Risk: B structural
+  model/PTY evidence still needs to demonstrate colored and `NO_COLOR` console
+  frames, compact retention, and the existing restoration/replay lifecycle.
+  Next action: add and run normalized model and PTY evidence only.
+
+- 2026-09-04: completed slice `legacy introduction compatibility projection`.
+  The shared Rich root now recognizes only the bounded, static three-block
+  introduction shape used by commands that still use the default Console
+  descriptor, and projects its safe command identity into the B bar and its
+  title/description into the single metadata row. This keeps established
+  Rich PTY introductions observable when a later B frame replaces the first
+  frame, without changing command wording, Transcript contents, stdout
+  Results, or the latest-Notice active-context rule. Modified:
+  `internal/terminal/rich.go`. Verification: targeted `rm` Rich PTY success and
+  cancellation journeys passed in both color and `NO_COLOR=1`; shared terminal
+  tests and the prototype tests also passed. Risk: the full repository suite
+  remains the final compatibility check. Next action: run the G0 repository
+  verification sequence.
+
+- 2026-09-04: completed slice `normalized model and PTY evidence`, including
+  the final shared-renderer compatibility repair. Model evidence covers the
+  descriptor/bar/metadata/divider/table/active-region hierarchy, B state
+  symbols and palette, no-color control-free rendering, compact `70x20`
+  degradation, ordered form and Track rows, no persistent rail, and bounded
+  latest-Notice context. PTY evidence covers colored and `NO_COLOR=1` Rich
+  journeys, resize retention, AltScreen restoration, cancellation, renderer
+  lease/recovery, Transcript replay ordering, redirected stdout, and child
+  handoff. The repository run initially exposed legacy `rm` Rich PTY
+  expectations for the static introduction; the shared renderer now projects
+  only that bounded safe three-block introduction into the B bar/metadata row,
+  preserving command packages, wording, Results, Transcript semantics, and
+  stdout ownership. Modified: `internal/terminal/rich.go` plus the existing
+  G0 evidence files. Directed verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/terminal
+  ./internal/terminaltest -count=1`,
+  `cd internal/terminal/prototype-vivid && GOTOOLCHAIN=go1.26.7 GOWORK=off
+  go test ./...`, and targeted `pkg/cmd/rm` Rich PTY success/cancellation
+  tests in color and `NO_COLOR=1`. Repository verification passed in order:
+  the shared terminal test command, `make command-surface`, `make check`, and
+  `git diff --check`; `make check` completed all Go, architecture, Web, and
+  command-package checks. Exit-condition evidence: (1) semantic descriptor,
+  safe metadata, B bar/divider/wide table/active region: model tests and
+  `internal/terminal` tests; (2) ordered form/Track rows, paired symbols,
+  palette, bottom focus, and no rail: console/theme/model/PTY tests; (3)
+  compact heading, rows, details, and active region below `70x20`: compact
+  model and resize PTY tests; (4) Rich/Plain/Automation/redirected,
+  Transcript, lease, cancellation, recovery, and exactly-once behavior:
+  shared runtime and repository tests; (5) repository checks: all commands
+  above passed. Risk: G1 is now active but intentionally has no
+  implementation evidence in this Goal. Next action: end this Goal after the
+  atomic Gate transition.
+
 ### G1: Root and low-risk finite recovery
 
 - 2026-09-04: initialized as `planned`; no recovery implementation evidence.
+- 2026-09-04: 已激活，尚未开始实施。
 
 ### G2: External-read and service-boundary recovery
 

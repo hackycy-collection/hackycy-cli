@@ -3,10 +3,7 @@ package terminal
 import (
 	"errors"
 	"io"
-	"strings"
 	"sync"
-
-	"charm.land/lipgloss/v2"
 )
 
 func (run *runtimeRun) trackPlain(output io.Writer, operation TrackedOperation, protocol *phaseProtocol) error {
@@ -167,55 +164,6 @@ func (state *trackedState) applyPhase(phase OperationPhase) {
 	state.phases = append(state.phases, phase)
 }
 
-func (state *trackedState) view(width int, styles map[VisualRole]lipgloss.Style) string {
-	lines := make([]string, 0, len(state.phases)*2+3)
-	label := stripTerminalControl(state.label)
-	if label != "" {
-		lines = append(lines, styles[VisualRoleTitle].Render(wrapText(label, width)))
-	}
-	if width > 0 && width < 48 {
-		phase := state.currentPhase()
-		if phase.Name != "" {
-			name := stripTerminalControl(phase.Name)
-			lines = append(lines, styles[phaseRole(phase.State)].Render(wrapText(name, width)))
-			if detail := stripTerminalControl(phase.Detail); detail != "" {
-				lines = append(lines, styles[VisualRoleMuted].Render(wrapText(detail, width)))
-			}
-		}
-	} else {
-		for _, phase := range state.phases {
-			role := phaseRole(phase.State)
-			name := stripTerminalControl(phase.Name)
-			lines = append(lines, styles[role].Render(trackedPhasePrefix(phase.State)+" "+wrapText(name, width)))
-			if detail := stripTerminalControl(phase.Detail); detail != "" {
-				lines = append(lines, styles[VisualRoleMuted].Render("  "+wrapText(detail, width)))
-			}
-		}
-	}
-	if state.cancelArmed && !state.cancellationState {
-		lines = append(lines, styles[VisualRoleWarning].Render("Press Esc again to cancel"))
-	}
-	if state.cancellationState {
-		lines = append(lines, styles[VisualRoleError].Render("Cancelling..."))
-	}
-	return strings.Join(lines, "\n")
-}
-
-func (state *trackedState) finalDocument() PresentationDocument {
-	phase := state.currentPhase()
-	if phase.Name == "" {
-		phase.Name = state.label
-	}
-	if state.cancellationState && (phase.State == PhaseActive || phase.State == PhasePending) {
-		phase.State = PhaseCancelled
-	}
-	blocks := []PresentationBlock{{Role: phaseRole(phase.State), Text: phase.Name}}
-	if phase.Detail != "" {
-		blocks = append(blocks, PresentationBlock{Role: VisualRoleMuted, Text: phase.Detail})
-	}
-	return PresentationDocument{Blocks: blocks}
-}
-
 func (state *trackedState) currentPhase() OperationPhase {
 	for index := len(state.phases) - 1; index >= 0; index-- {
 		if state.phases[index].State == PhaseActive || state.phases[index].State == PhasePending {
@@ -226,19 +174,4 @@ func (state *trackedState) currentPhase() OperationPhase {
 		return state.phases[len(state.phases)-1]
 	}
 	return OperationPhase{}
-}
-
-func trackedPhasePrefix(state PhaseState) string {
-	switch state {
-	case PhaseCompleted:
-		return "[done]"
-	case PhaseCancelled:
-		return "[cancelled]"
-	case PhaseFailed:
-		return "[failed]"
-	case PhasePending:
-		return "[pending]"
-	default:
-		return "[active]"
-	}
 }

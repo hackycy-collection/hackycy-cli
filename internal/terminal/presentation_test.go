@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
@@ -82,6 +83,33 @@ func TestWriteRichNoColorContainsNoStyleBytes(t *testing.T) {
 	}
 	if got, want := stdout.String(), "HACKYCY CLI\n"; got != want {
 		t.Fatalf("NO_COLOR rich output = %q, want %q", got, want)
+	}
+}
+
+func TestWriteRichUsesBDurableHierarchyWithoutChangingDocumentOrTerminalMode(t *testing.T) {
+	document := terminal.PresentationDocument{Blocks: []terminal.PresentationBlock{
+		{Role: terminal.VisualRoleTitle, Text: "YCY CONFIG"},
+		{Role: terminal.VisualRoleMuted, Text: "workspace repo"},
+		{Role: terminal.VisualRoleActive, Text: "Commands:"},
+		{Role: terminal.VisualRolePlain, Text: "  list  List profiles"},
+		{Role: terminal.VisualRoleSuccess, Text: "Saved"},
+	}}
+	var stdout bytes.Buffer
+
+	if err := terminal.WriteRich(&stdout, document, terminal.RichOptions{Width: 120, Color: true}); err != nil {
+		t.Fatalf("WriteRich() error = %v", err)
+	}
+	output := stdout.String()
+	if got, want := ansi.Strip(output), terminal.RenderPlain(document); got != want {
+		t.Fatalf("durable content = %q, want %q", got, want)
+	}
+	for _, sequence := range []string{"\x1b[?1049h", "\x1b[?1049l", "\x1b[?1047h", "\x1b[?1047l"} {
+		if strings.Contains(output, sequence) {
+			t.Fatalf("durable Rich output started terminal mode %q: %q", sequence, output)
+		}
+	}
+	if !strings.Contains(output, "\x1b[") {
+		t.Fatalf("durable Rich output has no B hierarchy styling: %q", output)
 	}
 }
 

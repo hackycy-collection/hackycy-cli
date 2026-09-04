@@ -79,12 +79,27 @@ func (runtime *Runtime) Capabilities() Capabilities {
 
 // Open starts a per-command terminal run.
 func (runtime *Runtime) Open(ctx context.Context) ExperienceRun {
+	return runtime.open(ctx, defaultConsoleDescriptor())
+}
+
+// OpenConsole starts a run with command-owned safe Console context. The
+// descriptor is validated before a Rich form, Notice, or Track can begin.
+func (runtime *Runtime) OpenConsole(ctx context.Context, descriptor ConsoleDescriptor) (ExperienceRun, error) {
+	descriptor, err := normalizeConsoleDescriptor(descriptor)
+	if err != nil {
+		return nil, err
+	}
+	return runtime.open(ctx, descriptor), nil
+}
+
+func (runtime *Runtime) open(ctx context.Context, descriptor ConsoleDescriptor) ExperienceRun {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	return &runtimeRun{
 		runtime: runtime,
 		ctx:     ctx,
+		console: descriptor,
 		interactions: NewInteractionHandler(InteractionOptions{
 			Capabilities: runtime.capabilities,
 			Input:        runtime.input,
@@ -104,6 +119,7 @@ type runtimeRun struct {
 	runtime      *Runtime
 	ctx          context.Context
 	interactions *InteractionHandler
+	console      ConsoleDescriptor
 
 	operation        sync.Mutex
 	state            runState
@@ -392,7 +408,7 @@ func (run *runtimeRun) ensureRich() (*richController, error) {
 	if run.controller != nil {
 		return run.controller, nil
 	}
-	controller := newRichController(run.runtime)
+	controller := newRichController(run.runtime, run.console)
 	if err := controller.start(); err != nil {
 		return nil, err
 	}

@@ -33,6 +33,15 @@ func (experience *RecordingExperience) Open(_ context.Context) terminal.Experien
 	return experience.Run
 }
 
+// OpenConsole records no renderer implementation detail and returns the same
+// semantic run after validating the command-owned Console descriptor.
+func (experience *RecordingExperience) OpenConsole(_ context.Context, descriptor terminal.ConsoleDescriptor) (terminal.ExperienceRun, error) {
+	if descriptor.Command == "" {
+		return nil, terminal.ErrInvalidConsoleDescriptor
+	}
+	return experience.Run, nil
+}
+
 // DiagnosticWriter returns a discard sink for semantic tests.
 func (experience *RecordingExperience) DiagnosticWriter() io.Writer {
 	return experience.diagnostics

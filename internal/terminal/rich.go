@@ -10,6 +10,8 @@ import (
 	"sync"
 
 	tea "charm.land/bubbletea/v2"
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 	"golang.org/x/term"
 )
 
@@ -17,6 +19,7 @@ var errRichUnavailable = errors.New("rich terminal is unavailable")
 
 type richController struct {
 	runtime *Runtime
+	console ConsoleDescriptor
 	model   *richRootModel
 	program *tea.Program
 	lease   *RendererLease
@@ -28,8 +31,8 @@ type richController struct {
 	next uint64
 }
 
-func newRichController(runtime *Runtime) *richController {
-	return &richController{runtime: runtime, done: make(chan struct{})}
+func newRichController(runtime *Runtime, console ConsoleDescriptor) *richController {
+	return &richController{runtime: runtime, console: console, done: make(chan struct{})}
 }
 
 func (controller *richController) start() error {
@@ -42,10 +45,11 @@ func (controller *richController) start() error {
 	}
 
 	controller.lease = controller.runtime.diagnostics.AcquireRendererLease()
-	controller.model = newRichRootModel(
+	controller.model = newRichRootModelWithConsole(
 		width,
 		height,
 		controller.runtime.capabilities.Stderr.Color,
+		controller.console,
 	)
 	controller.output = &rendererTerminalWriter{
 		writer:   controller.lease.Writer(),
@@ -194,6 +198,7 @@ func (controller *richController) ask(ctx context.Context, handler *InteractionH
 		id:       id,
 		form:     form,
 		answer:   answer,
+		step:     newConsoleFormStep(id, request),
 		response: response,
 		ack:      ack,
 	}, ack); err != nil {
@@ -337,24 +342,39 @@ const (
 )
 
 type richRootModel struct {
-	width  int
-	height int
-	color  bool
-	mode   richMode
+	width   int
+	height  int
+	color   bool
+	console ConsoleDescriptor
+	mode    richMode
+	// legacyIntro is a bounded compatibility projection for commands that have
+	// not supplied a ConsoleDescriptor yet. It keeps their established safe
+	// command heading observable in the B shell without making Notice history
+	// durable or introducing a second renderer path.
+	legacyIntro *legacyConsoleIntro
 
-	notices  []PresentationDocument
-	formID   uint64
-	form     richFormModel
-	answer   func() InteractionAnswer
-	response chan<- richAskResult
-	track    *trackedState
+	notices         []PresentationDocument
+	formID          uint64
+	form            richFormModel
+	answer          func() InteractionAnswer
+	response        chan<- richAskResult
+	track           *trackedState
+	formRows        []consoleFormStep
+	statusRows      []consoleStatusRow
+	trackRowStart   int
+	trackRowsSynced bool
 }
 
 func newRichRootModel(width, height int, color bool) *richRootModel {
+	return newRichRootModelWithConsole(width, height, color, defaultConsoleDescriptor())
+}
+
+func newRichRootModelWithConsole(width, height int, color bool, console ConsoleDescriptor) *richRootModel {
 	return &richRootModel{
-		width:  width,
-		height: height,
-		color:  color,
+		width:   width,
+		height:  height,
+		color:   color,
+		console: console,
 	}
 }
 
@@ -378,6 +398,7 @@ func (model *richRootModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return model, nil
 	case richNoticeMsg:
+		model.captureLegacyIntro(value.document)
 		model.preserveTrack()
 		if len(value.document.Blocks) > 0 {
 			model.notices = append(model.notices, value.document)
@@ -386,6 +407,7 @@ func (model *richRootModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		close(value.ack)
 		return model, nil
 	case richMilestoneMsg:
+		model.captureLegacyIntro(value.document)
 		model.preserveTrack()
 		if len(value.document.Blocks) > 0 {
 			model.notices = append(model.notices, value.document)
@@ -400,23 +422,34 @@ func (model *richRootModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 		model.form = value.form
 		model.answer = value.answer
 		model.response = value.response
+		step := value.step
+		step.row = len(model.statusRows)
+		model.statusRows = append(model.statusRows, consoleStatusRow{
+			state:  step.state,
+			phase:  step.name,
+			detail: step.detail,
+		})
+		model.formRows = append(model.formRows, step)
 		model.configureForm()
 		close(value.ack)
 		return model, model.form.Init()
 	case richFormSubmittedMsg:
 		if value.id == model.formID && model.form != nil {
+			model.finishFormRow(value.id, PhaseCompleted, "answer captured")
 			model.response <- richAskResult{answer: model.answer()}
 			model.clearForm()
 		}
 		return model, nil
 	case richFormCancelledMsg:
 		if value.id == model.formID && model.form != nil {
+			model.finishFormRow(value.id, PhaseCancelled, "cancelled")
 			model.response <- richAskResult{err: ErrInteractionCancelled}
 			model.clearForm()
 		}
 		return model, nil
 	case richCancelFormMsg:
 		if value.id == model.formID && model.form != nil {
+			model.finishFormRow(value.id, PhaseCancelled, "cancelled")
 			model.response <- richAskResult{err: value.err}
 			model.clearForm()
 		}
@@ -432,11 +465,15 @@ func (model *richRootModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				_ = value.requestCancel()
 			},
 		}
+		model.trackRowStart = len(model.statusRows)
+		model.trackRowsSynced = true
+		model.syncTrackRows()
 		close(value.ack)
 		return model, nil
 	case richTrackPhaseMsg:
 		if model.track != nil {
 			model.track.applyPhase(value.phase)
+			model.syncTrackRows()
 		}
 		close(value.ack)
 		return model, nil
@@ -474,6 +511,7 @@ func (model *richRootModel) Update(message tea.Msg) (tea.Model, tea.Cmd) {
 				model.form = updated.(richFormModel)
 				return model, command
 			}
+			model.finishFormRow(model.formID, PhaseCancelled, "cancelled")
 			model.response <- richAskResult{err: ErrInteractionCancelled}
 			model.clearForm()
 			return model, nil
@@ -492,12 +530,337 @@ func (model *richRootModel) View() tea.View {
 	if model.width <= 0 || model.height <= 0 {
 		return tea.View{AltScreen: true, DisableBracketedPasteMode: true}
 	}
-	parts := make([]string, 0, 2)
-	if notices := model.noticeView(); notices != "" {
-		parts = append(parts, notices)
+	var content string
+	if model.consoleWideLayout() {
+		content = model.consoleWideView()
+	} else {
+		content = model.consoleCompactView()
 	}
+	return tea.View{
+		Content:                   takeFirstLines(content, model.height),
+		AltScreen:                 true,
+		DisableBracketedPasteMode: true,
+	}
+}
 
-	activeHeight := model.formHeight()
+// consoleWideLayout is the production B threshold. The prototype keeps the
+// complete table and active region at 70x20 and above; smaller surfaces use
+// the compact slice until its dedicated renderer is installed.
+func (model *richRootModel) consoleWideLayout() bool {
+	return model.width >= 70 && model.height >= 20
+}
+
+func (model *richRootModel) consoleCompactView() string {
+	styles := richStyles(model.color)
+	inner := max(model.width-4, 1)
+	parts := []string{
+		model.consoleCompactBar(styles, inner),
+	}
+	if metadata := model.consoleMetadataView(styles, inner); metadata != "" {
+		parts = append(parts, metadata)
+	}
+	parts = append(parts, styles[VisualRoleTitle].Render("STATE / PHASE / DETAIL"))
+	for _, row := range model.consoleRows() {
+		parts = append(parts, model.consoleCompactRow(row, inner, styles))
+	}
+	if active := model.consoleActiveView(inner); active != "" {
+		parts = append(parts, "", takeFirstLines(active, model.consoleCompactActiveHeight()))
+	}
+	return lipgloss.NewStyle().Width(inner).Padding(1, 2).Render(strings.Join(parts, "\n"))
+}
+
+func (model *richRootModel) consoleCompactBar(styles map[VisualRole]lipgloss.Style, width int) string {
+	command := model.consoleCommand()
+	if command == "" {
+		command = "YCY"
+	}
+	target := model.console.Target
+	if target == "" {
+		target = "terminal session"
+	}
+	bar := styles[VisualRoleActive].Render(stripTerminalControl(command)) +
+		styles[VisualRoleMuted].Render(" · ") +
+		styles[VisualRolePlain].Render(stripTerminalControl(target)) +
+		styles[VisualRoleMuted].Render(" · ") +
+		styles[VisualRoleActive].Render(model.consoleStatusLabel())
+	return consoleTruncate(bar, width)
+}
+
+func (model *richRootModel) consoleCompactRow(row consoleStatusRow, width int, styles map[VisualRole]lipgloss.Style) string {
+	glyph, label := consoleStateLabel(row.state)
+	state := glyph + " " + label
+	phase := stripTerminalControl(row.phase)
+	detail := stripTerminalControl(row.detail)
+	line := state + " · " + phase
+	if detail != "" {
+		line += " · " + detail
+	}
+	line = wrapText(line, width)
+	return styles[consoleStateRole(row.state)].Render(line)
+}
+
+func (model *richRootModel) consoleCompactActiveHeight() int {
+	reserved := 5 + len(model.consoleRows())
+	return max(model.height-reserved-model.consoleContextHeight(model.formWidth()), 1)
+}
+
+func (model *richRootModel) consoleWideView() string {
+	styles := richStyles(model.color)
+	inner := max(model.width-6, 1)
+	status := model.consoleStatusView(inner, styles)
+	active := model.consoleActiveView(inner)
+	parts := []string{
+		model.consoleBar(styles, inner),
+		model.consoleMetadataView(styles, inner),
+		styles[VisualRoleMuted].Render(strings.Repeat("─", inner)),
+		status,
+	}
+	if active != "" {
+		parts = append(parts, "", takeFirstLines(active, model.consoleActiveHeight()))
+	}
+	return lipgloss.NewStyle().Padding(1, 3).Render(strings.Join(parts, "\n"))
+}
+
+func (model *richRootModel) consoleBar(styles map[VisualRole]lipgloss.Style, width int) string {
+	command := model.consoleCommand()
+	if command == "" {
+		command = "YCY"
+	}
+	target := model.console.Target
+	if target == "" {
+		target = "terminal session"
+	}
+	bar := styles[VisualRoleActive].Render(stripTerminalControl(command)) +
+		styles[VisualRoleMuted].Render("  |  ") +
+		styles[VisualRolePlain].Render(stripTerminalControl(target)) +
+		styles[VisualRoleMuted].Render("  |  ") +
+		styles[VisualRoleActive].Render(model.consoleStatusLabel())
+	return consoleTruncate(bar, width)
+}
+
+func (model *richRootModel) consoleMetadataView(styles map[VisualRole]lipgloss.Style, width int) string {
+	fields := make([]string, 0, len(model.console.Metadata))
+	for _, field := range model.console.Metadata {
+		label := stripTerminalControl(field.Label)
+		value := stripTerminalControl(field.Value)
+		if label == "" || value == "" {
+			continue
+		}
+		fields = append(fields, styles[VisualRoleMuted].Render(label+" ")+styles[VisualRolePlain].Render(value))
+	}
+	legacy := model.legacyIntro
+	if legacy != nil && model.usingDefaultConsoleDescriptor() {
+		intro := legacy.title
+		if legacy.description != "" {
+			if intro != "" {
+				intro += " "
+			}
+			intro += legacy.description
+		}
+		if intro != "" {
+			// The legacy introduction is the only safe context available until
+			// a command supplies a descriptor. Use compact separators so its
+			// established description survives the one-line width bound.
+			fields = append(fields, styles[VisualRoleMuted].Render(intro))
+		}
+	}
+	if len(fields) == 0 {
+		return ""
+	}
+	separator := styles[VisualRoleMuted].Render("    ")
+	if legacy != nil && model.usingDefaultConsoleDescriptor() {
+		separator = styles[VisualRoleMuted].Render(" ")
+	}
+	return consoleTruncate(strings.Join(fields, separator), width)
+}
+
+func (model *richRootModel) usingDefaultConsoleDescriptor() bool {
+	defaultDescriptor := defaultConsoleDescriptor()
+	if model.console.Command != defaultDescriptor.Command || model.console.Target != defaultDescriptor.Target || model.console.Status != defaultDescriptor.Status || len(model.console.Metadata) != len(defaultDescriptor.Metadata) {
+		return false
+	}
+	for index, field := range model.console.Metadata {
+		if field != defaultDescriptor.Metadata[index] {
+			return false
+		}
+	}
+	return true
+}
+
+func (model *richRootModel) consoleCommand() string {
+	if model.legacyIntro != nil && model.usingDefaultConsoleDescriptor() && model.legacyIntro.command != "" {
+		return model.legacyIntro.command
+	}
+	return model.console.Command
+}
+
+func (model *richRootModel) consoleStatusLabel() string {
+	switch model.mode {
+	case richFormMode, richTrackMode:
+		return "ACTIVE"
+	}
+	if model.console.Status != "" {
+		return strings.ToUpper(stripTerminalControl(model.console.Status))
+	}
+	return "READY"
+}
+
+type consoleStatusRow struct {
+	state  PhaseState
+	phase  string
+	detail string
+}
+
+type legacyConsoleIntro struct {
+	command     string
+	title       string
+	description string
+}
+
+// captureLegacyIntro recognizes only the established static introduction
+// shape used by pre-descriptor command adapters. Values are normalized and
+// bounded before they can enter the persistent B shell; arbitrary Notice
+// documents remain transient latest-context content.
+func (model *richRootModel) captureLegacyIntro(document PresentationDocument) {
+	if model.legacyIntro != nil || !model.usingDefaultConsoleDescriptor() || len(document.Blocks) < 3 {
+		return
+	}
+	for _, block := range document.Blocks[:3] {
+		if block.Sensitive {
+			return
+		}
+	}
+	command := legacyIntroField(document.Blocks[0].Text)
+	if !strings.HasPrefix(command, "YCY / ") {
+		return
+	}
+	title := legacyIntroField(document.Blocks[1].Text)
+	description := legacyIntroField(document.Blocks[2].Text)
+	if title == "" || description == "" {
+		return
+	}
+	model.legacyIntro = &legacyConsoleIntro{command: command, title: title, description: description}
+}
+
+func legacyIntroField(value string) string {
+	value = strings.Join(strings.Fields(stripTerminalControl(strings.ToValidUTF8(value, "�"))), " ")
+	if value == "" || len(value) > maxConsoleField {
+		return ""
+	}
+	return value
+}
+
+type consoleFormStep struct {
+	id     uint64
+	name   string
+	detail string
+	state  PhaseState
+	row    int
+}
+
+func newConsoleFormStep(id uint64, request InteractionRequest) consoleFormStep {
+	name := strings.TrimSpace(stripTerminalControl(request.TranscriptLabel))
+	if name == "" {
+		name = strings.TrimSpace(stripTerminalControl(request.Message))
+	}
+	if name == "" {
+		name = "Interaction"
+	}
+	detail := "text input"
+	switch request.Kind {
+	case InteractionSecret:
+		detail = "redacted input"
+	case InteractionSelect:
+		detail = "single selection"
+	case InteractionMultiSelect:
+		detail = "multiple selection"
+	case InteractionConfirm:
+		detail = "confirmation"
+	}
+	if request.Sensitive {
+		detail = "redacted input"
+	}
+	return consoleFormStep{id: id, name: name, detail: detail, state: PhaseActive}
+}
+
+func (model *richRootModel) finishFormRow(id uint64, state PhaseState, detail string) {
+	for index := len(model.formRows) - 1; index >= 0; index-- {
+		if model.formRows[index].id == id {
+			model.formRows[index].state = state
+			model.formRows[index].detail = detail
+			row := model.formRows[index].row
+			if row >= 0 && row < len(model.statusRows) {
+				model.statusRows[row].state = state
+				model.statusRows[row].detail = detail
+			}
+			return
+		}
+	}
+}
+
+func (model *richRootModel) consoleRows() []consoleStatusRow {
+	rows := append([]consoleStatusRow(nil), model.statusRows...)
+	if model.mode == richTrackMode && model.track != nil && !model.trackRowsSynced {
+		for _, phase := range model.track.phases {
+			rows = append(rows, consoleStatusRow{state: phase.State, phase: phase.Name, detail: phase.Detail})
+		}
+	}
+	if model.mode == richTrackMode && model.track != nil && len(model.track.phases) == 0 {
+		return append(rows, consoleStatusRow{state: PhaseActive, phase: model.trackLabel(), detail: "working"})
+	}
+	if len(rows) > 0 {
+		return rows
+	}
+	if len(model.notices) > 0 {
+		return []consoleStatusRow{{state: PhaseActive, phase: "Context", detail: "active command context"}}
+	}
+	return []consoleStatusRow{{state: PhasePending, phase: "Ready", detail: "awaiting command input"}}
+}
+
+// syncTrackRows keeps the one ordered Console table as the visible projection
+// of the active Track catalog. A completed Track stays in that table when the
+// next form or Notice replaces the active region.
+func (model *richRootModel) syncTrackRows() {
+	if model.track == nil {
+		return
+	}
+	for index, phase := range model.track.phases {
+		row := consoleStatusRow{state: phase.State, phase: phase.Name, detail: phase.Detail}
+		rowIndex := model.trackRowStart + index
+		if rowIndex < len(model.statusRows) {
+			model.statusRows[rowIndex] = row
+			continue
+		}
+		model.statusRows = append(model.statusRows, row)
+	}
+}
+
+func (model *richRootModel) trackLabel() string {
+	if model.track == nil || strings.TrimSpace(model.track.label) == "" {
+		return "Work"
+	}
+	return model.track.label
+}
+
+func (model *richRootModel) consoleStatusView(width int, styles map[VisualRole]lipgloss.Style) string {
+	const stateColumnWidth = 12
+	phaseColumnWidth := min(26, max(width-stateColumnWidth, 1))
+	detailColumnWidth := max(width-stateColumnWidth-phaseColumnWidth, 0)
+	rows := []string{
+		styles[VisualRoleTitle].Render(consolePad("STATE", stateColumnWidth) + consolePad("PHASE", phaseColumnWidth) + "DETAIL"),
+	}
+	for _, row := range model.consoleRows() {
+		state, label := consoleStateLabel(row.state)
+		stateText := styles[consoleStateRole(row.state)].Render(consolePad(consoleTruncate(state+" "+label, stateColumnWidth), stateColumnWidth))
+		phaseText := styles[VisualRolePlain].Render(consolePad(consoleTruncate(stripTerminalControl(row.phase), phaseColumnWidth), phaseColumnWidth))
+		detail := styles[VisualRoleMuted].Render(consoleTruncate(stripTerminalControl(row.detail), detailColumnWidth))
+		rows = append(rows, stateText+phaseText+detail)
+	}
+	return lipgloss.NewStyle().Width(width).Render(strings.Join(rows, "\n"))
+}
+
+func (model *richRootModel) consoleActiveView(width int) string {
+	context := model.consoleNoticeContext(width)
 	var active string
 	switch model.mode {
 	case richFormMode:
@@ -506,16 +869,85 @@ func (model *richRootModel) View() tea.View {
 		}
 	case richTrackMode:
 		if model.track != nil {
-			active = model.track.view(model.width, richStyles(model.color))
+			phase := model.track.currentPhase()
+			if phase.Name == "" {
+				phase.Name = model.trackLabel()
+			}
+			parts := make([]string, 0, 4)
+			if label := stripTerminalControl(model.trackLabel()); label != "" && label != phase.Name {
+				parts = append(parts, label)
+			}
+			parts = append(parts, stripTerminalControl(phase.Name))
+			if detail := stripTerminalControl(phase.Detail); detail != "" {
+				parts = append(parts, detail)
+			}
+			if model.track.cancelArmed && !model.track.cancellationState {
+				parts = append(parts, "Press Esc again to cancel")
+			}
+			if model.track.cancellationState {
+				parts = append(parts, "Cancelling...")
+			}
+			active = wrapText(strings.Join(parts, "\n"), width)
 		}
 	}
-	if active != "" {
-		parts = append(parts, takeFirstLines(active, activeHeight))
+	if active == "" {
+		return context
 	}
-	return tea.View{
-		Content:                   takeFirstLines(strings.Join(parts, "\n"), model.height),
-		AltScreen:                 true,
-		DisableBracketedPasteMode: true,
+	if context == "" {
+		return active
+	}
+	return context + "\n" + active
+}
+
+func (model *richRootModel) consoleActiveHeight() int {
+	// One line each for the bar, metadata, divider, table heading, and the
+	// separator before the active region, plus outer vertical padding.
+	reserved := 7 + len(model.consoleRows()) + model.consoleContextHeight(model.formWidth())
+	return max(model.height-reserved, 1)
+}
+
+func consolePad(value string, width int) string {
+	missing := width - lipgloss.Width(value)
+	if missing <= 0 {
+		return value
+	}
+	return value + strings.Repeat(" ", missing)
+}
+
+func consoleTruncate(value string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	return ansi.Truncate(value, width, "…")
+}
+
+func consoleStateLabel(state PhaseState) (string, string) {
+	switch state {
+	case PhaseActive:
+		return "◆", "ACTIVE"
+	case PhaseCompleted:
+		return "✓", "DONE"
+	case PhaseCancelled:
+		return "⊘", "CANCELLED"
+	case PhaseFailed:
+		return "✕", "FAILED"
+	default:
+		return "○", "PENDING"
+	}
+}
+
+func consoleStateRole(state PhaseState) VisualRole {
+	switch state {
+	case PhaseCompleted:
+		return VisualRoleSuccess
+	case PhaseCancelled:
+		return VisualRoleWarning
+	case PhaseFailed:
+		return VisualRoleError
+	case PhaseActive:
+		return VisualRoleActive
+	default:
+		return VisualRoleMuted
 	}
 }
 
@@ -523,54 +955,69 @@ func (model *richRootModel) configureForm() {
 	if model.form == nil {
 		return
 	}
-	model.form.configure(max(model.width, 1), model.formHeight(), !model.compact())
+	model.form.configure(model.formWidth(), model.formHeight(), !model.compact())
 }
 
 func (model *richRootModel) compact() bool {
-	return model.width < 32 || model.height < 8
+	return !model.consoleWideLayout()
+}
+
+func (model *richRootModel) formWidth() int {
+	if model.consoleWideLayout() {
+		return max(model.width-6, 1)
+	}
+	return max(model.width-4, 1)
 }
 
 func (model *richRootModel) formHeight() int {
-	return max(model.height-model.noticeHeight(), 1)
-}
-
-func (model *richRootModel) noticeHeight() int {
-	if model.compact() || len(model.notices) == 0 {
-		return 0
+	if model.consoleWideLayout() {
+		return max(model.consoleActiveHeight(), 5)
 	}
-	return min(lineCount(model.renderNotices()), max(model.height/3, 1))
+	// The root clips the whole compact view to the physical terminal. Huh still
+	// needs enough internal rows to keep filtering and long-list navigation
+	// usable while that small surface is being resized.
+	return max(model.consoleCompactActiveHeight(), 7)
 }
 
-func (model *richRootModel) noticeView() string {
-	height := model.noticeHeight()
-	if height == 0 {
+// consoleNoticeContext keeps only the latest non-empty Notice as transient
+// active-region context. It cannot grow into a second header or push the B
+// status table out of the view.
+func (model *richRootModel) consoleNoticeContext(width int) string {
+	if width <= 0 {
 		return ""
 	}
-	return takeLastLines(model.renderNotices(), height)
-}
-
-func (model *richRootModel) renderNotices() string {
-	parts := make([]string, 0, len(model.notices))
-	for _, document := range model.notices {
-		rendered := strings.TrimSuffix(renderRich(document, RichOptions{
-			Width: model.width,
+	for index := len(model.notices) - 1; index >= 0; index-- {
+		rendered := strings.TrimSuffix(renderRich(model.notices[index], RichOptions{
+			Width: width,
 			Color: model.color,
 		}), "\n")
-		if rendered != "" {
-			parts = append(parts, rendered)
+		if rendered == "" {
+			continue
 		}
+		return takeFirstLines(rendered, min(max(model.height/3, 1), 4))
 	}
-	return strings.Join(parts, "\n")
+	return ""
+}
+
+func (model *richRootModel) consoleContextHeight(width int) int {
+	context := model.consoleNoticeContext(width)
+	if context == "" {
+		return 0
+	}
+	return lineCount(context)
+}
+
+func lineCount(value string) int {
+	if value == "" {
+		return 0
+	}
+	return len(strings.Split(value, "\n"))
 }
 
 func (model *richRootModel) preserveTrack() {
-	if model.track != nil {
-		document := model.track.finalDocument()
-		if len(document.Blocks) > 0 && document.Blocks[0].Text != "" {
-			model.notices = append(model.notices, document)
-		}
-	}
 	model.track = nil
+	model.trackRowStart = len(model.statusRows)
+	model.trackRowsSynced = false
 }
 
 func (model *richRootModel) clearForm() {
@@ -581,13 +1028,6 @@ func (model *richRootModel) clearForm() {
 	model.response = nil
 }
 
-func lineCount(value string) int {
-	if value == "" {
-		return 0
-	}
-	return len(strings.Split(value, "\n"))
-}
-
 func takeFirstLines(value string, count int) string {
 	if count <= 0 || value == "" {
 		return ""
@@ -595,17 +1035,6 @@ func takeFirstLines(value string, count int) string {
 	lines := strings.Split(value, "\n")
 	if len(lines) > count {
 		lines = lines[:count]
-	}
-	return strings.Join(lines, "\n")
-}
-
-func takeLastLines(value string, count int) string {
-	if count <= 0 || value == "" {
-		return ""
-	}
-	lines := strings.Split(value, "\n")
-	if len(lines) > count {
-		lines = lines[len(lines)-count:]
 	}
 	return strings.Join(lines, "\n")
 }
@@ -631,6 +1060,7 @@ type richShowFormMsg struct {
 	id       uint64
 	form     richFormModel
 	answer   func() InteractionAnswer
+	step     consoleFormStep
 	response chan<- richAskResult
 	ack      chan struct{}
 }

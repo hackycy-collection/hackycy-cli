@@ -7,7 +7,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-func TestTrackedTeaModelUsesTheCurrentPhaseOnNarrowTerminals(t *testing.T) {
+func TestTrackedTeaModelRetainsOrderedRowsOnNarrowTerminals(t *testing.T) {
 	cancellations := 0
 	model := newRichRootModel(40, 20, false)
 	model.mode = richTrackMode
@@ -20,11 +20,11 @@ func TestTrackedTeaModelUsesTheCurrentPhaseOnNarrowTerminals(t *testing.T) {
 		t.Fatalf("v2 rich view terminal mode = %#v", rendered)
 	}
 	view := rendered.Content
-	if !strings.Contains(view, "Git Pulse") || !strings.Contains(view, "Fetching commits") || !strings.Contains(view, "workspace/project") {
+	if !strings.Contains(view, "STATE / PHASE / DETAIL") || !strings.Contains(view, "Git Pulse") || !strings.Contains(view, "Fetching commits") || !strings.Contains(view, "workspace/project") {
 		t.Fatalf("narrow view = %q", view)
 	}
-	if strings.Contains(view, "Scanning repositories") {
-		t.Fatalf("narrow view retained completed phase: %q", view)
+	if !strings.Contains(view, "Scanning repositories") || !strings.Contains(view, "✓ DONE") || !strings.Contains(view, "◆ ACTIVE") {
+		t.Fatalf("narrow view did not retain B state rows: %q", view)
 	}
 
 	_, _ = model.Update(tea.KeyPressMsg{Code: tea.KeyEsc})

@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/charmbracelet/x/ansi"
 	"github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
@@ -25,9 +26,11 @@ func TestRichTrackLeavesInlineFinalPhaseBeforeDeferredDiagnosticsAndResult(t *te
 
 	output := runTrackedPTYHelperProcess(t, "TestRichTrackLeavesInlineFinalPhaseBeforeDeferredDiagnosticsAndResult", helperEnvironment, "", func(process *terminaltest.PTYProcess, output *promptBuffer) {
 		waitForTrackedPrompt(t, output, "Scanning repositories")
-		if err := process.Resize(40, 20); err != nil {
+		compactStart := len(output.String())
+		if err := process.Resize(40, 15); err != nil {
 			t.Fatalf("resize narrow PTY: %v", err)
 		}
+		waitForTrackedPromptAfter(t, output, compactStart, "STATE / PHASE / DETAIL")
 		if err := process.Resize(100, 30); err != nil {
 			t.Fatalf("resize wide PTY: %v", err)
 		}
@@ -37,6 +40,7 @@ func TestRichTrackLeavesInlineFinalPhaseBeforeDeferredDiagnosticsAndResult(t *te
 	if countAlternateScreen(output, "h") != 1 || countAlternateScreen(output, "l") != 1 {
 		t.Fatalf("tracked renderer did not own exactly one alternate-screen session: %q", output)
 	}
+	assertBTrackedConsole(t, output, true)
 	final := strings.LastIndex(output, "Fetching commits")
 	deferred := strings.LastIndex(output, "deferred diagnostic")
 	result := strings.LastIndex(output, "durable-result")
@@ -56,6 +60,7 @@ func TestRichTrackHonorsNoColor(t *testing.T) {
 	})
 
 	assertTrackedPTYCleanup(t, output, "durable-result")
+	assertBTrackedConsole(t, output, false)
 	for _, colorPrefix := range []string{"\x1b[3m", "\x1b[9m", "\x1b[38;"} {
 		if strings.Contains(output, colorPrefix) {
 			t.Fatalf("NO_COLOR tracked output contains %q: %q", colorPrefix, output)
@@ -238,15 +243,44 @@ func runTrackedPTYHelperProcess(t *testing.T, testName, helperEnvironment, extra
 }
 
 func waitForTrackedPrompt(t *testing.T, output *promptBuffer, needle string) {
+	waitForTrackedPromptAfter(t, output, 0, needle)
+}
+
+func waitForTrackedPromptAfter(t *testing.T, output *promptBuffer, start int, needle string) {
 	t.Helper()
 	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
-		if strings.Contains(output.String(), needle) {
+		text := output.String()
+		if start <= len(text) && strings.Contains(text[start:], needle) {
 			return
 		}
 		time.Sleep(time.Millisecond)
 	}
 	t.Fatalf("PTY output did not contain %q: %q", needle, output.String())
+}
+
+func assertBTrackedConsole(t *testing.T, output string, color bool) {
+	t.Helper()
+	plain := strings.Join(strings.Fields(ansi.Strip(output)), " ")
+	for _, needle := range []string{
+		"YCY", "terminal session", "mode interactive", "STATE", "PHASE", "DETAIL",
+		"Scanning repositories", "workspace/project", "◆ ACTIVE", "✓ DONE",
+	} {
+		if !strings.Contains(plain, needle) {
+			t.Fatalf("B Track PTY output missing %q: %q", needle, plain)
+		}
+	}
+	for _, generic := range []string{"[active]", "[done]", "│"} {
+		if strings.Contains(plain, generic) {
+			t.Fatalf("B Track PTY output retained %q: %q", generic, plain)
+		}
+	}
+	if color && !strings.Contains(output, "\x1b[38;") {
+		t.Fatalf("colored B Track PTY output has no color style: %q", output)
+	}
+	if !color && strings.Contains(output, "\x1b[38;") {
+		t.Fatalf("NO_COLOR B Track PTY output contains a color style: %q", output)
+	}
 }
 
 func assertTrackedPTYCleanup(t *testing.T, output, marker string) {
