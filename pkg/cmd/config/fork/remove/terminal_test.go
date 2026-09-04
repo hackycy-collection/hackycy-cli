@@ -26,8 +26,8 @@ func TestTerminalForkRemoveAdapterTranslatesSelectionAndConfirmation(t *testing.
 	selected, cancelled, err := adapter.Select(SelectPrompt{
 		Message: "Select instance to remove",
 		Choices: []Choice{
-			{Value: "work", Label: "work (gitlab.example)"},
-			{Value: "personal", Label: "personal (github.example)"},
+			{Value: "work", Label: "work", Description: "gitlab.example"},
+			{Value: "personal", Label: "personal", Description: "github.example"},
 		},
 	})
 	if err != nil || cancelled || selected != "work" {
@@ -46,12 +46,18 @@ func TestTerminalForkRemoveAdapterTranslatesSelectionAndConfirmation(t *testing.
 		t.Fatalf("operations = %#v", operations)
 	}
 	selection := operations[0].Value.(terminalexperience.InteractionRequest)
-	if selection.Kind != terminalexperience.InteractionSelect || selection.Message != "Select instance to remove" || !selection.HasDefault || selection.Default.Value != "work" || !reflect.DeepEqual(selection.Options, []terminalexperience.InteractionOption{{Label: "work (gitlab.example)", Value: "work"}, {Label: "personal (github.example)", Value: "personal"}}) {
+	if selection.Kind != terminalexperience.InteractionSelect || selection.Message != "Select instance to remove" || selection.TranscriptLabel != "Selected instance" || selection.TranscriptProject == nil || !selection.HasDefault || selection.Default.Value != "work" || !reflect.DeepEqual(selection.Options, []terminalexperience.InteractionOption{{Label: "work", Value: "work", Description: "gitlab.example"}, {Label: "personal", Value: "personal", Description: "github.example"}}) {
 		t.Fatalf("selection request = %#v", selection)
 	}
+	if got := selection.TranscriptProject(terminalexperience.InteractionAnswer{Value: "unsafe\nname"}); got != "Selected instance" {
+		t.Fatalf("selection transcript projection = %q", got)
+	}
 	confirmation := operations[1].Value.(terminalexperience.InteractionRequest)
-	if confirmation.Kind != terminalexperience.InteractionConfirm || confirmation.Message != `Remove instance "work"?` || !confirmation.HasDefault || confirmation.Default.Confirmed {
+	if confirmation.Kind != terminalexperience.InteractionConfirm || confirmation.Message != `Remove instance "work"?` || confirmation.TranscriptProject == nil || !confirmation.HasDefault || confirmation.Default.Confirmed {
 		t.Fatalf("confirmation request = %#v", confirmation)
+	}
+	if got := confirmation.TranscriptProject(terminalexperience.InteractionAnswer{Confirmed: true}); got != "" {
+		t.Fatalf("confirmation transcript projection = %q, want empty milestone placeholder", got)
 	}
 }
 
@@ -62,6 +68,12 @@ func TestTerminalForkRemoveAdapterMapsTerminalCancellation(t *testing.T) {
 	value, cancelled, err := adapter.Select(SelectPrompt{Message: "Select instance to remove"})
 	if err != nil || !cancelled || value != "" {
 		t.Fatalf("Select() = (%q, %t, %v)", value, cancelled, err)
+	}
+
+	contextExperience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: context.Canceled})
+	contextAdapter := newTerminalForkRemoveAdapter(contextExperience.Open(context.Background()))
+	if _, cancelled, err := contextAdapter.Confirm(ConfirmPrompt{Message: `Remove instance "work"?`}); !errors.Is(err, context.Canceled) || cancelled {
+		t.Fatalf("context Confirm() = (cancelled=%t, err=%v), want original context error", cancelled, err)
 	}
 }
 
@@ -233,6 +245,161 @@ func TestConfigForkRemovePlainConfirmationAndCancellationPreserveMutationBoundar
 	}
 }
 
+func TestConfigForkRemoveTreatsAlreadyMissingWriteAsSuccess(t *testing.T) {
+	var output, diagnostics bytes.Buffer
+	var names []string
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        strings.NewReader("1\ny\n"),
+		Output:       &output,
+		Diagnostics:  &diagnostics,
+	})
+	result, err := executeRemove(&Options{
+		Context:  context.Background(),
+		Terminal: experience,
+		Store: func() (RemoveReader, RemoveWriter, error) {
+			return forkRemoveReaderFunc(func() ([]appconfig.ForkInstance, error) {
+					return []appconfig.ForkInstance{{Name: "work", Host: "gitlab.example"}}, nil
+				}), forkRemoveWriterFunc(func(name string) (bool, error) {
+					names = append(names, name)
+					return false, nil
+				}), nil
+		},
+	})
+	if err != nil || result != (RemoveResult{}) {
+		t.Fatalf("executeRemove() = (%#v, %v), want success", result, err)
+	}
+	if got, want := names, []string{"work"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("RemoveForkInstance names = %#v, want %#v", got, want)
+	}
+	if got, want := output.String(), "Instance work removed\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	for _, expected := range []string{"Loading fork provider instances...", "Loaded fork provider instances", "Removing provider instance..."} {
+		if !strings.Contains(diagnostics.String(), expected) {
+			t.Fatalf("diagnostics = %q, missing %q", diagnostics.String(), expected)
+		}
+	}
+}
+
+func TestConfigForkRemoveContextCancellationDuringLoadPreservesError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var writes int
+	var output, diagnostics bytes.Buffer
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        panicForkRemoveReader{},
+		Output:       &output,
+		Diagnostics:  &diagnostics,
+	})
+	_, err := executeRemove(&Options{
+		Context:  ctx,
+		Terminal: experience,
+		Store: func() (RemoveReader, RemoveWriter, error) {
+			return forkRemoveReaderFunc(func() ([]appconfig.ForkInstance, error) {
+					cancel()
+					return []appconfig.ForkInstance{{Name: "work", Host: "gitlab.example"}}, nil
+				}), forkRemoveWriterFunc(func(string) (bool, error) {
+					writes++
+					return true, nil
+				}), nil
+		},
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("executeRemove() error = %v, want context cancellation", err)
+	}
+	if writes != 0 || output.Len() != 0 {
+		t.Fatalf("context cancellation mutated/result: writes=%d stdout=%q", writes, output.String())
+	}
+	if got := diagnostics.String(); !strings.Contains(got, "Loading fork provider instances...") || strings.Contains(got, "Loaded fork provider instances") {
+		t.Fatalf("load cancellation diagnostics = %q", got)
+	}
+}
+
+func TestConfigForkRemoveRejectsNilStoreAdapters(t *testing.T) {
+	for _, testCase := range []struct {
+		name  string
+		store StoreProvider
+		want  string
+	}{
+		{name: "reader", store: func() (RemoveReader, RemoveWriter, error) {
+			return nil, forkRemoveWriterFunc(func(string) (bool, error) { return true, nil }), nil
+		}, want: "config fork remove reader is nil"},
+		{name: "writer", store: func() (RemoveReader, RemoveWriter, error) {
+			return forkRemoveReaderFunc(func() ([]appconfig.ForkInstance, error) { return nil, nil }), nil, nil
+		}, want: "config fork remove writer is nil"},
+	} {
+		t.Run(testCase.name, func(t *testing.T) {
+			var output bytes.Buffer
+			experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+				Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+				Output:       &output,
+			})
+			result, err := executeRemove(&Options{Context: context.Background(), Store: testCase.store, Terminal: experience})
+			if err == nil || !strings.Contains(err.Error(), testCase.want) || result != (RemoveResult{}) {
+				t.Fatalf("executeRemove() = (%#v, %v), want %q", result, err, testCase.want)
+			}
+			if output.Len() != 0 {
+				t.Fatalf("nil adapter emitted result: %q", output.String())
+			}
+		})
+	}
+}
+
+func TestForkRemovePhaseSinkTracksLoadAndRemovalSeparately(t *testing.T) {
+	experience := terminaltest.NewRecordingExperience()
+	run := experience.Open(context.Background())
+	sink := newForkRemovePhaseSink(run, terminalexperience.Capabilities{Interaction: terminalexperience.RichInteractive})
+	sink.beginLoad()
+	sink.endLoad(terminalexperience.PhaseCompleted, "Loaded 1 provider instance")
+	sink.beginRemoval()
+	sink.endRemoval(terminalexperience.PhaseCompleted, "Provider instance removed")
+
+	operations := experience.Run.Operations()
+	if len(operations) != 2 || operations[0].Kind != terminaltest.TrackOperation || operations[1].Kind != terminaltest.TrackOperation {
+		t.Fatalf("operations = %#v", operations)
+	}
+	wantCatalog := []terminalexperience.PhaseDefinition{{ID: forkRemoveLoadPhaseID, Name: forkRemoveLoadPhaseName}, {ID: forkRemovePhaseID, Name: forkRemovePhaseName}}
+	for index, operation := range operations {
+		tracked := operation.Value.(terminalexperience.TrackedOperation)
+		if !reflect.DeepEqual(tracked.Phases, wantCatalog) {
+			t.Fatalf("operation %d phase catalog = %#v, want %#v", index, tracked.Phases, wantCatalog)
+		}
+	}
+	first := operations[0].Value.(terminalexperience.TrackedOperation)
+	second := operations[1].Value.(terminalexperience.TrackedOperation)
+	var firstUpdates, secondUpdates []terminalexperience.OperationPhase
+	for update := range first.Updates {
+		firstUpdates = append(firstUpdates, update)
+	}
+	for update := range second.Updates {
+		secondUpdates = append(secondUpdates, update)
+	}
+	if got, want := firstUpdates, []terminalexperience.OperationPhase{{ID: forkRemoveLoadPhaseID, State: terminalexperience.PhaseActive, Detail: "Reading provider configuration"}, {ID: forkRemoveLoadPhaseID, State: terminalexperience.PhaseCompleted, Detail: "Loaded 1 provider instance"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("load updates = %#v, want %#v", got, want)
+	}
+	if got, want := secondUpdates, []terminalexperience.OperationPhase{{ID: forkRemovePhaseID, State: terminalexperience.PhaseActive, Detail: "Deleting stored provider instance"}, {ID: forkRemovePhaseID, State: terminalexperience.PhaseCompleted, Detail: "Provider instance removed"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("removal updates = %#v, want %#v", got, want)
+	}
+}
+
+func TestForkRemoveSafetyProjectionsStripUnsafeHostAndNameValues(t *testing.T) {
+	host := "https://user:password@example.test/path?token=hidden#fragment"
+	if got, want := safeForkRemoveHost(host), "example.test/path"; got != want {
+		t.Fatalf("safeForkRemoveHost() = %q, want %q", got, want)
+	}
+	if got := safeForkRemoveHost("unsafe\nhost"); got != "Host configured" {
+		t.Fatalf("unsafe host projection = %q", got)
+	}
+	if got := safeForkRemoveName("unsafe\nname"); got != "Selected instance" {
+		t.Fatalf("unsafe name projection = %q", got)
+	}
+	if got := forkRemoveSuccessMessage("unsafe\nname"); got != "Instance removed" {
+		t.Fatalf("unsafe success message = %q", got)
+	}
+}
+
 func writeForkRemoveConfig(t *testing.T, home string) string {
 	t.Helper()
 	directory := filepath.Join(home, ".ycy-cli")
@@ -257,6 +424,18 @@ type panicForkRemoveReader struct{}
 
 func (panicForkRemoveReader) Read([]byte) (int, error) {
 	panic("config fork remove attempted to read Automation input")
+}
+
+type forkRemoveReaderFunc func() ([]appconfig.ForkInstance, error)
+
+func (function forkRemoveReaderFunc) ListForkInstances() ([]appconfig.ForkInstance, error) {
+	return function()
+}
+
+type forkRemoveWriterFunc func(string) (bool, error)
+
+func (function forkRemoveWriterFunc) RemoveForkInstance(name string) (bool, error) {
+	return function(name)
 }
 
 func newRemoveOptions(experience *terminalexperience.Runtime) *Options {

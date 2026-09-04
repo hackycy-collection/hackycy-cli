@@ -16,11 +16,24 @@ func newTerminalCMAddAdapter(run terminalexperience.ExperienceRun) *terminalCMAd
 }
 
 func (adapter *terminalCMAddAdapter) Text(question AddTextPrompt) (string, bool, error) {
-	return adapter.ask(terminalexperience.InteractionRequest{Kind: terminalexperience.InteractionText, Message: question.Message, Placeholder: question.Placeholder, Validate: func(answer terminalexperience.InteractionAnswer) error { return question.Validate(answer.Value) }})
+	return adapter.ask(terminalexperience.InteractionRequest{Kind: terminalexperience.InteractionText, Message: question.Message, Placeholder: question.Placeholder, TranscriptLabel: question.Message, TranscriptProject: cmAddTranscriptProject(question.Message), Validate: func(answer terminalexperience.InteractionAnswer) error { return question.Validate(answer.Value) }})
 }
 
 func (adapter *terminalCMAddAdapter) Password(question AddTextPrompt) (string, bool, error) {
-	return adapter.ask(terminalexperience.InteractionRequest{Kind: terminalexperience.InteractionSecret, Message: question.Message, Validate: func(answer terminalexperience.InteractionAnswer) error { return question.Validate(answer.Value) }})
+	return adapter.ask(terminalexperience.InteractionRequest{Kind: terminalexperience.InteractionSecret, Message: question.Message, TranscriptLabel: question.Message, Sensitive: true, Validate: func(answer terminalexperience.InteractionAnswer) error { return question.Validate(answer.Value) }})
+}
+
+func cmAddTranscriptProject(message string) func(terminalexperience.InteractionAnswer) string {
+	switch message {
+	case "Profile name":
+		return func(answer terminalexperience.InteractionAnswer) string { return safeCMAddName(answer.Value) }
+	case "OpenAI-compatible base URL":
+		return func(answer terminalexperience.InteractionAnswer) string { return safeCMAddURL(answer.Value) }
+	case "Model":
+		return func(answer terminalexperience.InteractionAnswer) string { return safeCMAddModel(answer.Value) }
+	default:
+		return nil
+	}
 }
 
 func (adapter *terminalCMAddAdapter) Cancel(message string) {

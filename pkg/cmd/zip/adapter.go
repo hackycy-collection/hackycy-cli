@@ -13,27 +13,6 @@ import (
 
 var errZipRequiresInteractive = errors.New("zip requires an interactive terminal")
 
-func runZIP(options *Options) error {
-	run := options.Terminal.Open(options.Context)
-	defer run.Close()
-	adapter := newTerminalZipAdapter(run)
-	module, err := New(Dependencies{
-		Prompter:           adapter,
-		Presenter:          adapter,
-		RemoteNameResolver: newZipRemoteNameResolver(osZipRemoteOutputRunner{}),
-		Revealer:           newHostZipRevealer(osZipHostCommandRunner{}),
-	})
-	if err != nil {
-		return err
-	}
-	_, err = module.Run(Input{
-		Directory: options.Directory,
-		Open:      options.Open,
-		WithDir:   options.WithDir,
-	})
-	return err
-}
-
 type terminalZipAdapter struct {
 	run terminalexperience.ExperienceRun
 }
@@ -112,6 +91,10 @@ func (adapter *terminalZipAdapter) Outro(message string) {
 	_ = adapter.run.Result(terminalZipDocument(message, terminalexperience.VisualRoleSuccess))
 }
 
+func terminalZipDocument(text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
+	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
+}
+
 func (adapter *terminalZipAdapter) ask(request terminalexperience.InteractionRequest) (terminalexperience.InteractionAnswer, bool, error) {
 	answer, err := adapter.run.Ask(request)
 	if errors.Is(err, terminalexperience.ErrInteractionCancelled) || errors.Is(err, context.Canceled) {
@@ -156,10 +139,6 @@ func zipInteractionOptions(choices []PlanningChoice) []terminalexperience.Intera
 		})
 	}
 	return options
-}
-
-func terminalZipDocument(text string, role terminalexperience.VisualRole) terminalexperience.PresentationDocument {
-	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: role, Text: text}}}
 }
 
 func parseZipSelection(value string, options []terminalexperience.InteractionOption) (terminalexperience.InteractionAnswer, error) {

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/hackycy/hackycy-cli/internal/appconfig"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
 	"github.com/hackycy/hackycy-cli/internal/terminaltest"
 )
@@ -62,6 +63,15 @@ func TestTerminalForkAddAdapterTranslatesTheOrderedForm(t *testing.T) {
 	}
 	first := operations[0].Value.(terminalexperience.InteractionRequest)
 	second := operations[1].Value.(terminalexperience.InteractionRequest)
+	if first.TranscriptProject == nil || second.TranscriptProject == nil {
+		t.Fatal("text requests must have safe transcript projections")
+	}
+	if got := first.TranscriptProject(terminalexperience.InteractionAnswer{Value: "safe"}); got != "safe" {
+		t.Fatalf("alias transcript = %q", got)
+	}
+	if got := second.TranscriptProject(terminalexperience.InteractionAnswer{Value: "https://user:pass@example.test/path?secret=hidden#fragment"}); got != "example.test/path" {
+		t.Fatalf("host transcript = %q", got)
+	}
 	if first.Placeholder != "e.g. work, github, company-gl" || second.Placeholder != "e.g. gitlab.company.com, github.com" {
 		t.Fatalf("text placeholders = (%q, %q)", first.Placeholder, second.Placeholder)
 	}
@@ -201,6 +211,101 @@ func TestConfigForkAddAutomationFailsBeforeReadOrWrite(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".ycy-cli", "config.json")); !os.IsNotExist(err) {
 		t.Fatalf("Automation failure wrote configuration: %v", err)
 	}
+}
+
+func TestRunForkAddCancellationAfterFormDoesNotWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader := &cancelAfterForkAddLines{reader: strings.NewReader("work\ngitlab.example\n1\n1\n"), cancel: cancel, cancelAt: 4}
+	var output, diagnostics bytes.Buffer
+	var writes int
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        reader,
+		Output:       &output,
+		Diagnostics:  &diagnostics,
+	})
+	err := runAdd(&Options{
+		Context:  ctx,
+		Terminal: experience,
+		Store: func() (AddWriter, error) {
+			return forkAddWriterFunc(func(string, appconfig.ForkInput) error {
+				writes++
+				return nil
+			}), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("runAdd() error = %v, want interactive cancellation", err)
+	}
+	if writes != 0 {
+		t.Fatalf("writes = %d, want 0", writes)
+	}
+	if got, want := output.String(), "Cancelled\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if terminaltest.ContainsTerminalControl(append(output.Bytes(), diagnostics.Bytes()...)) {
+		t.Fatalf("cancellation streams contain terminal controls: stdout=%q diagnostics=%q", output.String(), diagnostics.String())
+	}
+}
+
+func TestForkAddPhaseSinkReplaysCollectAndSaveStates(t *testing.T) {
+	experience := terminaltest.NewRecordingExperience()
+	run := experience.Open(context.Background())
+	sink := newForkAddPhaseSink(run, terminalexperience.Capabilities{Interaction: terminalexperience.RichInteractive})
+	sink.beginCollect()
+	sink.endCollect(terminalexperience.PhaseCompleted, "safe summary")
+	sink.beginSave()
+	sink.endSave(terminalexperience.PhaseCompleted, "Provider instance saved")
+
+	operations := experience.Run.Operations()
+	if len(operations) != 1 || operations[0].Kind != terminaltest.TrackOperation {
+		t.Fatalf("operations = %#v", operations)
+	}
+	tracked := operations[0].Value.(terminalexperience.TrackedOperation)
+	if got, want := tracked.Phases, []terminalexperience.PhaseDefinition{{ID: forkAddCollectPhaseID, Name: forkAddCollectPhaseName}, {ID: forkAddSavePhaseID, Name: forkAddSavePhaseName}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("phase catalog = %#v, want %#v", got, want)
+	}
+	var updates []terminalexperience.OperationPhase
+	for update := range tracked.Updates {
+		updates = append(updates, update)
+	}
+	want := []terminalexperience.OperationPhase{
+		{ID: forkAddCollectPhaseID, State: terminalexperience.PhaseActive, Detail: "Answer the five provider fields"},
+		{ID: forkAddCollectPhaseID, State: terminalexperience.PhaseCompleted, Detail: "safe summary"},
+		{ID: forkAddSavePhaseID, State: terminalexperience.PhaseActive, Detail: "Writing encrypted provider configuration"},
+		{ID: forkAddSavePhaseID, State: terminalexperience.PhaseCompleted, Detail: "Provider instance saved"},
+	}
+	if !reflect.DeepEqual(updates, want) {
+		t.Fatalf("phase updates = %#v, want %#v", updates, want)
+	}
+}
+
+type forkAddWriterFunc func(string, appconfig.ForkInput) error
+
+func (function forkAddWriterFunc) SaveForkInstance(name string, input appconfig.ForkInput) error {
+	return function(name, input)
+}
+
+type cancelAfterForkAddLines struct {
+	reader   *strings.Reader
+	cancel   context.CancelFunc
+	lines    int
+	cancelAt int
+}
+
+func (reader *cancelAfterForkAddLines) Read(value []byte) (int, error) {
+	if len(value) == 0 {
+		return 0, nil
+	}
+	n, err := reader.reader.Read(value[:1])
+	if n == 1 && value[0] == '\n' {
+		reader.lines++
+		if reader.lines == reader.cancelAt {
+			reader.cancel()
+		}
+	}
+	return n, err
 }
 
 type panicForkAddReader struct{}

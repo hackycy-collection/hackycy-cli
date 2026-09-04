@@ -138,4 +138,13 @@ func TestInteractionTranscriptProjectionUsesSafeSemanticValues(t *testing.T) {
 	if got := (PresentationDocument{Blocks: []PresentationBlock{{Text: "token", Sensitive: true}, {Text: "safe"}}}).transcriptText(); got != "[redacted] safe" {
 		t.Fatalf("document transcript = %q", got)
 	}
+	projected := InteractionRequest{
+		Kind: InteractionText,
+		TranscriptProject: func(answer InteractionAnswer) string {
+			return "safe:" + answer.Value
+		},
+	}
+	if got := interactionTranscriptText(projected, InteractionAnswer{Value: "original"}); got != "safe:original" {
+		t.Fatalf("custom transcript projection = %q", got)
+	}
 }

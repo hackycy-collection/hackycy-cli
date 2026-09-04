@@ -18,8 +18,18 @@ func newTerminalCMRemoveAdapter(run terminalexperience.ExperienceRun) *terminalC
 }
 
 func (adapter *terminalCMRemoveAdapter) Confirm(question RemoveConfirmPrompt) (bool, bool, error) {
-	answer, err := adapter.run.Ask(terminalexperience.InteractionRequest{Kind: terminalexperience.InteractionConfirm, Message: question.Message, HasDefault: true, Default: terminalexperience.InteractionAnswer{Confirmed: false}})
-	if errors.Is(err, terminalexperience.ErrInteractionCancelled) || errors.Is(err, context.Canceled) {
+	answer, err := adapter.run.Ask(terminalexperience.InteractionRequest{
+		Kind:            terminalexperience.InteractionConfirm,
+		Message:         question.Message,
+		Description:     question.Description,
+		TranscriptLabel: "CM removal confirmation",
+		HasDefault:      true,
+		Default:         terminalexperience.InteractionAnswer{Confirmed: false},
+	})
+	if errors.Is(err, context.Canceled) {
+		return false, false, err
+	}
+	if errors.Is(err, terminalexperience.ErrInteractionCancelled) {
 		return false, true, nil
 	}
 	if errors.Is(err, terminalexperience.ErrAutomationInteraction) {

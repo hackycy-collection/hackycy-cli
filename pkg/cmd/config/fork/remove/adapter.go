@@ -19,8 +19,12 @@ func newTerminalForkRemoveAdapter(run terminalexperience.ExperienceRun) *termina
 
 func (adapter *terminalForkRemoveAdapter) Select(question SelectPrompt) (string, bool, error) {
 	request := terminalexperience.InteractionRequest{
-		Kind:    terminalexperience.InteractionSelect,
-		Message: question.Message,
+		Kind:            terminalexperience.InteractionSelect,
+		Message:         question.Message,
+		TranscriptLabel: "Selected instance",
+		TranscriptProject: func(answer terminalexperience.InteractionAnswer) string {
+			return safeForkRemoveName(answer.Value)
+		},
 		Options: interactionOptions(question.Choices),
 	}
 	if len(question.Choices) > 0 {
@@ -37,6 +41,9 @@ func (adapter *terminalForkRemoveAdapter) Confirm(question ConfirmPrompt) (bool,
 		Message:    question.Message,
 		HasDefault: true,
 		Default:    terminalexperience.InteractionAnswer{Confirmed: false},
+		// The command emits the semantic confirmation milestone after it can
+		// associate the answer with the selected safe instance projection.
+		TranscriptProject: func(terminalexperience.InteractionAnswer) string { return "" },
 	})
 	return answer.Confirmed, cancelled, err
 }
@@ -55,7 +62,10 @@ func (adapter *terminalForkRemoveAdapter) Outcome(message string) {
 
 func (adapter *terminalForkRemoveAdapter) ask(request terminalexperience.InteractionRequest) (terminalexperience.InteractionAnswer, bool, error) {
 	answer, err := adapter.run.Ask(request)
-	if errors.Is(err, terminalexperience.ErrInteractionCancelled) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) {
+		return terminalexperience.InteractionAnswer{}, false, err
+	}
+	if errors.Is(err, terminalexperience.ErrInteractionCancelled) {
 		return terminalexperience.InteractionAnswer{}, true, nil
 	}
 	if errors.Is(err, terminalexperience.ErrAutomationInteraction) {
@@ -70,7 +80,7 @@ func (adapter *terminalForkRemoveAdapter) ask(request terminalexperience.Interac
 func interactionOptions(choices []Choice) []terminalexperience.InteractionOption {
 	options := make([]terminalexperience.InteractionOption, 0, len(choices))
 	for _, choice := range choices {
-		options = append(options, terminalexperience.InteractionOption{Label: choice.Label, Value: choice.Value})
+		options = append(options, terminalexperience.InteractionOption{Label: choice.Label, Value: choice.Value, Description: choice.Description})
 	}
 	return options
 }

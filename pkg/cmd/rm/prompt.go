@@ -7,8 +7,9 @@ import (
 
 // ExplicitConfirmationPrompt describes the default-negative explicit deletion prompt.
 type ExplicitConfirmationPrompt struct {
-	Message string
-	Initial bool
+	Message     string
+	Initial     bool
+	Description string
 }
 
 // SmartActionPrompt describes the first smart-cleanup prompt.

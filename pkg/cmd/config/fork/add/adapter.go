@@ -17,9 +17,16 @@ func newTerminalForkAddAdapter(run terminalexperience.ExperienceRun) *terminalFo
 
 func (adapter *terminalForkAddAdapter) Text(question TextPrompt) (string, bool, error) {
 	return adapter.ask(terminalexperience.InteractionRequest{
-		Kind:        terminalexperience.InteractionText,
-		Message:     question.Message,
-		Placeholder: question.Placeholder,
+		Kind:            terminalexperience.InteractionText,
+		Message:         question.Message,
+		Placeholder:     question.Placeholder,
+		TranscriptLabel: question.Message,
+		TranscriptProject: func(answer terminalexperience.InteractionAnswer) string {
+			if question.Message == "Host" {
+				return safeForkAddHost(answer.Value)
+			}
+			return safeForkAddField(answer.Value, "Instance configured")
+		},
 		Validate: func(answer terminalexperience.InteractionAnswer) error {
 			return question.Validate(answer.Value)
 		},
@@ -28,9 +35,10 @@ func (adapter *terminalForkAddAdapter) Text(question TextPrompt) (string, bool, 
 
 func (adapter *terminalForkAddAdapter) Select(question SelectPrompt) (string, bool, error) {
 	request := terminalexperience.InteractionRequest{
-		Kind:    terminalexperience.InteractionSelect,
-		Message: question.Message,
-		Options: interactionOptions(question.Choices),
+		Kind:            terminalexperience.InteractionSelect,
+		Message:         question.Message,
+		TranscriptLabel: question.Message,
+		Options:         interactionOptions(question.Choices),
 	}
 	if len(question.Choices) > 0 {
 		request.HasDefault = true
@@ -41,8 +49,10 @@ func (adapter *terminalForkAddAdapter) Select(question SelectPrompt) (string, bo
 
 func (adapter *terminalForkAddAdapter) Password(question TextPrompt) (string, bool, error) {
 	return adapter.ask(terminalexperience.InteractionRequest{
-		Kind:    terminalexperience.InteractionSecret,
-		Message: question.Message,
+		Kind:            terminalexperience.InteractionSecret,
+		Message:         question.Message,
+		TranscriptLabel: question.Message,
+		Sensitive:       true,
 		Validate: func(answer terminalexperience.InteractionAnswer) error {
 			return question.Validate(answer.Value)
 		},

@@ -70,6 +70,9 @@ type InteractionRequest struct {
 	PlainPrompt  string
 	// TranscriptLabel is the safe label used for the completed answer marker.
 	TranscriptLabel string
+	// TranscriptProject optionally maps a completed answer to a command-owned,
+	// safe transcript value without changing the value returned to the command.
+	TranscriptProject func(InteractionAnswer) string
 	// Sensitive prevents the request value from entering a Live View or transcript.
 	Sensitive bool
 	// ParsePlain preserves a command-owned established Plain Interactive input grammar.

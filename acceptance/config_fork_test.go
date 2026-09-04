@@ -127,7 +127,7 @@ func TestConfigForkRemoveStandaloneBinary(t *testing.T) {
 	emptyHome := t.TempDir()
 	emptyEnvironment := environmentWith(map[string]string{"HOME": emptyHome, "USERPROFILE": ""})
 	emptyOutput, err := runStandalone(binary, emptyEnvironment, "config", "fork", "remove")
-	if err != nil || string(emptyOutput) != "No instances configured\nNothing to remove\n" {
+	if err != nil || string(emptyOutput) != "Nothing to remove\n" {
 		t.Fatalf("empty removal = (%v, %q)", err, emptyOutput)
 	}
 	if _, err := os.Stat(filepath.Join(emptyHome, ".ycy-cli", "config.json")); !os.IsNotExist(err) {

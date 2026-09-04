@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -54,6 +55,9 @@ func TestTerminalCMAddAdapterTranslatesTheOrderedForm(t *testing.T) {
 		if request.Kind != wantKinds[index] || request.Message != wantMessages[index] {
 			t.Fatalf("request %d = %#v", index, request)
 		}
+		if request.TranscriptProject == nil && request.Kind != terminalexperience.InteractionSecret {
+			t.Fatalf("request %d has no safe transcript projection", index)
+		}
 	}
 	placeholders := []string{"e.g. openai, deepseek, work", "https://api.openai.com/v1", "gpt-4.1-mini"}
 	for index, placeholder := range placeholders {
@@ -69,6 +73,18 @@ func TestTerminalCMAddAdapterTranslatesTheOrderedForm(t *testing.T) {
 	}
 	if operations[4].Kind != terminaltest.CloseOperation {
 		t.Fatalf("last operation = %#v, want close", operations[4])
+	}
+	nameRequest := operations[0].Value.(terminalexperience.InteractionRequest)
+	if got := nameRequest.TranscriptProject(terminalexperience.InteractionAnswer{Value: "safe-name"}); got != "safe-name" {
+		t.Fatalf("name transcript = %q", got)
+	}
+	urlRequest := operations[1].Value.(terminalexperience.InteractionRequest)
+	if got := urlRequest.TranscriptProject(terminalexperience.InteractionAnswer{Value: "https://user:pass@example.test/v1?token=hidden#frag"}); got != "https://example.test/v1" {
+		t.Fatalf("URL transcript = %q", got)
+	}
+	modelRequest := operations[2].Value.(terminalexperience.InteractionRequest)
+	if got := modelRequest.TranscriptProject(terminalexperience.InteractionAnswer{Value: "bad\nmodel"}); got != "Model configured" {
+		t.Fatalf("model transcript = %q", got)
 	}
 }
 
@@ -181,6 +197,101 @@ func TestConfigCMAddAutomationFailsBeforeReadOrWrite(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".ycy-cli", "config.json")); !os.IsNotExist(err) {
 		t.Fatalf("Automation failure wrote configuration: %v", err)
 	}
+}
+
+func TestRunCMAddCancellationAfterFormDoesNotWrite(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	reader := &cancelAfterCMAddLines{reader: strings.NewReader("work\nhttps://provider.example/v1\nmodel\n"), cancel: cancel, cancelAt: 3}
+	var output, diagnostics bytes.Buffer
+	var writes int
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        reader,
+		Output:       &output,
+		Diagnostics:  &diagnostics,
+	})
+	err := runAdd(&Options{
+		Context:  ctx,
+		Terminal: experience,
+		Store: func() (AddWriter, error) {
+			return cmAddWriterFunc(func(string, string, string, string) error {
+				writes++
+				return nil
+			}), nil
+		},
+	})
+	if err != nil {
+		t.Fatalf("runAdd() error = %v, want interactive cancellation", err)
+	}
+	if writes != 0 {
+		t.Fatalf("writes = %d, want 0", writes)
+	}
+	if got, want := output.String(), "Cancelled\n"; got != want {
+		t.Fatalf("stdout = %q, want %q", got, want)
+	}
+	if terminaltest.ContainsTerminalControl(append(output.Bytes(), diagnostics.Bytes()...)) {
+		t.Fatalf("cancellation streams contain terminal controls: stdout=%q diagnostics=%q", output.String(), diagnostics.String())
+	}
+}
+
+func TestCMAddPhaseSinkReplaysCollectAndSaveStates(t *testing.T) {
+	experience := terminaltest.NewRecordingExperience()
+	run := experience.Open(context.Background())
+	sink := newCMAddPhaseSink(run, terminalexperience.Capabilities{Interaction: terminalexperience.RichInteractive})
+	sink.beginCollect()
+	sink.endCollect(terminalexperience.PhaseCompleted, "safe summary")
+	sink.beginSave()
+	sink.endSave(terminalexperience.PhaseCompleted, "Profile saved")
+
+	operations := experience.Run.Operations()
+	if len(operations) != 1 || operations[0].Kind != terminaltest.TrackOperation {
+		t.Fatalf("operations = %#v", operations)
+	}
+	tracked := operations[0].Value.(terminalexperience.TrackedOperation)
+	if got, want := tracked.Phases, []terminalexperience.PhaseDefinition{{ID: cmAddCollectPhaseID, Name: cmAddCollectPhaseName}, {ID: cmAddSavePhaseID, Name: cmAddSavePhaseName}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("phase catalog = %#v, want %#v", got, want)
+	}
+	var updates []terminalexperience.OperationPhase
+	for update := range tracked.Updates {
+		updates = append(updates, update)
+	}
+	want := []terminalexperience.OperationPhase{
+		{ID: cmAddCollectPhaseID, State: terminalexperience.PhaseActive, Detail: "Answer the four profile fields"},
+		{ID: cmAddCollectPhaseID, State: terminalexperience.PhaseCompleted, Detail: "safe summary"},
+		{ID: cmAddSavePhaseID, State: terminalexperience.PhaseActive, Detail: "Writing encrypted profile"},
+		{ID: cmAddSavePhaseID, State: terminalexperience.PhaseCompleted, Detail: "Profile saved"},
+	}
+	if !reflect.DeepEqual(updates, want) {
+		t.Fatalf("phase updates = %#v, want %#v", updates, want)
+	}
+}
+
+type cmAddWriterFunc func(string, string, string, string) error
+
+func (function cmAddWriterFunc) AddCMProfile(name, baseURL, model, apiKey string) error {
+	return function(name, baseURL, model, apiKey)
+}
+
+type cancelAfterCMAddLines struct {
+	reader   *strings.Reader
+	cancel   context.CancelFunc
+	lines    int
+	cancelAt int
+}
+
+func (reader *cancelAfterCMAddLines) Read(value []byte) (int, error) {
+	if len(value) == 0 {
+		return 0, nil
+	}
+	n, err := reader.reader.Read(value[:1])
+	if n == 1 && value[0] == '\n' {
+		reader.lines++
+		if reader.lines == reader.cancelAt {
+			reader.cancel()
+		}
+	}
+	return n, err
 }
 
 type panicCMAddReader struct{}

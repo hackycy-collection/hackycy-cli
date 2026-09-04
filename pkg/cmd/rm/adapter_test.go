@@ -135,8 +135,8 @@ func TestRMAutomationPreservesForceAndNoTargetPathsAndFailsPromptPathsBeforeEffe
 		wantOut   string
 		wantError error
 	}{
-		{name: "force explicit", input: Input{Paths: []string{"forced.txt"}, Force: true}, wantOut: "Done!\n"},
-		{name: "missing explicit", input: Input{Paths: []string{"missing.txt"}}, wantOut: "No valid paths to delete.\n"},
+		{name: "force explicit", input: Input{Paths: []string{"forced.txt"}, Force: true}, wantOut: "Deleted 1 item\nDone!\n"},
+		{name: "missing explicit", input: Input{Paths: []string{"missing.txt"}}, wantOut: "  not found, skipping: missing.txt\nNo valid paths to delete.\n"},
 		{name: "explicit confirmation", input: Input{Paths: []string{"prompt.txt"}}, wantError: errRMRequiresInteractive},
 		{name: "smart selection", input: Input{}, wantError: errRMRequiresInteractive},
 	} {

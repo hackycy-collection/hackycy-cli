@@ -4,7 +4,8 @@ import "fmt"
 
 // RemoveConfirmPrompt describes the confirmation preceding a CM profile removal.
 type RemoveConfirmPrompt struct {
-	Message string
+	Message     string
+	Description string
 }
 
 // RemoveConfirmationPrompter confirms one requested CM profile removal.

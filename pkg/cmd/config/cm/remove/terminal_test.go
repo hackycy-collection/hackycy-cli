@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -50,6 +51,11 @@ func TestTerminalCMRemoveAdapterMapsCancellationAndAutomation(t *testing.T) {
 	automationAdapter := newTerminalCMRemoveAdapter(automationExperience.Open(context.Background()))
 	if _, _, err := automationAdapter.Confirm(RemoveConfirmPrompt{Message: "Remove CM profile \"work\"?"}); !errors.Is(err, errConfigCMRemoveRequiresInteractive) {
 		t.Fatalf("Automation Confirm() error = %v", err)
+	}
+	contextExperience := terminaltest.NewRecordingExperience(terminaltest.SemanticAnswer{Err: context.Canceled})
+	contextAdapter := newTerminalCMRemoveAdapter(contextExperience.Open(context.Background()))
+	if _, cancelled, err := contextAdapter.Confirm(RemoveConfirmPrompt{Message: "Remove CM profile \"work\"?"}); !errors.Is(err, context.Canceled) || cancelled {
+		t.Fatalf("context Confirm() = (cancelled=%t, err=%v), want original context error", cancelled, err)
 	}
 }
 
@@ -194,6 +200,86 @@ func TestConfigCMRemovePlainConfirmationAndCancellationPreserveMutationBoundary(
 			}
 		})
 	}
+}
+
+func TestConfigCMRemoveContextCancellationDuringValidationPreservesError(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var writes int
+	var output, diagnostics bytes.Buffer
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Input:        panicCMRemoveReader{},
+		Output:       &output,
+		Diagnostics:  &diagnostics,
+	})
+	options := &Options{
+		Context:  ctx,
+		Profile:  "work",
+		Terminal: experience,
+		Store: func() (Reader, RemoveWriter, error) {
+			return cmRemoveReaderFunc(func() (appconfig.CMProfileList, error) {
+					cancel()
+					return appconfig.CMProfileList{DefaultProfile: "work", Profiles: []appconfig.CMProfile{{Name: "work"}}}, nil
+				}), cmRemoveWriterFunc(func(string) (bool, error) {
+					writes++
+					return true, nil
+				}), nil
+		},
+	}
+	_, err := executeRemove(options)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("executeRemove() error = %v, want context cancellation", err)
+	}
+	if writes != 0 || output.Len() != 0 {
+		t.Fatalf("context cancellation wrote state/result: writes=%d stdout=%q", writes, output.String())
+	}
+}
+
+func TestCMRemovePhaseSinkTracksValidationAndRemovalSeparately(t *testing.T) {
+	experience := terminaltest.NewRecordingExperience()
+	run := experience.Open(context.Background())
+	sink := newCMRemovePhaseSink(run, terminalexperience.Capabilities{Interaction: terminalexperience.RichInteractive})
+	sink.beginValidation()
+	sink.endValidation(terminalexperience.PhaseCompleted, "safe validation")
+	sink.beginRemoval()
+	sink.endRemoval(terminalexperience.PhaseCompleted, "Profile removed")
+
+	operations := experience.Run.Operations()
+	if len(operations) != 2 || operations[0].Kind != terminaltest.TrackOperation || operations[1].Kind != terminaltest.TrackOperation {
+		t.Fatalf("operations = %#v", operations)
+	}
+	first := operations[0].Value.(terminalexperience.TrackedOperation)
+	second := operations[1].Value.(terminalexperience.TrackedOperation)
+	wantCatalog := []terminalexperience.PhaseDefinition{{ID: cmRemoveValidationPhaseID, Name: cmRemoveValidationPhaseName}, {ID: cmRemovePhaseID, Name: cmRemovePhaseName}}
+	if !reflect.DeepEqual(first.Phases, wantCatalog) || !reflect.DeepEqual(second.Phases, wantCatalog) {
+		t.Fatalf("phase catalogs = %#v / %#v", first.Phases, second.Phases)
+	}
+	var firstUpdates, secondUpdates []terminalexperience.OperationPhase
+	for update := range first.Updates {
+		firstUpdates = append(firstUpdates, update)
+	}
+	for update := range second.Updates {
+		secondUpdates = append(secondUpdates, update)
+	}
+	if !reflect.DeepEqual(firstUpdates, []terminalexperience.OperationPhase{{ID: cmRemoveValidationPhaseID, State: terminalexperience.PhaseActive, Detail: "Checking profile"}, {ID: cmRemoveValidationPhaseID, State: terminalexperience.PhaseCompleted, Detail: "safe validation"}}) {
+		t.Fatalf("validation updates = %#v", firstUpdates)
+	}
+	if !reflect.DeepEqual(secondUpdates, []terminalexperience.OperationPhase{{ID: cmRemovePhaseID, State: terminalexperience.PhaseActive, Detail: "Deleting stored profile"}, {ID: cmRemovePhaseID, State: terminalexperience.PhaseCompleted, Detail: "Profile removed"}}) {
+		t.Fatalf("removal updates = %#v", secondUpdates)
+	}
+}
+
+type cmRemoveReaderFunc func() (appconfig.CMProfileList, error)
+
+func (function cmRemoveReaderFunc) ListCMProfiles() (appconfig.CMProfileList, error) {
+	return function()
+}
+
+type cmRemoveWriterFunc func(string) (bool, error)
+
+func (function cmRemoveWriterFunc) RemoveCMProfile(name string) (bool, error) {
+	return function(name)
 }
 
 func writeCMRemoveConfig(t *testing.T, home string) string {

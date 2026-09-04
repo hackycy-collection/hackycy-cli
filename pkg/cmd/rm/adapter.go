@@ -3,6 +3,7 @@ package rm
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -11,27 +12,6 @@ import (
 )
 
 var errRMRequiresInteractive = errors.New("rm requires an interactive terminal")
-
-func runRM(options *Options) error {
-	run := options.Terminal.Open(options.Context)
-	defer run.Close()
-	adapter := newTerminalRMAdapter(run)
-	module, err := New(Dependencies{
-		WorkingDirectory: options.WorkingDirectory,
-		Prompter:         adapter,
-		Remover:          options.Remover,
-		Presenter:        adapter,
-	})
-	if err != nil {
-		return err
-	}
-	_, err = module.Run(options.Context, Input{
-		Paths: options.Paths,
-		Force: options.Force,
-		Depth: options.Depth,
-	})
-	return err
-}
 
 type terminalRMAdapter struct {
 	run terminalexperience.ExperienceRun
@@ -43,27 +23,38 @@ func newTerminalRMAdapter(run terminalexperience.ExperienceRun) *terminalRMAdapt
 
 func (adapter *terminalRMAdapter) ConfirmExplicit(prompt ExplicitConfirmationPrompt) (bool, bool, error) {
 	answer, cancelled, err := adapter.ask(terminalexperience.InteractionRequest{
-		Kind:        terminalexperience.InteractionConfirm,
-		Message:     prompt.Message,
-		HasDefault:  true,
-		Default:     terminalexperience.InteractionAnswer{Confirmed: prompt.Initial},
-		PlainPrompt: prompt.Message + " [y/N]: ",
-		ParsePlain:  parseRMConfirmation,
+		Kind:            terminalexperience.InteractionConfirm,
+		Message:         prompt.Message,
+		Description:     prompt.Description,
+		TranscriptLabel: "Deletion confirmation",
+		HasDefault:      true,
+		Default:         terminalexperience.InteractionAnswer{Confirmed: prompt.Initial},
+		PlainPrompt:     prompt.Message + " [y/N]: ",
+		ParsePlain:      parseRMConfirmation,
 	})
 	return answer.Confirmed, cancelled, err
 }
 
 func (adapter *terminalRMAdapter) SelectSmartAction(prompt SmartActionPrompt) (SmartAction, bool, error) {
 	request := terminalexperience.InteractionRequest{
-		Kind:         terminalexperience.InteractionSelect,
-		Message:      prompt.Message,
-		PlainLead:    prompt.Message,
-		PlainPrompt:  "> ",
-		Options:      rmSmartActionOptions(prompt.Options),
-		CancelValues: []string{"q", "quit", "cancel"},
+		Kind:            terminalexperience.InteractionSelect,
+		Message:         prompt.Message,
+		PlainLead:       prompt.Message,
+		PlainPrompt:     "> ",
+		TranscriptLabel: "Cleanup action",
+		Options:         rmSmartActionOptions(prompt.Options),
+		CancelValues:    []string{"q", "quit", "cancel"},
 		ParsePlain: func(value string) (terminalexperience.InteractionAnswer, error) {
 			return parseRMSmartAction(value, prompt.Options)
 		},
+	}
+	request.TranscriptProject = func(answer terminalexperience.InteractionAnswer) string {
+		for _, option := range prompt.Options {
+			if option.ID == answer.Value {
+				return safeRMText(option.Label)
+			}
+		}
+		return "Cleanup action"
 	}
 	if len(prompt.Options) > 0 {
 		request.HasDefault = true
@@ -83,10 +74,14 @@ func (adapter *terminalRMAdapter) SelectSmartAction(prompt SmartActionPrompt) (S
 
 func (adapter *terminalRMAdapter) SelectSmartTargets(prompt SmartTargetPrompt) ([]string, bool, error) {
 	answer, cancelled, err := adapter.ask(terminalexperience.InteractionRequest{
-		Kind:         terminalexperience.InteractionMultiSelect,
-		Message:      prompt.Message,
-		PlainLead:    prompt.Message,
-		PlainPrompt:  "> ",
+		Kind:            terminalexperience.InteractionMultiSelect,
+		Message:         prompt.Message,
+		PlainLead:       prompt.Message,
+		PlainPrompt:     "> ",
+		TranscriptLabel: "Selected targets",
+		TranscriptProject: func(answer terminalexperience.InteractionAnswer) string {
+			return rmTargetTranscript(prompt.Options, answer.Values)
+		},
 		Options:      rmSmartTargetOptions(prompt.Options),
 		HasDefault:   true,
 		Default:      terminalexperience.InteractionAnswer{Values: append([]string(nil), prompt.InitialValues...)},
@@ -142,7 +137,10 @@ func (adapter *terminalRMAdapter) Outro(message string) {
 
 func (adapter *terminalRMAdapter) ask(request terminalexperience.InteractionRequest) (terminalexperience.InteractionAnswer, bool, error) {
 	answer, err := adapter.run.Ask(request)
-	if errors.Is(err, terminalexperience.ErrInteractionCancelled) || errors.Is(err, context.Canceled) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return terminalexperience.InteractionAnswer{}, false, err
+	}
+	if errors.Is(err, terminalexperience.ErrInteractionCancelled) {
 		return terminalexperience.InteractionAnswer{}, true, nil
 	}
 	if errors.Is(err, terminalexperience.ErrAutomationInteraction) {
@@ -169,9 +167,34 @@ func rmSmartActionOptions(actions []SmartAction) []terminalexperience.Interactio
 func rmSmartTargetOptions(targets []SmartTargetChoice) []terminalexperience.InteractionOption {
 	options := make([]terminalexperience.InteractionOption, 0, len(targets))
 	for _, target := range targets {
-		options = append(options, terminalexperience.InteractionOption{Label: target.Label, Value: target.Value})
+		options = append(options, terminalexperience.InteractionOption{Label: safeRMPathLabel(target.Label), Value: target.Value})
 	}
 	return options
+}
+
+func rmTargetTranscript(options []SmartTargetChoice, values []string) string {
+	const maxTargets = 8
+	labels := make([]string, 0, minInt(len(values), maxTargets))
+	for index, value := range values {
+		if index >= maxTargets {
+			break
+		}
+		label := "path"
+		for _, option := range options {
+			if option.Value == value {
+				label = safeRMPathLabel(option.Label)
+				break
+			}
+		}
+		labels = append(labels, label)
+	}
+	if len(values) > maxTargets {
+		labels = append(labels, fmt.Sprintf("+%d more", len(values)-maxTargets))
+	}
+	if len(labels) == 0 {
+		return "none"
+	}
+	return strings.Join(labels, ", ")
 }
 
 func parseRMConfirmation(value string) (terminalexperience.InteractionAnswer, error) {

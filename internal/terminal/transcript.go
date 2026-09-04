@@ -238,6 +238,9 @@ func interactionTranscriptText(request InteractionRequest, answer InteractionAns
 	if request.Sensitive || request.Kind == InteractionSecret {
 		return "[redacted]"
 	}
+	if request.TranscriptProject != nil {
+		return request.TranscriptProject(answer)
+	}
 	switch request.Kind {
 	case InteractionSelect:
 		for _, option := range request.Options {

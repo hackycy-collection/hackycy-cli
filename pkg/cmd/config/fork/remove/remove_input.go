@@ -4,8 +4,9 @@ import "github.com/hackycy/hackycy-cli/internal/appconfig"
 
 // Choice is one terminal-selectable removal option.
 type Choice struct {
-	Value string
-	Label string
+	Value       string
+	Label       string
+	Description string
 }
 
 // SelectPrompt describes the removal selection question.
