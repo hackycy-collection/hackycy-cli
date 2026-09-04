@@ -67,6 +67,23 @@ func terminalCMListSummaryDocument(result Result) terminalexperience.Presentatio
 	}}}
 }
 
+func terminalCMListDefaultDocument(result Result) terminalexperience.PresentationDocument {
+	for _, profile := range result.Profiles {
+		if !profile.Default || !cmListValueSafe(profile.Name) {
+			continue
+		}
+		name := strings.TrimSpace(safeCMListText(profile.Name))
+		if name == "" {
+			continue
+		}
+		return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
+			Role: terminalexperience.VisualRoleMuted,
+			Text: "Default profile: " + name,
+		}}}
+	}
+	return terminalexperience.PresentationDocument{}
+}
+
 func terminalCMListEmptyDocument() terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{
 		Role: terminalexperience.VisualRoleWarning,

@@ -1,8 +1,10 @@
 package root
 
 import (
+	"bytes"
 	"context"
 	"reflect"
+	"strings"
 	"testing"
 
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
@@ -39,12 +41,52 @@ func TestTerminalDiscoveryPresenterTranslatesAndClosesOneExperienceRun(t *testin
 	want := terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{
 		{Role: terminalexperience.VisualRoleTitle, Text: "ycy config"},
 		{Role: terminalexperience.VisualRoleMuted, Text: "Manage ycy configuration"},
-		{Role: terminalexperience.VisualRolePlain, Text: "Usage:\n  ycy config [flags]"},
-		{Role: terminalexperience.VisualRoleActive, Text: "Commands:\n  cm\tManage CM profiles"},
-		{Role: terminalexperience.VisualRolePlain, Text: "Flags:\n  --log-level\tLog level"},
-		{Role: terminalexperience.VisualRolePlain, Text: "Examples:\nycy config --help"},
+		{Role: terminalexperience.VisualRoleActive, Text: "Usage:"},
+		{Role: terminalexperience.VisualRolePlain, Text: "  ycy config [flags]"},
+		{Role: terminalexperience.VisualRoleActive, Text: "Commands:"},
+		{Role: terminalexperience.VisualRolePlain, Text: "  cm\tManage CM profiles"},
+		{Role: terminalexperience.VisualRoleActive, Text: "Flags:"},
+		{Role: terminalexperience.VisualRolePlain, Text: "  --log-level\tLog level"},
+		{Role: terminalexperience.VisualRoleActive, Text: "Examples:"},
+		{Role: terminalexperience.VisualRolePlain, Text: "ycy config --help"},
 	}}
 	if !reflect.DeepEqual(document, want) {
 		t.Fatalf("document = %#v, want %#v", document, want)
+	}
+}
+
+func TestTerminalDiscoveryDocumentUsesBDurableHierarchyWithoutChangingContent(t *testing.T) {
+	document := terminalDiscoveryDocument(DiscoveryDocument{
+		CommandPath: "ycy config",
+		Summary:     "Manage ycy configuration",
+		Usage:       "ycy config [flags]",
+		Descendants: []DiscoveryDescendant{{Name: "cm", Summary: "Manage CM profiles"}},
+		Flags:       []DiscoveryFlag{{Name: "log-level", Usage: "Log level"}},
+		Examples:    []string{"ycy config --help"},
+	})
+	const want = "ycy config\nManage ycy configuration\nUsage:\n  ycy config [flags]\nCommands:\n  cm\tManage CM profiles\nFlags:\n  --log-level\tLog level\nExamples:\nycy config --help\n"
+	if got := terminalexperience.RenderPlain(document); got != want {
+		t.Fatalf("plain document = %q, want %q", got, want)
+	}
+
+	var colored bytes.Buffer
+	if err := terminalexperience.WriteRich(&colored, document, terminalexperience.RichOptions{Width: 120, Color: true}); err != nil {
+		t.Fatalf("WriteRich() error = %v", err)
+	}
+	if !strings.Contains(colored.String(), "\x1b[") {
+		t.Fatalf("colored durable document omitted B hierarchy styling: %q", colored.String())
+	}
+	for _, field := range []string{"ycy config", "Manage ycy configuration", "Usage:", "ycy config [flags]", "Commands:", "cm", "Manage CM profiles", "Flags:", "--log-level", "Log level", "Examples:", "ycy config --help"} {
+		if !strings.Contains(terminaltest.StripANSI(colored.String()), field) {
+			t.Fatalf("colored durable document omitted %q: %q", field, colored.String())
+		}
+	}
+
+	var noColor bytes.Buffer
+	if err := terminalexperience.WriteRich(&noColor, document, terminalexperience.RichOptions{Width: 40, Color: false}); err != nil {
+		t.Fatalf("WriteRich() no-color error = %v", err)
+	}
+	if terminaltest.ContainsTerminalControl(noColor.Bytes()) {
+		t.Fatalf("no-color durable document contains terminal control: %q", noColor.String())
 	}
 }

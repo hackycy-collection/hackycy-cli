@@ -3,6 +3,7 @@ package use
 import (
 	"bytes"
 	"context"
+	"reflect"
 	"testing"
 
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
@@ -69,5 +70,20 @@ func TestTerminalCMUseRichProjectionHidesUnsafeProfileIdentity(t *testing.T) {
 		if got := document.Blocks[len(document.Blocks)-1].Text; got != "Default CM profile set to Requested profile" {
 			t.Fatalf("profile %q Rich result = %q", profile, got)
 		}
+	}
+}
+
+func TestCMUseConsoleDescriptorProvidesOnlySafeStaticContext(t *testing.T) {
+	want := terminalexperience.ConsoleDescriptor{
+		Command: "YCY / config cm use",
+		Target:  "profile selection",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{{
+			Label: "scope",
+			Value: "commit message configuration",
+		}},
+	}
+	if got := cmUseConsoleDescriptor(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Console descriptor = %#v, want %#v", got, want)
 	}
 }

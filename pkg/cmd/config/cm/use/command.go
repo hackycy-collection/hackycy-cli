@@ -53,7 +53,10 @@ func executeUse(options *Options) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, cmUseConsoleDescriptor())
+	if err != nil {
+		return err
+	}
 	defer run.Close()
 
 	caps := options.Terminal.Capabilities()
@@ -82,7 +85,7 @@ func executeUse(options *Options) error {
 				Updates: updates,
 			})
 		}()
-		updates <- terminalexperience.OperationPhase{ID: cmUsePhaseID, State: terminalexperience.PhaseActive, Detail: "Checking profile and saving selection"}
+		updates <- terminalexperience.OperationPhase{ID: cmUsePhaseID, State: terminalexperience.PhaseActive, Detail: "Checking profile and saving selection · Profile: " + safeCMUseProfile(options.Profile)}
 	}
 
 	result, workErr := func() (UseResult, error) {
@@ -125,6 +128,18 @@ const (
 	cmUsePhaseID   = "set-default-cm-profile"
 	cmUsePhaseName = "Set default CM profile"
 )
+
+func cmUseConsoleDescriptor() terminalexperience.ConsoleDescriptor {
+	return terminalexperience.ConsoleDescriptor{
+		Command: "YCY / config cm use",
+		Target:  "profile selection",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{{
+			Label: "scope",
+			Value: "commit message configuration",
+		}},
+	}
+}
 
 func terminalCMUseDocument(result UseResult) terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleSuccess, Text: fmt.Sprintf("Default CM profile set to %s", result.Profile)}}}

@@ -121,6 +121,21 @@ func TestTerminalForkListRichProjectionHidesUnsafeFields(t *testing.T) {
 	}
 }
 
+func TestForkListConsoleDescriptorProvidesOnlySafeStaticContext(t *testing.T) {
+	want := terminalexperience.ConsoleDescriptor{
+		Command: "YCY / config fork list",
+		Target:  "provider inventory",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{{
+			Label: "scope",
+			Value: "git fork configuration",
+		}},
+	}
+	if got := forkListConsoleDescriptor(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Console descriptor = %#v, want %#v", got, want)
+	}
+}
+
 func environmentWith(overrides map[string]string) []string {
 	environment := make([]string, 0, len(os.Environ())+len(overrides))
 	for _, entry := range os.Environ() {

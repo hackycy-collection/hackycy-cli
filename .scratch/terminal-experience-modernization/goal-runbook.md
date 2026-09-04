@@ -70,8 +70,8 @@
 | Gate | Status | Depends on | Plan contract | Unlock evidence |
 | --- | --- | --- | --- | --- |
 | G0: Production B Ops Console foundation | passed | none | `implementation-plan.md` -> `G0: Production B Ops Console foundation` | exit conditions 1-5 verified 2026-09-04 |
-| G1: Root and low-risk finite recovery | active | G0 | `implementation-plan.md` -> `G1: Root and low-risk finite recovery` | G0 passed 2026-09-04 |
-| G2: External-read and service-boundary recovery | planned | G1 | `implementation-plan.md` -> `G2: External-read and service-boundary recovery` | G1 pending |
+| G1: Root and low-risk finite recovery | passed | G0 | `implementation-plan.md` -> `G1: Root and low-risk finite recovery` | exit conditions 1-4 verified 2026-09-04 |
+| G2: External-read and service-boundary recovery | active | G1 | `implementation-plan.md` -> `G2: External-read and service-boundary recovery` | G1 passed 2026-09-04 |
 | G3: Mutation and archive recovery | planned | G2 | `implementation-plan.md` -> `G3: Mutation and archive recovery` | G2 pending |
 | G4: Git mutation and process handoff | planned | G3 | `implementation-plan.md` -> `G4: Git mutation and process handoff` | G3 pending |
 | G5: Service lifecycles and detached updater | planned | G4 | `implementation-plan.md` -> `G5: Service lifecycles and detached updater` | G4 pending |
@@ -237,9 +237,213 @@
 - 2026-09-04: initialized as `planned`; no recovery implementation evidence.
 - 2026-09-04: 已激活，尚未开始实施。
 
+- 2026-09-04: completed slice `root/help durable B hierarchy`. The discovery
+  adapter now assigns the B active hierarchy role to the durable `Usage`,
+  `Commands`, `Flags`, and `Examples` headings while leaving every command,
+  flag, example, order, and Plain/Automation byte intact. The root remains a
+  direct stdout document with no Console start, AltScreen, or Transcript.
+  Modified: `pkg/cmd/root/{terminal_discovery.go,terminal_discovery_test.go}`.
+  Verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  -count=1 ./pkg/cmd/root` passed; the focused test verifies exact Plain
+  content, colored B roles, and control-free no-color output alongside the
+  existing version, completion, parser, and write-failure coverage. Risk:
+  command-specific Rich PTY evidence for the remaining finite adapters is
+  still absent. Next action: migrate only `config fork list` to an explicit
+  safe Console descriptor and add its structural evidence.
+
+- 2026-09-04: completed slice `config fork list descriptor/context`. The
+  command now opens the frozen G0 Console seam with its own bounded context:
+  `YCY / config fork list`, `provider inventory`, and the static scope `git
+  fork configuration`. It does not place instance names, hosts, token previews,
+  paths, or configuration data in the B bar/metadata row. Read ordering,
+  loading phase, result documents, Plain/Automation behavior, and Transcript
+  projection are unchanged. Modified: `pkg/cmd/config/fork/list/{command.go,
+  terminal_test.go}`. Verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off
+  CGO_ENABLED=0 go test -count=1 ./pkg/cmd/config/fork/list` passed. Risk:
+  this command still needs fresh wide/compact color/no-color Rich PTY evidence.
+  Next action: add only that PTY/stream evidence.
+
+- 2026-09-04: completed slice `config fork list Rich PTY and stream evidence`.
+  Added controlled PTY coverage at `120x40` and `40x15`, with and without
+  color. The evidence asserts the command-owned B bar and safe metadata,
+  ordered `STATE / PHASE / DETAIL` structure, active/loading and completed
+  phase projection, compact width-bounded context, AltScreen restoration,
+  Transcript-before-result ordering, Transcript redaction, complete durable
+  Result fields, and control-free `NO_COLOR=1` output. Modified:
+  `pkg/cmd/config/fork/list/terminal_pty_test.go`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/config/fork/list` passed. Risk: the remaining G1 adapters still
+  need their own descriptor/context, phase or form, and structural PTY
+  evidence. Next action: migrate only `config cm list`.
+
+- 2026-09-04: completed slice `config cm list descriptor/context and default
+  summary`. The command now opens its own bounded Console descriptor before
+  store construction: `YCY / config cm list`, target `profile inventory`, and
+  static scope `commit message configuration`. Rich successful runs retain a
+  safe `Default profile: <name>` milestone only for a listed, display-safe
+  default; no profile rows, Base URLs, models, or API keys enter the
+  Interaction Transcript. Modified:
+  `pkg/cmd/config/cm/list/{command.go,presentation.go,terminal_test.go}`.
+  Verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  -count=1 ./pkg/cmd/config/cm/list` passed. Risk: command-specific Rich PTY
+  and stream evidence is now complete for this adapter; remaining G1
+  adapters still need migration. Next action: migrate only `config cm use`.
+
+- 2026-09-04: completed slice `config cm list Rich PTY and stream evidence`.
+  Added controlled `120x40`/`40x15` color and `NO_COLOR=1` PTY journeys that
+  assert B context, phase table order, completed state, primary-screen
+  restoration, Transcript phase/summary/default/outcome ordering and
+  redaction, and complete post-AltScreen Result tables. Plain and Automation
+  assertions preserve exact result bytes, loading-diagnostic ownership,
+  control-free streams, and no partial output on read failure. Modified:
+  `pkg/cmd/config/cm/list/terminal_pty_test.go`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/config/cm/list` passed. Risk: `config cm use` and `git heat`
+  remain unqualified in G1. Next action: migrate only `config cm use`.
+
+- 2026-09-04: completed slice `config cm use descriptor and safe phase
+  context`. The atomic default-selection command now opens a bounded Console
+  descriptor before store construction: `YCY / config cm use`, target `profile
+  selection`, and static scope `commit message configuration`. Its single
+  Work Phase includes the bounded safe requested profile in the active and
+  successful detail while preserving the exact profile identity passed to the
+  writer and the existing result/error contract. Modified:
+  `pkg/cmd/config/cm/use/{command.go,terminal_test.go}`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/config/cm/use` passed. Risk: command-specific PTY and stream
+  evidence remains to be recorded. Next action: add only that evidence.
+
+- 2026-09-04: completed slice `config cm use Rich PTY and stream evidence`.
+  Added controlled `120x40`/`40x15` color and `NO_COLOR=1` PTY journeys that
+  assert B context, safe profile detail, phase/table order, completed state,
+  primary-screen restoration, Transcript-before-result ordering, and durable
+  success output. Plain and Automation assertions preserve loading diagnostic
+  ownership, exact result bytes, control-free output, and no partial output
+  on a missing-profile failure. Modified:
+  `pkg/cmd/config/cm/use/terminal_pty_test.go`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/config/cm/use` passed. Risk: only `git heat` remains before G1
+  repository verification. Next action: migrate only `git heat`.
+
+- 2026-09-04: completed slice `git heat descriptor/context`. The finite Git
+  inspection command now opens the frozen Console seam after input
+  normalization and before repository discovery, with only the bounded
+  command identity, target, normalized range, sort, and time mode in its
+  descriptor. Query text, repository paths, Git arguments, timings, and path
+  rows remain outside Console metadata; Plain/Automation result and error
+  behavior remain unchanged. Modified: `pkg/cmd/git/heat/{terminal.go,
+  terminal_test.go}`. Verification: `GOTOOLCHAIN=go1.26.7 GOWORK=off
+  CGO_ENABLED=0 go test -count=1 ./pkg/cmd/git/heat` passed. Risk: the
+  command still needs the final fresh structural PTY and stream evidence
+  review before G1 repository verification. Next action: add only the
+  `git heat` Rich PTY/stream evidence.
+
+- 2026-09-04: completed slice `git heat Rich PTY and stream evidence`.
+  Added controlled `120x40` and `40x15` color/no-color journeys covering the
+  B bar, safe normalized metadata, all three truthful phases, wide/compact
+  rows, latest/earliest markers, primary-screen restoration, bounded
+  Transcript redaction, and complete durable Result output. Plain and
+  Automation fixtures assert loading ownership, exact result bytes, control
+  stripping, and no partial output on repository failure. Modified:
+  `pkg/cmd/git/heat/terminal_pty_test.go`. Verification:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/git/heat` passed. Risk: final G1 repository checks and human
+  review remain. Next action: run the declared G1 repository verification
+  sequence in order.
+
+- 2026-09-04: repository verification step 1 passed. Command and shared
+  terminal package suite completed successfully:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./pkg/cmd/root
+  ./pkg/cmd/config/fork/list ./pkg/cmd/config/cm/list ./pkg/cmd/config/cm/use
+  ./pkg/cmd/git/heat ./internal/terminal`. No additional source changes were
+  required. Risk: command-surface, repository check, acceptance journeys, and
+  diff hygiene remain. Next action: run `make command-surface`.
+
+- 2026-09-04: repository verification step 2a passed. `make command-surface`
+  completed successfully, confirming the frozen command/help surface remains
+  compatible. No additional source changes were required. Risk: full
+  repository checks, tagged G1 acceptance journeys, and diff hygiene remain.
+  Next action: run `make check`.
+
+- 2026-09-04: diagnosed and repaired the first repository-check failure
+  without changing G1 runtime behavior. New PTY assertions had imported the
+  Charm ANSI helper directly from command packages, violating the repository
+  dependency boundary; the helper now lives behind `internal/terminaltest` and
+  command tests call that boundary. Modified:
+  `internal/terminaltest/{streams.go,terminaltest_test.go}` and the five G1
+  PTY/discovery test files. Directed re-verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  ./pkg/cmd/root ./pkg/cmd/config/fork/list ./pkg/cmd/config/cm/list
+  ./pkg/cmd/config/cm/use ./pkg/cmd/git/heat ./internal/terminal
+  ./internal/terminaltest`. Risk: full `make check` must be rerun; its prior
+  unrelated tunnel-server integration timeout remains under observation. Next
+  action: rerun `make check`.
+
+- 2026-09-04: repository verification step 2b passed. The rerun of
+  `make check` completed across the Go and web repository suites, including
+  architecture/dependency checks, all command packages, and the tunnel-server
+  integration suite. The earlier Charm import violations did not recur; no
+  unrelated source changes were made. Risk: tagged G1 standalone acceptance
+  journeys and final diff hygiene remain. Next action: run the declared
+  acceptance command.
+
+- 2026-09-04: repository verification step 3 passed. The tagged standalone
+  acceptance journeys for `config fork list`, `config cm list`, `config cm
+  use`, and `git heat` completed successfully with `GOTOOLCHAIN=go1.26.7
+  GOWORK=off CGO_ENABLED=0 go test -count=1 -tags=acceptance ./acceptance
+  -run '^(TestConfigForkListStandaloneBinary|TestConfigCMListStandaloneBinary|TestConfigCMUseStandaloneBinary|TestGitHeatStandaloneBinary)'`.
+  Risk: only final diff hygiene and manual acceptance handoff remain. Next
+  action: run `git diff --check`.
+
+- 2026-09-04: repository verification step 4 passed: `git diff --check`
+  completed with no whitespace errors. Final scope review found only G1
+  presentation adapters, their evidence, and the necessary internal test
+  boundary; no G2+ command was changed. Automated exit evidence is complete:
+  the declared G1 package suite, `make command-surface`, rerun `make check`,
+  the four tagged standalone journeys, and final diff hygiene all passed.
+
+  Manual acceptance handoff: a local binary built from this worktree is ready
+  at `/tmp/hackycy-g1-acceptance.l54jPH/ycy`; its isolated fake-config home is
+  `/tmp/hackycy-g1-acceptance.l54jPH/home`, and its contained two-commit Git
+  fixture is `/tmp/hackycy-g1-acceptance.l54jPH/repo`. The fixture smoke run
+  passed for fork list, CM list, CM use, and Git heat, without touching the
+  user configuration or the repository state. In a colored `120x40` TTY, set
+  `HOME=/tmp/hackycy-g1-acceptance.l54jPH/home` and `USERPROFILE=` and inspect
+  `ycy --help`, `ycy config fork list`, `ycy config cm list`, `ycy config cm
+  use work`, and, from the contained Git fixture, `ycy git heat -n 2 -t files
+  -s path -r -q main`. Repeat those scenarios in a `40x15` TTY with
+  `NO_COLOR=1`.
+
+  Minimum acceptance checklist: root/help stays a complete durable discovery
+  document without AltScreen; each finite command shows the B hierarchy with
+  safe bounded metadata and complete wide/compact phase/result rows; no-color
+  symbols remain readable and have no persistent rail; finite commands restore
+  the primary screen before a bounded Transcript and unchanged durable Result;
+  no fixture token, API key, path, or full report row leaks into Transcript.
+  Reply exactly once using `通过: root/help, config fork list, config cm list,
+  config cm use, git heat` or `未通过: <command and reason>`. Next action: a
+  new Goal with that explicit result may continue G1; this Goal ends now with
+  G1 still `active` and no successor activated.
+
+- 2026-09-04: final G1 acceptance completed. The user explicitly replied
+  `全部通过`, accepting the handoff scenarios for root/help, `config fork
+  list`, `config cm list`, `config cm use`, and `git heat`. Exit condition 1
+  passed: root/help retained its durable discovery, parser, version,
+  completion, redirected-output, and write-failure contracts while using the
+  B hierarchy, evidenced by the focused root suite and `make
+  command-surface`. Exit condition 2 passed: all four finite commands have
+  fresh wide/compact color/no-color B structural PTY evidence plus behavior,
+  redaction, Transcript, Plain, Automation, and standalone coverage. Exit
+  condition 3 passed through the explicit manual acceptance. Exit condition 4
+  passed: the declared package suite, `make command-surface`, rerun `make
+  check`, tagged standalone acceptance journeys, and `git diff --check` all
+  passed. G1 is now `passed`; its direct successor G2 is activated but has not
+  been read, analyzed, implemented, or verified in this Goal.
+
 ### G2: External-read and service-boundary recovery
 
 - 2026-09-04: initialized as `planned`; no recovery implementation evidence.
+- 2026-09-04: 已激活，尚未开始实施。
 
 ### G3: Mutation and archive recovery
 

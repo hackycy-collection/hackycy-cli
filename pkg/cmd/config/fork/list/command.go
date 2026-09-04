@@ -59,7 +59,10 @@ func runList(options *Options) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, forkListConsoleDescriptor())
+	if err != nil {
+		return err
+	}
 	defer run.Close()
 
 	caps := options.Terminal.Capabilities()
@@ -152,6 +155,18 @@ const (
 	forkListPhaseID   = "load-fork-provider-instances"
 	forkListPhaseName = "Load fork provider instances"
 )
+
+func forkListConsoleDescriptor() terminal.ConsoleDescriptor {
+	return terminal.ConsoleDescriptor{
+		Command: "YCY / config fork list",
+		Target:  "provider inventory",
+		Status:  "READY",
+		Metadata: []terminal.ConsoleMetadata{{
+			Label: "scope",
+			Value: "git fork configuration",
+		}},
+	}
+}
 
 func finishForkList(run terminal.ExperienceRun, outcome terminal.FinishOutcome, document *terminal.PresentationDocument, workErr error) error {
 	return errors.Join(workErr, run.Finish(outcome, document))

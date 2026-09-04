@@ -35,27 +35,27 @@ func terminalDiscoveryDocument(document DiscoveryDocument) terminalexperience.Pr
 			Text: document.Summary,
 		})
 	}
-	blocks = append(blocks, terminalexperience.PresentationBlock{
-		Role: terminalexperience.VisualRolePlain,
-		Text: "Usage:\n  " + document.Usage,
-	})
+	blocks = append(blocks,
+		terminalexperience.PresentationBlock{Role: terminalexperience.VisualRoleActive, Text: "Usage:"},
+		terminalexperience.PresentationBlock{Role: terminalexperience.VisualRolePlain, Text: "  " + document.Usage},
+	)
 	if len(document.Descendants) > 0 {
-		blocks = append(blocks, terminalexperience.PresentationBlock{
-			Role: terminalexperience.VisualRoleActive,
-			Text: "Commands:\n" + formatDiscoveryDescendants(document.Descendants),
-		})
+		blocks = append(blocks,
+			terminalexperience.PresentationBlock{Role: terminalexperience.VisualRoleActive, Text: "Commands:"},
+			terminalexperience.PresentationBlock{Role: terminalexperience.VisualRolePlain, Text: formatDiscoveryDescendants(document.Descendants)},
+		)
 	}
 	if len(document.Flags) > 0 {
-		blocks = append(blocks, terminalexperience.PresentationBlock{
-			Role: terminalexperience.VisualRolePlain,
-			Text: "Flags:\n" + formatDiscoveryFlags(document.Flags),
-		})
+		blocks = append(blocks,
+			terminalexperience.PresentationBlock{Role: terminalexperience.VisualRoleActive, Text: "Flags:"},
+			terminalexperience.PresentationBlock{Role: terminalexperience.VisualRolePlain, Text: formatDiscoveryFlags(document.Flags)},
+		)
 	}
 	if len(document.Examples) > 0 {
-		blocks = append(blocks, terminalexperience.PresentationBlock{
-			Role: terminalexperience.VisualRolePlain,
-			Text: "Examples:\n" + strings.Join(document.Examples, "\n"),
-		})
+		blocks = append(blocks,
+			terminalexperience.PresentationBlock{Role: terminalexperience.VisualRoleActive, Text: "Examples:"},
+			terminalexperience.PresentationBlock{Role: terminalexperience.VisualRolePlain, Text: strings.Join(document.Examples, "\n")},
+		)
 	}
 	return terminalexperience.PresentationDocument{Blocks: blocks}
 }

@@ -88,6 +88,12 @@ func TestRedirectedStreamsSeparateOutputAndRejectTerminalControl(t *testing.T) {
 	}
 }
 
+func TestStripANSIRetainsTerminalText(t *testing.T) {
+	if got, want := StripANSI("\x1b[31mready\x1b[0m"), "ready"; got != want {
+		t.Fatalf("StripANSI() = %q, want %q", got, want)
+	}
+}
+
 func TestControlledPTYRunsATerminalSubprocess(t *testing.T) {
 	const (
 		helperEnvironment = "YCY_TERMINALTEST_PTY_HELPER"

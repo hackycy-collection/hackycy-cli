@@ -268,6 +268,32 @@ func TestIsHeatCancellationPreservesJoinedOperationFailures(t *testing.T) {
 	}
 }
 
+func TestGitHeatConsoleDescriptorContainsOnlyNormalizedSafeContext(t *testing.T) {
+	options, err := NormalizeInput(Input{Days: integerPointer(7), Target: TargetFiles, Sort: SortCount, RelativeTime: true, Query: "secret"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := terminalexperience.ConsoleDescriptor{
+		Command: "YCY / git heat",
+		Target:  "file heat",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "range", Value: "last 7 days"},
+			{Label: "sort", Value: "count"},
+			{Label: "time", Value: "relative time"},
+		},
+	}
+	got := gitHeatConsoleDescriptor(options)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("Console descriptor = %#v, want %#v", got, want)
+	}
+	for _, field := range got.Metadata {
+		if strings.Contains(field.Value, "secret") || strings.Contains(field.Value, "/") {
+			t.Fatalf("unsafe Console metadata = %#v", got.Metadata)
+		}
+	}
+}
+
 func TestTerminalGitHeatRunNormalizedReportsOrderedPhasesAndCancellation(t *testing.T) {
 	now := time.Date(2024, time.January, 1, 0, 0, 0, 0, time.UTC)
 	runner := &scriptedGitRunner{outputs: []GitOutput{

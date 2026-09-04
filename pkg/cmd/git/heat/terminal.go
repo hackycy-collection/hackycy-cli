@@ -50,7 +50,10 @@ func runHeat(options *Options) error {
 	if err != nil {
 		return err
 	}
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, gitHeatConsoleDescriptor(normalized))
+	if err != nil {
+		return err
+	}
 	defer run.Close()
 	caps := options.Terminal.Capabilities()
 	var updates chan terminalexperience.OperationPhase
@@ -140,6 +143,27 @@ const (
 	heatReadPhaseID   = "read-git-history"
 	heatRankPhaseID   = "rank-hot-paths"
 )
+
+func gitHeatConsoleDescriptor(options NormalizedInput) terminalexperience.ConsoleDescriptor {
+	target := "directory heat"
+	if options.Target == TargetFiles {
+		target = "file heat"
+	}
+	timeMode := "absolute time"
+	if options.RelativeTime {
+		timeMode = "relative time"
+	}
+	return terminalexperience.ConsoleDescriptor{
+		Command: "YCY / git heat",
+		Target:  target,
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{
+			{Label: "range", Value: rangeLabel(options.Range)},
+			{Label: "sort", Value: string(options.Sort)},
+			{Label: "time", Value: timeMode},
+		},
+	}
+}
 
 func terminalHeatPhase(update workPhaseUpdate) terminalexperience.OperationPhase {
 	state := terminalexperience.PhaseActive

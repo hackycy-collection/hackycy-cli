@@ -54,7 +54,10 @@ func runList(options *Options) error {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	run := options.Terminal.Open(ctx)
+	run, err := options.Terminal.OpenConsole(ctx, cmListConsoleDescriptor())
+	if err != nil {
+		return err
+	}
 	defer run.Close()
 
 	caps := options.Terminal.Capabilities()
@@ -133,6 +136,9 @@ func runList(options *Options) error {
 		if err := run.Milestone(terminalCMListSummaryDocument(result)); err != nil {
 			return errors.Join(err, run.Finish(terminal.Succeeded, nil))
 		}
+		if err := run.Milestone(terminalCMListDefaultDocument(result)); err != nil {
+			return errors.Join(err, run.Finish(terminal.Succeeded, nil))
+		}
 		if len(result.Profiles) == 0 {
 			if err := run.Milestone(terminalCMListEmptyDocument()); err != nil {
 				return errors.Join(err, run.Finish(terminal.Succeeded, nil))
@@ -150,5 +156,17 @@ const (
 	cmListPhaseID   = "load-cm-profiles"
 	cmListPhaseName = "Load CM profiles"
 )
+
+func cmListConsoleDescriptor() terminal.ConsoleDescriptor {
+	return terminal.ConsoleDescriptor{
+		Command: "YCY / config cm list",
+		Target:  "profile inventory",
+		Status:  "READY",
+		Metadata: []terminal.ConsoleMetadata{{
+			Label: "scope",
+			Value: "commit message configuration",
+		}},
+	}
+}
 
 var _ Reader = (*appconfig.Store)(nil)

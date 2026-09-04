@@ -3,6 +3,8 @@ package terminaltest
 import (
 	"bytes"
 	"strings"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 // RedirectedStreams supplies explicitly redirected standard streams for a
@@ -32,4 +34,10 @@ func ContainsTerminalControl(output []byte) bool {
 		}
 	}
 	return false
+}
+
+// StripANSI removes terminal styling from controlled terminal output so
+// command package tests can inspect semantic text through the test boundary.
+func StripANSI(output string) string {
+	return ansi.Strip(output)
 }

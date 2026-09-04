@@ -110,3 +110,28 @@ func TestTerminalCMListRichProjectionUsesPlaceholdersForUnsafeFields(t *testing.
 		t.Fatalf("Rich row exposed URL credentials/query/fragment: %q", row)
 	}
 }
+
+func TestCMListConsoleDescriptorProvidesOnlySafeStaticContext(t *testing.T) {
+	want := terminalexperience.ConsoleDescriptor{
+		Command: "YCY / config cm list",
+		Target:  "profile inventory",
+		Status:  "READY",
+		Metadata: []terminalexperience.ConsoleMetadata{{
+			Label: "scope",
+			Value: "commit message configuration",
+		}},
+	}
+	if got := cmListConsoleDescriptor(); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Console descriptor = %#v, want %#v", got, want)
+	}
+}
+
+func TestTerminalCMListDefaultMilestoneUsesOnlySafeMatchingName(t *testing.T) {
+	document := terminalCMListDefaultDocument(Result{Profiles: []Profile{{Name: " work ", Default: true}}})
+	if got := terminalexperience.RenderPlain(document); got != "Default profile: work\n" {
+		t.Fatalf("safe default milestone = %q", got)
+	}
+	if document := terminalCMListDefaultDocument(Result{Profiles: []Profile{{Name: "bad\nname", Default: true}}}); len(document.Blocks) != 0 {
+		t.Fatalf("unsafe default milestone = %#v", document)
+	}
+}
