@@ -7,10 +7,10 @@ RELEASE_DIR := release/$(RELEASE_VERSION)
 
 GO_FIND = find acceptance cmd internal pkg tools/hookctl tools/check-no-bun tools/release-artifacts tools/web-browser-harness web -path '*/node_modules' -prune -o -type f -name '*.go'
 
-.PHONY: help bootstrap hooks-install hooks-doctor hooks-uninstall fmt check check-web check-go check-locks check-no-bun acceptance acceptance-web command-surface command-surface-update build cross-build release-clean release-candidate release-untracked web-browser-harness ensure-web-deps ensure-web-dist prepare-7zip prepare-7zip-all prototype-terminal
+.PHONY: help bootstrap hooks-install hooks-doctor hooks-uninstall fmt check check-web check-go check-locks check-no-bun check-terminal acceptance acceptance-web acceptance-terminal command-surface command-surface-update build cross-build release-clean release-candidate release-untracked web-browser-harness ensure-web-deps ensure-web-dist prepare-7zip prepare-7zip-all prototype-terminal
 
 help:
-	@printf '%s\n' 'Targets: bootstrap, hooks-install, hooks-doctor, hooks-uninstall, fmt, check, acceptance, acceptance-web, command-surface, command-surface-update, build, cross-build, release-candidate, web-browser-harness, prototype-terminal'
+	@printf '%s\n' 'Targets: bootstrap, hooks-install, hooks-doctor, hooks-uninstall, fmt, check, check-terminal, acceptance, acceptance-web, acceptance-terminal, command-surface, command-surface-update, build, cross-build, release-candidate, web-browser-harness, prototype-terminal'
 
 prototype-terminal:
 	@cd internal/terminal/prototype-vivid && GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off $(GO) run . $(PROTOTYPE_ARGS)
@@ -71,8 +71,14 @@ check-no-bun:
 
 check: check-locks check-no-bun check-go
 
+check-terminal:
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 $(GO) test -count=1 ./internal/terminal ./internal/terminaltest ./pkg/cmd/root ./pkg/cmd/export/env ./pkg/cmd/config/fork/... ./pkg/cmd/config/cm/... ./pkg/cmd/git/... ./pkg/cmd/diff ./pkg/cmd/fs ./pkg/cmd/rm ./pkg/cmd/run ./pkg/cmd/tunnel/... ./pkg/cmd/upgrade ./pkg/cmd/zip
+
 acceptance:
 	@GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 -tags=acceptance ./acceptance/...
+
+acceptance-terminal:
+	@GOTOOLCHAIN=$(GO_TOOLCHAIN) GOWORK=off CGO_ENABLED=0 $(GO) test -count=1 -tags=acceptance ./acceptance/...
 
 acceptance-web: check-web prepare-7zip
 	@GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1 -tags=acceptance ./acceptance/web

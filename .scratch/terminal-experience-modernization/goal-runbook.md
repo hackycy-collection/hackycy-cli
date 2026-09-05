@@ -75,7 +75,7 @@
 | G3: Mutation and archive recovery | passed | G2 | `implementation-plan.md` -> `G3: Mutation and archive recovery` | exit conditions 1-4 and manual acceptance verified 2026-09-04 |
 | G4: Git mutation and process handoff | passed | G3 | `implementation-plan.md` -> `G4: Git mutation and process handoff` | exit conditions 1-4 and manual acceptance verified 2026-09-05 |
 | G5: Service lifecycles and detached updater | passed | G4 | `implementation-plan.md` -> `G5: Service lifecycles and detached updater` | exit conditions 1-4 and manual acceptance verified 2026-09-05 |
-| G6: Release verification and full visual review | active | G5 | `implementation-plan.md` -> `G6: Release verification and full visual review` | G5 passed 2026-09-05 |
+| G6: Release verification and full visual review | passed | G5 | `implementation-plan.md` -> `G6: Release verification and full visual review` | exit conditions 1-4 verified 2026-09-05 |
 
 ## Progress Log
 
@@ -1268,3 +1268,88 @@
 - 2026-09-04: initialized as `planned`; no recovery implementation evidence.
 - 2026-09-05: 已激活，尚未开始实施。本条仅记录 G5 通过后的直接后继
   激活；G6 不属于本次 Goal。
+- 2026-09-05: completed slice `terminal verification entrypoints`. Added the
+  plan-required `make check-terminal` and `make acceptance-terminal` targets,
+  including the help listing and the complete migrated command/package test
+  matrix; no runtime behavior or frozen command surface changed. Modified:
+  `Makefile`. Verification: `make check-terminal` passed across shared
+  terminal/terminaltest, every finite command, both Lifecycle Log services,
+  and the updater. Risk: prototype, tagged acceptance, release cross-build,
+  and final repository evidence remain. Next action: run prototype and
+  terminal acceptance verification only.
+- 2026-09-05: completed slice `prototype and terminal acceptance verification`.
+  The pinned `internal/terminal/prototype-vivid` module compiled and its
+  package tests passed; `make acceptance-terminal` passed both tagged
+  acceptance packages, including PTY, signal, child-process, service, and
+  detached-updater journeys. Modified: no additional files. Risk: the exact
+  G6 repository verification order and release-candidate build remain. Next
+  action: run `make check` first.
+- 2026-09-05: repository verification step 1 passed: `make check` completed
+  lock, no-bun, Web, Go format/vet/unit, architecture, and asset checks. No
+  source changes were required. Risk: command surface, tagged acceptance,
+  cross-build, diff hygiene, and release-candidate visual handoff remain.
+  Next action: run `make command-surface`.
+- 2026-09-05: repository verification step 2 passed: `make command-surface`
+  confirmed all frozen help and completion snapshots. No source changes were
+  required. Risk: tagged acceptance, cross-build, diff hygiene, and release
+  candidate review remain. Next action: run `make acceptance`.
+- 2026-09-05: repository verification step 3 passed: `make acceptance`
+  completed all tagged acceptance packages, including web, process, signal,
+  PTY, service, and updater journeys. No source changes were required. Risk:
+  only the six-target cross-build, diff hygiene, release-candidate fixture,
+  and manual visual review remain. Next action: run `make cross-build`.
+- 2026-09-05: repository verification step 4 passed: `make cross-build`
+  produced all six supported darwin/linux/windows amd64/arm64 binaries after
+  the exact-target rebuild; the first invocation's shell wrapper failure was
+  unrelated to the build and the equivalent rerun exited 0. Repository
+  verification step 5 passed: `git diff --check` reported no whitespace
+  errors. `PNPM='pnpm dlx pnpm@11.13.0' make release-candidate` then built and
+  verified the `0.1.0` release candidate and its `SHA256SUMS`; the candidate
+  reports `0.1.0`. Modified: no runtime files. Risk: only the required
+  release-candidate manual review remains. Next action: hand off the exact
+  isolated fixture and review matrix once.
+- 2026-09-05: G6 manual acceptance handoff recorded. Acceptance entry is the
+  release candidate directory `release/0.1.0/`; on this host use
+  `/tmp/hackycy-g6-acceptance.RQl0av/ycy` with isolated HOME
+  `/tmp/hackycy-g6-acceptance.RQl0av/home`, workspace
+  `/tmp/hackycy-g6-acceptance.RQl0av/workspace` (contains `.env`), and Git
+  fixture `/tmp/hackycy-g6-acceptance.RQl0av/repo` (one committed baseline
+  plus one working-tree change). Smoke evidence passed for `--version`,
+  `config fork list`, `config cm list`, `export env`, and `git heat`.
+
+  Automated evidence for review: the prototype module tests; `make
+  check-terminal`; `make acceptance-terminal`; repository `make check`, `make
+  command-surface`, `make acceptance`, `make cross-build`, and `git diff
+  --check`; and release-artifact checksum verification. The minimum manual
+  review is: in a colored `120x40` TTY and a `NO_COLOR=1` `40x15` TTY inspect
+  root/help plus one representative from every finite family (`export env`,
+  config fork/cm list/add/use/set/remove/test, git heat/pulse/fork/cm, `rm`,
+  `zip`, `run`, and `upgrade`); inspect text sessions for `diff`, `fs`,
+  `tunnel connect`, and `tunnel server`; and verify the Run child handoff and
+  Upgrade detached replacement journey against their existing fixtures.
+  Confirm the B bar/metadata/table/active region, paired state symbols,
+  palette and Huh bottom focus, compact single-column behavior, restoration
+  and Transcript replay order, safe projection/redaction, unchanged Result
+  bytes/streams/exits, and separate bounded Lifecycle Log plus child-process
+  boundaries. For each Service Command also run `--log-format=json` and
+  confirm stable NDJSON with no ANSI or AltScreen controls.
+
+  Reply exactly `通过: release candidate accepted` or `未通过: <scenario and
+  reason>`. Next action: only a new Goal carrying that explicit result may
+  continue G6. This Goal ends at the handoff; G6 remains `active`.
+- 2026-09-05: G6 final acceptance completed. The user replied `通过`,
+  explicitly accepting the release-candidate checklist. Exit condition 1
+  evidence: the recorded terminal matrix and service reviews cover every
+  finite Rich command/root-help B structure and every Service Command
+  Lifecycle Log contract, including PTY dimensions, color modes, replay,
+  redaction, and child-process boundaries. Exit condition 2 evidence: the
+  frozen behavior, capability, stream, redaction, handoff, updater, and
+  supported-target contracts are covered by the passed package, acceptance,
+  cross-build, and release-artifact checks. Exit condition 3 evidence: `make
+  check`, `make command-surface`, `make acceptance`, `make cross-build`,
+  `make check-terminal`, `make acceptance-terminal`, prototype tests, and
+  `git diff --check` passed; the `0.1.0` candidate and `SHA256SUMS` were
+  verified. Exit condition 4 evidence: the explicit user acceptance above
+  accepts the complete recorded release-candidate checklist. G6 is marked
+  `passed`; no successor Gate exists. Terminal experience modernization
+  effort is complete.
