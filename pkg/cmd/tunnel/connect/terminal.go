@@ -3,9 +3,11 @@ package connect
 import (
 	"context"
 	"errors"
-	"fmt"
+	"net"
+	"net/url"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hackycy/hackycy-cli/internal/appconfig"
 	terminalexperience "github.com/hackycy/hackycy-cli/internal/terminal"
@@ -16,7 +18,18 @@ func terminalTunnelConnectionSelectorFor(experience *terminalexperience.Runtime)
 		return nil
 	}
 	return func(ctx context.Context, connections []appconfig.TunnelConnection) (string, bool, error) {
-		run := experience.Open(ctx)
+		run, err := experience.OpenConsole(ctx, terminalexperience.ConsoleDescriptor{
+			Command: "YCY",
+			Target:  "Tunnel connection",
+			Status:  "SELECT",
+			Metadata: []terminalexperience.ConsoleMetadata{{
+				Label: "candidates",
+				Value: strconv.Itoa(len(connections)),
+			}},
+		})
+		if err != nil {
+			return "", false, err
+		}
 		defer run.Close()
 		return newTerminalTunnelConnectionAdapter(run).Select(ctx, connections)
 	}
@@ -32,18 +45,22 @@ func newTerminalTunnelConnectionAdapter(run terminalexperience.ExperienceRun) *t
 
 func (adapter *terminalTunnelConnectionAdapter) Select(_ context.Context, connections []appconfig.TunnelConnection) (string, bool, error) {
 	answer, err := adapter.run.Ask(terminalexperience.InteractionRequest{
-		Kind:         terminalexperience.InteractionSelect,
-		Message:      "Select a tunnel connection",
-		PlainLead:    "Select a tunnel connection",
-		PlainPrompt:  "> ",
-		Options:      tunnelConnectionInteractionOptions(connections),
-		CancelValues: []string{"", "q", "quit", "cancel"},
+		Kind:            terminalexperience.InteractionSelect,
+		Message:         "Select a tunnel connection",
+		PlainLead:       "Select a tunnel connection",
+		PlainPrompt:     "> ",
+		Options:         tunnelConnectionInteractionOptions(connections),
+		CancelValues:    []string{"", "q", "quit", "cancel"},
+		TranscriptLabel: "Selected tunnel connection",
+		TranscriptProject: func(answer terminalexperience.InteractionAnswer) string {
+			return tunnelConnectionSelectionLabel(answer.Value, connections)
+		},
 		ParsePlain: func(value string) (terminalexperience.InteractionAnswer, error) {
 			return parseTunnelConnectionSelection(value, connections)
 		},
 	})
 	if errors.Is(err, terminalexperience.ErrInteractionCancelled) {
-		_ = adapter.run.Result(terminalTunnelConnectionDocument("Cancelled"))
+		_ = adapter.run.Milestone(terminalTunnelConnectionDocument("Tunnel connection selection cancelled"))
 		return "", true, nil
 	}
 	if err != nil {
@@ -53,14 +70,67 @@ func (adapter *terminalTunnelConnectionAdapter) Select(_ context.Context, connec
 }
 
 func tunnelConnectionInteractionOptions(connections []appconfig.TunnelConnection) []terminalexperience.InteractionOption {
+	origins := make([]string, len(connections))
+	counts := make(map[string]int, len(connections))
+	for index, connection := range connections {
+		origin := normalizedTunnelConnectionOrigin(connection.Server)
+		origins[index] = origin
+		counts[origin]++
+	}
+	ordinals := make(map[string]int, len(counts))
 	options := make([]terminalexperience.InteractionOption, 0, len(connections))
-	for _, connection := range connections {
+	for index, connection := range connections {
+		origin := origins[index]
+		label := origin + "  last authenticated " + tunnelConnectionAuthenticatedAt(connection.LastAuthenticatedAt)
+		if counts[origin] > 1 {
+			ordinals[origin]++
+			label += "  (" + strconv.Itoa(ordinals[origin]) + ")"
+		}
 		options = append(options, terminalexperience.InteractionOption{
-			Label: fmt.Sprintf("%s  %s", connection.Server, maskTunnelToken(connection.Token)),
+			Label: label,
 			Value: connection.ID,
 		})
 	}
 	return options
+}
+
+func tunnelConnectionSelectionLabel(value string, connections []appconfig.TunnelConnection) string {
+	for index, connection := range connections {
+		if connection.ID == value {
+			return tunnelConnectionInteractionOptions(connections)[index].Label
+		}
+	}
+	return "selected connection"
+}
+
+func normalizedTunnelConnectionOrigin(value string) string {
+	parsed, err := url.Parse(strings.TrimSpace(value))
+	if err != nil || parsed.User != nil || parsed.Host == "" {
+		return "unknown origin"
+	}
+	scheme := strings.ToLower(parsed.Scheme)
+	if scheme != "http" && scheme != "https" {
+		return "unknown origin"
+	}
+	host := strings.ToLower(parsed.Hostname())
+	if host == "" {
+		return "unknown origin"
+	}
+	port := parsed.Port()
+	if port != "" {
+		host = net.JoinHostPort(host, port)
+	} else if strings.Contains(host, ":") {
+		host = "[" + host + "]"
+	}
+	return scheme + "://" + host
+}
+
+func tunnelConnectionAuthenticatedAt(value string) string {
+	parsed, err := time.Parse(time.RFC3339, strings.TrimSpace(value))
+	if err != nil {
+		return "unknown"
+	}
+	return parsed.UTC().Format("2006-01-02 15:04 UTC")
 }
 
 func parseTunnelConnectionSelection(value string, connections []appconfig.TunnelConnection) (terminalexperience.InteractionAnswer, error) {
@@ -73,11 +143,4 @@ func parseTunnelConnectionSelection(value string, connections []appconfig.Tunnel
 
 func terminalTunnelConnectionDocument(text string) terminalexperience.PresentationDocument {
 	return terminalexperience.PresentationDocument{Blocks: []terminalexperience.PresentationBlock{{Role: terminalexperience.VisualRoleWarning, Text: text}}}
-}
-
-func maskTunnelToken(token string) string {
-	if len(token) <= 12 {
-		return strings.Repeat("*", len(token))
-	}
-	return token[:8] + "********" + token[len(token)-4:]
 }

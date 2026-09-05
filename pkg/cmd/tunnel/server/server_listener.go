@@ -32,6 +32,13 @@ type RunningServer struct {
 // separate lifecycle action, so the control plane is immediately available
 // while managed FRPS is stopped.
 func (runtime *ServerRuntime) Start() (*RunningServer, error) {
+	return runtime.start(true)
+}
+
+// start binds the control plane and optionally starts managed FRPS. Keeping
+// the two steps separate lets the command lifecycle report that the control
+// plane is usable before independent data-plane preparation begins.
+func (runtime *ServerRuntime) start(startFRPS bool) (*RunningServer, error) {
 	if runtime == nil {
 		return nil, errors.New("Tunnel server runtime is required")
 	}
@@ -53,7 +60,9 @@ func (runtime *ServerRuntime) Start() (*RunningServer, error) {
 	}
 	server.httpServer = &http.Server{Handler: runtime.handler}
 	go server.serve()
-	server.startManagedFRPS()
+	if startFRPS {
+		server.startManagedFRPS()
+	}
 	return server, nil
 }
 

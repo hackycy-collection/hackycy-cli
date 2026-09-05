@@ -72,6 +72,22 @@ func TestTerminalUpgradePresentationPreservesPlainAndAutomationResults(t *testin
 	}
 }
 
+func TestTerminalUpgradePresentationKeepsCancellationSeparateFromAbort(t *testing.T) {
+	output, diagnostics := &bytes.Buffer{}, &bytes.Buffer{}
+	experience := terminalexperience.NewExperience(terminalexperience.ExperienceOptions{
+		Capabilities: terminalexperience.Capabilities{Interaction: terminalexperience.PlainInteractive},
+		Output:       output,
+		Diagnostics:  diagnostics,
+	})
+	err := PresentResult(context.Background(), experience, updater.UpgradeResult{Aborted: true}, &updater.ExitCodeError{Code: 1, Err: context.Canceled})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation error = %v", err)
+	}
+	if output.Len() != 0 || diagnostics.Len() != 0 {
+		t.Fatalf("cancellation was presented as an abort: stdout=%q stderr=%q", output.String(), diagnostics.String())
+	}
+}
+
 func TestTerminalUpgradePresentationUsesRichSemanticRoles(t *testing.T) {
 	for _, testCase := range []struct {
 		name string

@@ -149,6 +149,23 @@ func (logger Logger) Info(message string, fields map[string]any)  { logger.Log(I
 func (logger Logger) Warn(message string, fields map[string]any)  { logger.Log(Warn, message, fields) }
 func (logger Logger) Error(message string, fields map[string]any) { logger.Log(Error, message, fields) }
 
+// Event writes a lifecycle record with a stable semantic identifier. The
+// identifier is kept inside the existing context object so text and NDJSON
+// records retain the established outer schema.
+func (logger Logger) Event(level Level, event, message string, fields map[string]any) {
+	context := make(map[string]any, len(logger.context)+len(fields)+1)
+	for key, value := range logger.context {
+		context[key] = value
+	}
+	for key, value := range fields {
+		context[key] = value
+	}
+	if strings.TrimSpace(event) != "" {
+		context["event"] = strings.TrimSpace(event)
+	}
+	logger.Log(level, message, context)
+}
+
 // Log formats one redacted structured line on stderr-selected output.
 func (logger Logger) Log(level Level, message string, fields map[string]any) {
 	if logger.runtime == nil {
@@ -253,7 +270,7 @@ func charmLogLevel(level Level) slog.Level {
 
 func textMessage(record diagnosticRecord) string {
 	message := record.message
-	if symbol := lifecycleSymbol(record.scope, record.message, record.level); symbol != "" {
+	if symbol := lifecycleSymbol(record.scope, record.message, record.level, record.context["event"] != nil); symbol != "" {
 		message = symbol + "  " + message
 	}
 	if len(record.context) == 0 {
@@ -262,7 +279,19 @@ func textMessage(record diagnosticRecord) string {
 	return message + " " + marshalContext(record.context)
 }
 
-func lifecycleSymbol(scope, message string, level Level) string {
+func lifecycleSymbol(scope, message string, level Level, lifecycleEvent bool) string {
+	if scope == "tunnel.client" || scope == "tunnel.server" || scope == "upgrade" {
+		if !lifecycleEvent {
+			return ""
+		}
+		if level == Warn {
+			return "!"
+		}
+		if level == Error {
+			return "×"
+		}
+		return lifecycleEventSymbol(message)
+	}
 	if scope != "diff" && scope != "fs" {
 		return ""
 	}
@@ -286,6 +315,22 @@ func lifecycleSymbol(scope, message string, level Level) string {
 	default:
 		return ""
 	}
+}
+
+func lifecycleEventSymbol(message string) string {
+	if strings.Contains(message, "starting") || strings.Contains(message, "preparing") || strings.Contains(message, "scheduled") {
+		return "▶"
+	}
+	if strings.Contains(message, "recovering") {
+		return "↻"
+	}
+	if strings.Contains(message, "stopped") || strings.Contains(message, "complete") || strings.Contains(message, "authenticated") || strings.Contains(message, "restored") || strings.Contains(message, "running") || strings.Contains(message, "applied") || strings.Contains(message, "recovered") || strings.Contains(message, "restarted") || strings.Contains(message, "started") {
+		return "✓"
+	}
+	if strings.Contains(message, "requested") {
+		return "■"
+	}
+	return ""
 }
 
 func renderJSONRecord(record diagnosticRecord) string {

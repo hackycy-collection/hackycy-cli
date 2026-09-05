@@ -28,6 +28,7 @@ type ServerRuntimeOptions struct {
 	SessionIdleLifetime time.Duration
 	FRPToken            string
 	FRPSLogger          logging.Logger
+	LifecycleLogger     logging.Logger
 
 	frpArtifact         *tunnelruntime.FRPArtifact
 	frpRuntimeDirectory string
@@ -131,6 +132,7 @@ func NewServerRuntime(ctx context.Context, options ServerRuntimeOptions) (*Serve
 		InternalFRPToken: internalFRPToken,
 		Supervisor:       runtime.supervisor,
 		Prepare:          runtime.ensureManagedFRPRuntime,
+		LifecycleLogger:  options.LifecycleLogger,
 	})
 	if err != nil {
 		return fail(err)
@@ -139,6 +141,7 @@ func NewServerRuntime(ctx context.Context, options ServerRuntimeOptions) (*Serve
 		ControlPlane:  runtime.controlPlane,
 		FRPS:          runtime.frps,
 		WelcomeSource: runtime.frps,
+		Logger:        options.LifecycleLogger,
 	})
 	if err != nil {
 		return fail(err)

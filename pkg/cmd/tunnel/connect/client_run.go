@@ -182,6 +182,15 @@ func RunClient(ctx context.Context, config ClientConfig, options ClientRunOption
 	if ctx == nil {
 		ctx = context.Background()
 	}
+	lifecycle := newClientLifecycle(options.Logger)
+	lifecycle.starting(config)
+	defer func() {
+		lifecycle.shutdown(ctx)
+		if result != nil && ctx.Err() == nil {
+			lifecycle.failed(result)
+		}
+		lifecycle.stopped(ctx, result)
+	}()
 	if ctx.Err() != nil {
 		return nil
 	}
@@ -192,21 +201,23 @@ func RunClient(ctx context.Context, config ClientConfig, options ClientRunOption
 	instance, err := AcquireClientInstance(config, options.InstanceIdentity, ClientInstanceOptions{
 		StateRoot: options.StateRoot,
 		OnCleanupError: func(cleanupErr error) {
-			options.Logger.Warn("Could not clean expired Tunnel client state", map[string]any{"error": cleanupErr.Error()})
+			lifecycle.event(logging.Warn, "state.cleanup_warning", "Tunnel client state cleanup warning", map[string]any{"failureClass": "cleanup"})
 		},
 	})
 	if err != nil {
-		options.Logger.Error("Could not start Tunnel client", map[string]any{"error": err.Error()})
 		return err
 	}
 
 	connections := &clientControlConnectionHolder{}
-	reporter := &clientProcessStateReporter{state: tunnelruntime.FRPSupervisorState{State: tunnelruntime.FRPProcessStopped}}
+	reporter := &clientProcessStateReporter{
+		state:     tunnelruntime.FRPSupervisorState{State: tunnelruntime.FRPProcessStopped},
+		lifecycle: lifecycle,
+	}
 	var runtime ClientFRPRuntime
 	var reconciler *ClientReconciler
 	var stopObserving func()
 	defer func() {
-		_ = connections.Close()
+		result = errors.Join(result, connections.Close())
 		reporter.Clear()
 		if stopObserving != nil {
 			stopObserving()
@@ -217,16 +228,13 @@ func RunClient(ctx context.Context, config ClientConfig, options ClientRunOption
 			result = errors.Join(result, runtime.Stop())
 		}
 		result = errors.Join(result, instance.Release())
-		if result != nil && ctx.Err() == nil {
-			options.Logger.Error("Tunnel client failed", map[string]any{"error": result.Error()})
-		}
-		options.Logger.Info("Tunnel client stopped", nil)
 	}()
 
 	shutdownDone := make(chan struct{})
 	go func() {
 		select {
 		case <-ctx.Done():
+			lifecycle.shutdown(ctx)
 			_ = connections.Close()
 		case <-shutdownDone:
 		}
@@ -248,7 +256,7 @@ func RunClient(ctx context.Context, config ClientConfig, options ClientRunOption
 				return nil
 			}
 			if rememberErr := options.OnAuthenticated(); rememberErr != nil {
-				options.Logger.Warn("Could not remember Tunnel connection", map[string]any{"error": rememberErr.Error()})
+				lifecycle.event(logging.Warn, "connection.remember_warning", "Tunnel connection remember warning", map[string]any{"failureClass": "cleanup"})
 			}
 			return nil
 		},
@@ -257,7 +265,7 @@ func RunClient(ctx context.Context, config ClientConfig, options ClientRunOption
 		return err
 	}
 
-	options.Logger.Info("Tunnel client started", map[string]any{"server": config.Server.String(), "stateDirectory": instance.StateDirectory})
+	lifecycle.started(lastAppliedRevision > 0)
 	newRuntime := options.newRuntime
 	if newRuntime == nil {
 		newRuntime = defaultClientFRPRuntime
@@ -267,6 +275,7 @@ func RunClient(ctx context.Context, config ClientConfig, options ClientRunOption
 		if ctx.Err() != nil {
 			return nil
 		}
+		lifecycle.event(logging.Debug, "control.attempt", "Tunnel control connection attempt", map[string]any{"attempt": failures + 1})
 		connection, connectErr := agent.Connect(ctx)
 		if connectErr != nil {
 			if ctx.Err() != nil {
@@ -275,10 +284,14 @@ func RunClient(ctx context.Context, config ClientConfig, options ClientRunOption
 			if clientControlFailureIsFatal(connectErr) {
 				return connectErr
 			}
-			clientReconnect(options.Logger, failures, backoff)
+			lifecycle.connectionFailure(connectErr)
+			if !clientReconnectContext(ctx, options.Logger, failures, backoff) {
+				return nil
+			}
 			failures++
 			continue
 		}
+		lifecycle.authenticated()
 		failures = 0
 		connections.Set(connection)
 		if ctx.Err() != nil {
@@ -310,7 +323,7 @@ func RunClient(ctx context.Context, config ClientConfig, options ClientRunOption
 		}
 		reporter.Set(connection)
 
-		connectionErr := runClientControlConnection(ctx, agent, connection, reconciler, reporter)
+		connectionErr := runClientControlConnectionWithLifecycle(ctx, agent, connection, reconciler, reporter, lifecycle)
 		reporter.ClearConnection(connection)
 		connections.Clear(connection)
 		_ = connection.Close()
@@ -320,7 +333,10 @@ func RunClient(ctx context.Context, config ClientConfig, options ClientRunOption
 		if clientControlFailureIsFatal(connectionErr) {
 			return connectionErr
 		}
-		clientReconnect(options.Logger, failures, backoff)
+		lifecycle.connectionFailure(connectionErr)
+		if !clientReconnectContext(ctx, options.Logger, failures, backoff) {
+			return nil
+		}
 		failures++
 	}
 }
@@ -347,13 +363,28 @@ func clientReconnectBackoff(configured []time.Duration) ([]time.Duration, error)
 }
 
 func clientReconnect(logger logging.Logger, failures int, backoff []time.Duration) {
+	_ = clientReconnectContext(context.Background(), logger, failures, backoff)
+}
+
+func clientReconnectContext(ctx context.Context, logger logging.Logger, failures int, backoff []time.Duration) bool {
 	index := failures
 	if index >= len(backoff) {
 		index = len(backoff) - 1
 	}
 	delay := backoff[index]
-	logger.Debug("Scheduling Tunnel control reconnect", map[string]any{"delay": delay.String(), "attempt": failures + 1})
-	time.Sleep(delay)
+	logger.Event(logging.Debug, clientEventReconnect, "Tunnel control reconnect scheduled", map[string]any{
+		"delayMs":       delay.Milliseconds(),
+		"attempt":       failures + 1,
+		"backoffCapped": failures >= len(backoff),
+	})
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 func clientControlFailureIsFatal(err error) bool {
@@ -361,8 +392,12 @@ func clientControlFailureIsFatal(err error) bool {
 }
 
 func runClientControlConnection(ctx context.Context, agent *ClientAgent, connection *ClientControlConnection, reconciler *ClientReconciler, reporter *clientProcessStateReporter) error {
+	return runClientControlConnectionWithLifecycle(ctx, agent, connection, reconciler, reporter, nil)
+}
+
+func runClientControlConnectionWithLifecycle(ctx context.Context, agent *ClientAgent, connection *ClientControlConnection, reconciler *ClientReconciler, reporter *clientProcessStateReporter, lifecycle *clientLifecycle) error {
 	configuration := clientDesiredConfigurationFromWelcome(connection.Welcome)
-	if err := reportClientApply(ctx, agent, connection, reconciler, reporter, configuration); err != nil {
+	if err := reportClientApplyWithLifecycle(ctx, agent, connection, reconciler, reporter, configuration, lifecycle); err != nil {
 		return err
 	}
 	for {
@@ -382,10 +417,13 @@ func runClientControlConnection(ctx context.Context, agent *ClientAgent, connect
 		switch message.kind {
 		case "desired_state":
 			configuration.Snapshot = message.desired.Snapshot
-			if err := reportClientApply(ctx, agent, connection, reconciler, reporter, configuration); err != nil {
+			if err := reportClientApplyWithLifecycle(ctx, agent, connection, reconciler, reporter, configuration, lifecycle); err != nil {
 				return err
 			}
 		case "restart_frpc":
+			if lifecycle != nil {
+				lifecycle.event(logging.Debug, "frp.restart_requested", "FRP restart requested", nil)
+			}
 			if err := reconciler.Restart(); err != nil {
 				closeClientControlSocket(connection.socket, 4406, "Client failed to process control message")
 				return fmt.Errorf("%w: restart frpc: %v", errClientControlFatal, err)
@@ -393,8 +431,14 @@ func runClientControlConnection(ctx context.Context, agent *ClientAgent, connect
 			if err := reporter.Publish(); err != nil {
 				return fmt.Errorf("report Tunnel client process state: %w", err)
 			}
+			if lifecycle != nil {
+				lifecycle.event(logging.Info, "frp.restarted", "FRP client restarted", nil)
+			}
 		case "revoke":
-			return errClientControlRevoked
+			if lifecycle != nil {
+				lifecycle.revoked(message.revokeReason)
+			}
+			return &clientControlRevokedError{reason: message.revokeReason}
 		default:
 			return fmt.Errorf("%w: unexpected control message", ErrClientProtocol)
 		}
@@ -411,7 +455,11 @@ func clientDesiredConfigurationFromWelcome(welcome tunnelruntime.AgentWelcome) C
 }
 
 func reportClientApply(ctx context.Context, agent *ClientAgent, connection *ClientControlConnection, reconciler *ClientReconciler, reporter *clientProcessStateReporter, desired ClientDesiredConfiguration) error {
-	err := reconciler.Apply(ctx, desired)
+	return reportClientApplyWithLifecycle(ctx, agent, connection, reconciler, reporter, desired, nil)
+}
+
+func reportClientApplyWithLifecycle(ctx context.Context, agent *ClientAgent, connection *ClientControlConnection, reconciler *ClientReconciler, reporter *clientProcessStateReporter, desired ClientDesiredConfiguration, lifecycle *clientLifecycle) error {
+	applyResult, err := reconciler.ApplyWithResult(ctx, desired)
 	if ctx.Err() != nil {
 		return ctx.Err()
 	}
@@ -443,6 +491,9 @@ func reportClientApply(ctx context.Context, agent *ClientAgent, connection *Clie
 			return fmt.Errorf("report Tunnel desired-state failure: %w", writeErr)
 		}
 	}
+	if lifecycle != nil {
+		lifecycle.apply(applyResult, err)
+	}
 	if writeErr := reporter.Publish(); writeErr != nil {
 		return fmt.Errorf("report Tunnel client process state: %w", writeErr)
 	}
@@ -450,9 +501,15 @@ func reportClientApply(ctx context.Context, agent *ClientAgent, connection *Clie
 }
 
 type clientControlMessage struct {
-	kind    string
-	desired tunnelruntime.DesiredState
+	kind         string
+	desired      tunnelruntime.DesiredState
+	revokeReason string
 }
+
+type clientControlRevokedError struct{ reason string }
+
+func (err *clientControlRevokedError) Error() string { return errClientControlRevoked.Error() }
+func (err *clientControlRevokedError) Unwrap() error { return errClientControlRevoked }
 
 func decodeClientControlMessage(source []byte) (clientControlMessage, error) {
 	var envelope struct {
@@ -486,7 +543,7 @@ func decodeClientControlMessage(source []byte) (clientControlMessage, error) {
 		if err := json.Unmarshal(source, &revoke); err != nil || (revoke.Reason != "rotated" && revoke.Reason != "deleted") {
 			return clientControlMessage{}, fmt.Errorf("%w: invalid revoke message", ErrClientProtocol)
 		}
-		return clientControlMessage{kind: envelope.Type}, nil
+		return clientControlMessage{kind: envelope.Type, revokeReason: revoke.Reason}, nil
 	default:
 		return clientControlMessage{}, fmt.Errorf("%w: unexpected control message", ErrClientProtocol)
 	}
@@ -523,9 +580,12 @@ func (holder *clientControlConnectionHolder) Close() error {
 }
 
 type clientProcessStateReporter struct {
-	mu         sync.Mutex
-	connection *ClientControlConnection
-	state      tunnelruntime.FRPSupervisorState
+	mu          sync.Mutex
+	connection  *ClientControlConnection
+	state       tunnelruntime.FRPSupervisorState
+	previous    tunnelruntime.FRPProcessState
+	initialized bool
+	lifecycle   *clientLifecycle
 }
 
 func (reporter *clientProcessStateReporter) Set(connection *ClientControlConnection) {
@@ -551,8 +611,28 @@ func (reporter *clientProcessStateReporter) ClearConnection(connection *ClientCo
 
 func (reporter *clientProcessStateReporter) Report(state tunnelruntime.FRPSupervisorState) {
 	reporter.mu.Lock()
+	previous := reporter.state.State
+	initialized := reporter.initialized
 	reporter.state = tunnelruntime.CloneFRPSupervisorState(state)
+	reporter.initialized = true
+	lifecycle := reporter.lifecycle
 	reporter.mu.Unlock()
+	if lifecycle != nil && initialized && previous != state.State {
+		switch state.State {
+		case tunnelruntime.FRPProcessRunning:
+			if previous == tunnelruntime.FRPProcessRecovering {
+				lifecycle.event(logging.Info, "frp.recovered", "FRP client recovered", nil)
+			} else {
+				lifecycle.event(logging.Info, "frp.running", "FRP client running", nil)
+			}
+		case tunnelruntime.FRPProcessStopped:
+			lifecycle.event(logging.Info, "frp.stopped", "FRP client stopped", nil)
+		case tunnelruntime.FRPProcessRecovering:
+			lifecycle.event(logging.Warn, "frp.recovering", "FRP client recovering", map[string]any{"failureClass": "frp-child"})
+		case tunnelruntime.FRPProcessConfigurationFailed:
+			lifecycle.event(logging.Error, "frp.failed", "FRP client failed", map[string]any{"failureClass": "configuration"})
+		}
+	}
 	_ = reporter.Publish()
 }
 

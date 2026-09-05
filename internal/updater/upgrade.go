@@ -237,7 +237,15 @@ func copyFile(source, destination string) error {
 }
 
 func spawnDetached(ctx context.Context, path string, arguments []string) error {
-	command := exec.CommandContext(ctx, path, arguments...)
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	// The context owns only the scheduling decision. Once Start succeeds the
+	// child owns the transaction and must outlive the parent command's cancel.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	command := exec.Command(path, arguments...)
 	command.Stdin = nil
 	command.Stdout = nil
 	command.Stderr = nil

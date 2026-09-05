@@ -24,6 +24,11 @@ func PresentResult(ctx context.Context, experience *terminalexperience.Runtime, 
 		}
 	}
 	if resultErr != nil {
+		// A cancelled parent run must not be presented as a user-declined
+		// classified abort, even when the updater retains its exit wrapper.
+		if errors.Is(resultErr, context.Canceled) || errors.Is(resultErr, context.DeadlineExceeded) {
+			return resultErr
+		}
 		var exit *updater.ExitCodeError
 		if result.Aborted && errors.As(resultErr, &exit) {
 			_, _ = fmt.Fprintln(experience.DiagnosticWriter(), "error: "+logging.Redact(resultErr.Error()))

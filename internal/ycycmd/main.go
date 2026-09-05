@@ -19,7 +19,10 @@ func Main(version string) int {
 func run(version string, arguments []string, input, output, diagnostics *os.File) int {
 	if handled, err := RunHiddenUpgrade(arguments); handled {
 		if err != nil {
-			_, _ = fmt.Fprintf(diagnostics, "error: %s\n", err)
+			// The hidden child has no parent presentation surface. Keep its one
+			// diagnostic line fixed so filesystem paths and raw process errors do
+			// not escape before the next startup can consume the safe state.
+			_, _ = fmt.Fprintln(diagnostics, "error: detached updater failed")
 			return 1
 		}
 		return 0

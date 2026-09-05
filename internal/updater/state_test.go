@@ -168,6 +168,17 @@ func TestGoStateNamespaceDoesNotTouchAdjacentState(t *testing.T) {
 	}
 }
 
+func TestFormatStateResultDoesNotExposePersistedRawFailure(t *testing.T) {
+	cleanup := UpdateTransaction{ExpectedVersion: "1.2.3", Status: StatusSucceededCleanupWarn, Message: "cleanup failed /private/path Bearer secret"}
+	if got := FormatStateResult(cleanup); strings.Contains(got, "/private/path") || strings.Contains(got, "secret") || !strings.Contains(got, "cleanup failed") {
+		t.Fatalf("cleanup result = %q", got)
+	}
+	failure := UpdateTransaction{ExpectedVersion: "1.2.3", Status: StatusFailed, Message: "replacement failed; rollback failed: /private/path token=secret"}
+	if got := FormatStateResult(failure); strings.Contains(got, "/private/path") || strings.Contains(got, "secret") || !strings.Contains(got, "rollback failed") {
+		t.Fatalf("failure result = %q", got)
+	}
+}
+
 func TestProcessProbeRetainsLiveCurrentProcessAndRejectsForeignStateNamespace(t *testing.T) {
 	if !defaultProcessAlive(os.Getpid()) {
 		t.Fatal("current process was reported dead")

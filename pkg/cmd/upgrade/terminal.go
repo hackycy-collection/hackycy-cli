@@ -159,6 +159,11 @@ func (sink *upgradePhaseSink) recordLocked(err error) {
 
 func finishUpgradeRun(run terminalexperience.ExperienceRun, diagnostics io.Writer, previous *terminalexperience.PresentationDocument, result updater.UpgradeResult, resultErr error) error {
 	if resultErr != nil {
+		// Cancellation is a process lifecycle outcome, even when the lower-level
+		// updater preserves its historical ExitCodeError wrapper.
+		if errors.Is(resultErr, context.Canceled) || errors.Is(resultErr, context.DeadlineExceeded) {
+			return errors.Join(resultErr, run.Finish(terminalexperience.Cancelled, previous))
+		}
 		var exit *updater.ExitCodeError
 		if result.Aborted && errors.As(resultErr, &exit) {
 			_, _ = fmt.Fprintln(diagnostics, "error: "+terminalUpgradeDiagnostic(resultErr))

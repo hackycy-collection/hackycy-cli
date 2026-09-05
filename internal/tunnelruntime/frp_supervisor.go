@@ -293,8 +293,8 @@ func (supervisor *FRPSupervisor) spawn() (frpChild, error) {
 	})
 	supervisor.mu.Unlock()
 	publish()
-	supervisor.consumeOutput(child.Stdout(), logging.Info, child.PID())
-	supervisor.consumeOutput(child.Stderr(), logging.Warn, child.PID())
+	supervisor.consumeOutput(child.Stdout(), "stdout")
+	supervisor.consumeOutput(child.Stderr(), "stderr")
 	go supervisor.watchExit(child)
 	return child, nil
 }
@@ -463,27 +463,56 @@ func (supervisor *FRPSupervisor) setStateLocked(state FRPSupervisorState) func()
 	}
 }
 
-func (supervisor *FRPSupervisor) consumeOutput(stream io.Reader, level logging.Level, pid int) {
+func (supervisor *FRPSupervisor) consumeOutput(stream io.Reader, streamName string) {
 	if stream == nil {
 		return
 	}
 	go func() {
 		scanner := bufio.NewScanner(stream)
+		scanner.Buffer(make([]byte, 256), 4096)
 		for scanner.Scan() {
 			if line := scanner.Text(); line != "" {
-				supervisor.options.Logger.Log(level, line, map[string]any{"role": supervisor.options.Role, "pid": pid})
+				supervisor.options.Logger.Event(logging.Debug, "frp.child_output", "FRP child output", map[string]any{
+					"role":   supervisor.options.Role,
+					"stream": streamName,
+					"detail": safeFRPChildLine(line),
+				})
 			}
 		}
 		if err := scanner.Err(); err != nil {
-			supervisor.options.Logger.Warn("Could not read FRP child output", map[string]any{"role": supervisor.options.Role, "pid": pid, "reason": err.Error()})
+			supervisor.options.Logger.Event(logging.Warn, "frp.child_output_warning", "FRP child output warning", map[string]any{
+				"role":   supervisor.options.Role,
+				"reason": "scanner",
+			})
 		}
 	}()
 }
 
 func (supervisor *FRPSupervisor) releaseChild(child frpChild) {
 	if err := child.Release(); err != nil {
-		supervisor.options.Logger.Warn("Could not release FRP child ownership", map[string]any{"role": supervisor.options.Role, "pid": child.PID(), "reason": err.Error()})
+		supervisor.options.Logger.Event(logging.Warn, "frp.child_release_warning", "FRP child ownership warning", map[string]any{
+			"role":   supervisor.options.Role,
+			"reason": "ownership",
+		})
 	}
+}
+
+func safeFRPChildLine(line string) string {
+	line = logging.RedactDiagnostic(line)
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return "suppressed"
+	}
+	lower := strings.ToLower(line)
+	for _, marker := range []string{"authorization", "bearer ", "token", "password", "secret", "credential", "private key", "http://", "https://", ".toml", "config/", "\\"} {
+		if strings.Contains(lower, marker) {
+			return "suppressed"
+		}
+	}
+	if len(line) > 240 {
+		line = line[:240] + "..."
+	}
+	return line
 }
 
 func frpExitMessage(role FRPRole, exitErr error) string {

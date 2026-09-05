@@ -77,6 +77,7 @@ func (connection *ServerAgentConnection) AcceptHello(ctx context.Context, source
 	}
 	connection.helloAccepted = true
 	connection.hello = hello
+	connection.gateway.agentConnected(connection.clientID)
 	return nil
 }
 
@@ -154,9 +155,11 @@ func (connection *ServerAgentConnection) recordApplyResult(ctx context.Context, 
 		if err := connection.gateway.controlPlane.RecordAppliedRevision(ctx, connection.clientID, result.Revision); err != nil {
 			return &ServerAgentProtocolError{CloseCode: serverAgentCloseInvalidMessage, Message: "Invalid Applied Revision"}
 		}
-		if !connection.gateway.recordRuntimeError(connection.clientID, connection.slot, nil) {
+		accepted, changed, recovered := connection.gateway.recordApplyResult(connection.clientID, connection.slot, result)
+		if !accepted {
 			return &ServerAgentProtocolError{CloseCode: serverAgentCloseRevoked, Message: "Client Token revoked"}
 		}
+		connection.gateway.logApplyResult(result, changed, recovered)
 		return nil
 	}
 	lastError := result.Error
@@ -168,15 +171,22 @@ func (connection *ServerAgentConnection) recordApplyResult(ctx context.Context, 
 			Revision: &revision,
 		}
 	}
-	if !connection.gateway.recordRuntimeError(connection.clientID, connection.slot, lastError) {
+	result.Error = lastError
+	accepted, changed, _ := connection.gateway.recordApplyResult(connection.clientID, connection.slot, result)
+	if !accepted {
 		return &ServerAgentProtocolError{CloseCode: serverAgentCloseRevoked, Message: "Client Token revoked"}
 	}
+	connection.gateway.logApplyResult(result, changed, false)
 	return nil
 }
 
 func (connection *ServerAgentConnection) recordProcessState(state tunnelruntime.ProcessState) *ServerAgentProtocolError {
-	if !connection.gateway.recordProcessState(connection.clientID, connection.slot, state.State, state.Error) {
+	accepted, changed := connection.gateway.recordProcessStateWithChange(connection.clientID, connection.slot, state.State, state.Error)
+	if !accepted {
 		return &ServerAgentProtocolError{CloseCode: serverAgentCloseRevoked, Message: "Client Token revoked"}
+	}
+	if changed {
+		connection.gateway.logProcessState(state.State)
 	}
 	return nil
 }
@@ -302,6 +312,7 @@ func (connection *ServerAgentConnection) Revoke(reason string) {
 		connection.presentationMu.Unlock()
 		return
 	}
+	connection.revoked = true
 	if connection.presentationActive && connection.writeFrame != nil {
 		_ = connection.writeFrame(tunnelruntime.Revoke{
 			Type:                  "revoke",

@@ -2,11 +2,15 @@ package server
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
-	tunnelruntime "github.com/hackycy/hackycy-cli/internal/tunnelruntime"
 	"strings"
 	"sync"
+
+	"github.com/hackycy/hackycy-cli/internal/logging"
+	tunnelruntime "github.com/hackycy/hackycy-cli/internal/tunnelruntime"
 )
 
 var ErrServerAgentGatewayConfiguration = errors.New("Tunnel server agent gateway configuration is invalid")
@@ -35,6 +39,7 @@ type ServerAgentGatewayOptions struct {
 	ControlPlane  *ServerControlPlane
 	FRPS          ServerAgentFRPSStateProvider
 	WelcomeSource ServerAgentWelcomeSource
+	Logger        logging.Logger
 }
 
 // ServerAgentGateway owns process-local agent admission, connection runtime
@@ -45,6 +50,9 @@ type ServerAgentGateway struct {
 	controlPlane  *ServerControlPlane
 	frps          ServerAgentFRPSStateProvider
 	welcomeSource ServerAgentWelcomeSource
+	logger        logging.Logger
+	warningMu     sync.Mutex
+	warnings      map[string]bool
 
 	mu       sync.RWMutex
 	slots    map[string]serverAgentSlot
@@ -60,8 +68,16 @@ type serverAgentSlot struct {
 }
 
 type serverAgentRuntime struct {
-	processState tunnelruntime.FRPProcessState
-	lastError    *tunnelruntime.StructuredRuntimeError
+	processState        tunnelruntime.FRPProcessState
+	lastError           *tunnelruntime.StructuredRuntimeError
+	lastAppliedRevision int64
+	hasAppliedRevision  bool
+	lastApplySuccess    bool
+	lastApplyCode       string
+	hasApplyResult      bool
+	lastProcessState    tunnelruntime.FRPProcessState
+	lastProcessCode     string
+	hasProcessState     bool
 }
 
 func NewServerAgentGateway(options ServerAgentGatewayOptions) (*ServerAgentGateway, error) {
@@ -75,11 +91,172 @@ func NewServerAgentGateway(options ServerAgentGatewayOptions) (*ServerAgentGatew
 		controlPlane:  options.ControlPlane,
 		frps:          options.FRPS,
 		welcomeSource: options.WelcomeSource,
+		logger:        options.Logger,
 		slots:         make(map[string]serverAgentSlot),
 		runtime:       make(map[string]serverAgentRuntime),
+		warnings:      make(map[string]bool),
 	}
 	gateway.controlPlane.Subscribe(gateway.handleControlPlaneEvent)
 	return gateway, nil
+}
+
+func (gateway *ServerAgentGateway) lifecycleEvent(level logging.Level, id, message string, fields map[string]any) {
+	if gateway == nil {
+		return
+	}
+	gateway.logger.Event(level, id, message, fields)
+}
+
+func (gateway *ServerAgentGateway) warning(category, failureClass string) {
+	gateway.warningForClient("", category, failureClass)
+}
+
+func (gateway *ServerAgentGateway) warningForClient(clientID, category, failureClass string) {
+	if gateway == nil {
+		return
+	}
+	key := category + "\x00" + clientID
+	gateway.warningMu.Lock()
+	if gateway.warnings[key] {
+		gateway.warningMu.Unlock()
+		return
+	}
+	gateway.warnings[key] = true
+	gateway.warningMu.Unlock()
+	gateway.lifecycleEvent(logging.Warn, serverEventAgentWarning, "Tunnel agent warning", map[string]any{
+		"category":     category,
+		"failureClass": failureClass,
+	})
+}
+
+func (gateway *ServerAgentGateway) clearWarning(category, clientID string) bool {
+	if gateway == nil {
+		return false
+	}
+	gateway.warningMu.Lock()
+	key := category + "\x00" + clientID
+	wasSet := gateway.warnings[key]
+	delete(gateway.warnings, key)
+	gateway.warningMu.Unlock()
+	return wasSet
+}
+
+func (gateway *ServerAgentGateway) agentConnected(clientID string) {
+	gateway.clearWarning("authentication", clientID)
+	if gateway.clearWarning("connection", clientID) {
+		gateway.lifecycleEvent(logging.Info, serverEventAgentRestored, "Tunnel agent restored", map[string]any{"clientRef": serverClientRef(clientID)})
+		return
+	}
+	gateway.lifecycleEvent(logging.Info, serverEventAgentConnected, "Tunnel agent connected", map[string]any{"clientRef": serverClientRef(clientID)})
+}
+
+func (gateway *ServerAgentGateway) agentDisconnected(clientID string) {
+	if gateway == nil {
+		return
+	}
+	gateway.warningMu.Lock()
+	key := "connection\x00" + clientID
+	if gateway.warnings[key] {
+		gateway.warningMu.Unlock()
+		return
+	}
+	gateway.warnings[key] = true
+	gateway.warningMu.Unlock()
+	gateway.lifecycleEvent(logging.Warn, serverEventAgentDisconnected, "Tunnel agent disconnected", map[string]any{"failureClass": "transport", "clientRef": serverClientRef(clientID)})
+}
+
+func (gateway *ServerAgentGateway) agentRevoked(reason string) {
+	if reason == "" {
+		reason = "deleted"
+	}
+	gateway.lifecycleEvent(logging.Warn, serverEventAgentRevoked, "Tunnel agent revoked", map[string]any{"reason": reason})
+}
+
+func (gateway *ServerAgentGateway) protocolWarning(clientID, category string) {
+	if category == "" {
+		category = "protocol"
+	}
+	gateway.warningForClient(clientID, category, "protocol")
+}
+
+func (gateway *ServerAgentGateway) controlChange(event ServerControlPlaneEvent) {
+	action := "updated"
+	object := "control"
+	switch event.Type {
+	case serverClientCreated:
+		action, object = "created", "client"
+	case serverClientUpdated:
+		action, object = "updated", "client"
+	case serverClientRotated:
+		action, object = "rotated", "client"
+	case serverClientDeleted:
+		action, object = "deleted", "client"
+	case serverDesiredState:
+		action, object = "applied", "desired-state"
+	default:
+		return
+	}
+	gateway.lifecycleEvent(logging.Info, serverEventControlChange, "Tunnel control change committed", map[string]any{
+		"action": action,
+		"object": object,
+	})
+}
+
+func (gateway *ServerAgentGateway) logApplyResult(result tunnelruntime.ApplyResult, changed, recovered bool) {
+	if gateway == nil {
+		return
+	}
+	if !changed {
+		return
+	}
+	fields := map[string]any{"revision": result.Revision}
+	if result.Success {
+		if recovered {
+			gateway.lifecycleEvent(logging.Info, serverEventAgentStateRecovered, "Tunnel agent state recovered", fields)
+		} else {
+			gateway.lifecycleEvent(logging.Info, serverEventAgentStateChanged, "Tunnel agent state applied", fields)
+		}
+		return
+	}
+	fields["failureClass"] = serverAgentFailureClass(result.Error)
+	gateway.lifecycleEvent(logging.Warn, serverEventAgentStateWarning, "Tunnel agent state warning", fields)
+}
+
+func (gateway *ServerAgentGateway) logProcessState(state tunnelruntime.FRPProcessState) {
+	if gateway == nil {
+		return
+	}
+	gateway.lifecycleEvent(logging.Debug, serverEventAgentProcessState, "Tunnel agent process state", map[string]any{"state": string(state)})
+}
+
+func serverClientRef(clientID string) string {
+	if strings.TrimSpace(clientID) == "" {
+		return "unknown"
+	}
+	digest := sha256.Sum256([]byte(clientID))
+	return hex.EncodeToString(digest[:4])
+}
+
+func serverAgentFailureClass(lastError *tunnelruntime.StructuredRuntimeError) string {
+	if lastError == nil {
+		return "unknown"
+	}
+	switch strings.ToUpper(strings.TrimSpace(lastError.Code)) {
+	case "AUTHENTICATION_FAILED", "UNAUTHORIZED":
+		return "authentication"
+	case "FRPS_UNAVAILABLE", "FRP_START_FAILED":
+		return "frps"
+	case "CONFIGURATION_FAILED":
+		return "configuration"
+	case "ACTIVATION_FAILED":
+		return "activation"
+	case "TRANSPORT", "TIMEOUT":
+		return "transport"
+	case "CLIENT_CONNECTED", "INVALID_MESSAGE", "INVALID_REVISION", "PROTOCOL":
+		return "protocol"
+	default:
+		return "unknown"
+	}
 }
 
 // State combines process-local connection ownership and the latest agent
@@ -117,46 +294,100 @@ func (gateway *ServerAgentGateway) State(clientID string) ServerClientRuntimeSta
 }
 
 func (gateway *ServerAgentGateway) recordProcessState(clientID string, slot uint64, processState tunnelruntime.FRPProcessState, lastError *tunnelruntime.StructuredRuntimeError) bool {
+	accepted, _ := gateway.recordProcessStateWithChange(clientID, slot, processState, lastError)
+	return accepted
+}
+
+func (gateway *ServerAgentGateway) recordProcessStateWithChange(clientID string, slot uint64, processState tunnelruntime.FRPProcessState, lastError *tunnelruntime.StructuredRuntimeError) (bool, bool) {
 	if gateway == nil {
-		return false
+		return false, false
 	}
 	gateway.mu.Lock()
 	defer gateway.mu.Unlock()
 	current, found := gateway.slots[clientID]
 	if !found || current.generation != slot || !current.active || current.revoking {
-		return false
+		return false, false
 	}
 	runtime := gateway.runtime[clientID]
 	if runtime.processState == "" {
 		runtime.processState = tunnelruntime.FRPProcessStopped
 	}
+	code := ""
+	if lastError != nil {
+		code = strings.ToUpper(strings.TrimSpace(lastError.Code))
+	}
+	changed := !runtime.hasProcessState || runtime.lastProcessState != processState || runtime.lastProcessCode != code
 	runtime.processState = processState
+	runtime.lastProcessState = processState
+	runtime.lastProcessCode = code
+	runtime.hasProcessState = true
 	if lastError != nil {
 		runtime.lastError = cloneServerAgentRuntimeError(lastError)
 	} else if runtime.lastError == nil || runtime.lastError.Revision == nil {
 		runtime.lastError = nil
 	}
 	gateway.runtime[clientID] = runtime
-	return true
+	return true, changed
 }
 
 func (gateway *ServerAgentGateway) recordRuntimeError(clientID string, slot uint64, lastError *tunnelruntime.StructuredRuntimeError) bool {
+	accepted, _, _ := gateway.recordApplyResult(clientID, slot, tunnelruntime.ApplyResult{Revision: runtimeErrorRevision(lastError), Success: lastError == nil, Error: lastError})
+	return accepted
+}
+
+func runtimeErrorRevision(lastError *tunnelruntime.StructuredRuntimeError) int64 {
+	if lastError == nil || lastError.Revision == nil {
+		return 0
+	}
+	return *lastError.Revision
+}
+
+// recordApplyResult updates the process-local acknowledgement projection and
+// reports whether the incoming revision/error represents a real transition.
+func (gateway *ServerAgentGateway) recordApplyResult(clientID string, slot uint64, result tunnelruntime.ApplyResult) (bool, bool, bool) {
 	if gateway == nil {
-		return false
+		return false, false, false
 	}
 	gateway.mu.Lock()
 	defer gateway.mu.Unlock()
 	current, found := gateway.slots[clientID]
 	if !found || current.generation != slot || !current.active || current.revoking {
-		return false
+		return false, false, false
 	}
 	runtime := gateway.runtime[clientID]
 	if runtime.processState == "" {
 		runtime.processState = tunnelruntime.FRPProcessStopped
 	}
-	runtime.lastError = cloneServerAgentRuntimeError(lastError)
+	code := ""
+	if result.Error != nil {
+		code = strings.ToUpper(strings.TrimSpace(result.Error.Code))
+	}
+	if runtime.hasApplyResult && result.Revision < runtime.lastAppliedRevision {
+		// A late success acknowledgement may clear a previously projected
+		// error, but it must never move the observed revision backwards.
+		if result.Success && !runtime.lastApplySuccess {
+			runtime.lastApplySuccess = true
+			runtime.lastApplyCode = ""
+			runtime.lastError = nil
+			gateway.runtime[clientID] = runtime
+			return true, true, true
+		}
+		return true, false, false
+	}
+	changed := !runtime.hasApplyResult || runtime.lastAppliedRevision != result.Revision || runtime.lastApplySuccess != result.Success || runtime.lastApplyCode != code
+	recovered := runtime.hasApplyResult && !runtime.lastApplySuccess && result.Success && result.Revision >= runtime.lastAppliedRevision
+	runtime.lastAppliedRevision = result.Revision
+	runtime.hasAppliedRevision = true
+	runtime.lastApplySuccess = result.Success
+	runtime.lastApplyCode = code
+	runtime.hasApplyResult = true
+	if result.Success {
+		runtime.lastError = nil
+	} else {
+		runtime.lastError = cloneServerAgentRuntimeError(result.Error)
+	}
 	gateway.runtime[clientID] = runtime
-	return true
+	return true, changed, recovered
 }
 
 func cloneServerAgentRuntimeError(value *tunnelruntime.StructuredRuntimeError) *tunnelruntime.StructuredRuntimeError {
@@ -247,6 +478,7 @@ type ServerAgentConnection struct {
 	presentationMu     sync.Mutex
 	presentationActive bool
 	closed             bool
+	revoked            bool
 	writeFrame         func(any) error
 	closeSocket        func(*ServerAgentProtocolError)
 }
@@ -274,10 +506,17 @@ func (connection *ServerAgentConnection) Close() {
 		return
 	}
 	connection.closeOnce.Do(func() {
+		connection.helloMu.Lock()
+		helloAccepted := connection.helloAccepted
+		connection.helloMu.Unlock()
 		connection.presentationMu.Lock()
+		revoked := connection.revoked
 		connection.closed = true
 		connection.presentationMu.Unlock()
 		connection.gateway.release(connection.clientID, connection.slot)
+		if helloAccepted && !revoked {
+			connection.gateway.agentDisconnected(connection.clientID)
+		}
 	})
 }
 
@@ -299,10 +538,12 @@ func (connection *ServerAgentConnection) AttachCloser(closeSocket func(*ServerAg
 // separate so a non-upgrade request can release this reservation first.
 func (gateway *ServerAgentGateway) Authorize(ctx context.Context, authorization string) (*ServerAgentReservation, error) {
 	if gateway.frps.FRPSState().State != tunnelruntime.FRPProcessRunning {
+		gateway.warning("frps", "frps")
 		return nil, serverDomainError("FRPS_UNAVAILABLE", "Managed frps is not running")
 	}
 	token := parseServerAgentBearerToken(authorization)
 	if token == "" {
+		gateway.warning("authentication", "authentication")
 		return nil, serverDomainError("AUTHENTICATION_FAILED", "Client Token is invalid")
 	}
 	client, err := gateway.controlPlane.FindClientByToken(ctx, token)
@@ -310,10 +551,12 @@ func (gateway *ServerAgentGateway) Authorize(ctx context.Context, authorization 
 		return nil, err
 	}
 	if client == nil {
+		gateway.warning("authentication", "authentication")
 		return nil, serverDomainError("AUTHENTICATION_FAILED", "Client Token is invalid")
 	}
 	slot, reserved := gateway.reserve(client.ID)
 	if !reserved {
+		gateway.warning("connection", "protocol")
 		return nil, serverDomainError("CLIENT_CONNECTED", "Client Token already has an active control session")
 	}
 	return &ServerAgentReservation{gateway: gateway, clientID: client.ID, slot: slot}, nil
@@ -366,6 +609,7 @@ func (gateway *ServerAgentGateway) release(clientID string, slot uint64) {
 }
 
 func (gateway *ServerAgentGateway) handleControlPlaneEvent(event ServerControlPlaneEvent) {
+	gateway.controlChange(event)
 	switch event.Type {
 	case serverDesiredState:
 		gateway.mu.RLock()
@@ -398,6 +642,7 @@ func (gateway *ServerAgentGateway) revoke(clientID, reason string, deleted bool)
 		if slot.connection != nil {
 			slot.connection.Revoke(reason)
 		}
+		gateway.agentRevoked(reason)
 		return
 	}
 	if !slot.active || slot.connection == nil {
@@ -409,4 +654,5 @@ func (gateway *ServerAgentGateway) revoke(clientID, reason string, deleted bool)
 	gateway.slots[clientID] = slot
 	gateway.mu.Unlock()
 	slot.connection.Revoke(reason)
+	gateway.agentRevoked(reason)
 }

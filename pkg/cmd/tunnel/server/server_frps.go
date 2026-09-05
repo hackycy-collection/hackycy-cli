@@ -11,6 +11,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/hackycy/hackycy-cli/internal/logging"
 )
 
 const (
@@ -30,6 +32,7 @@ type ManagedFRPSOptions struct {
 	InternalFRPToken string
 	Supervisor       *tunnelruntime.FRPSupervisor
 	Prepare          func(context.Context) error
+	LifecycleLogger  logging.Logger
 }
 
 // ManagedFRPS owns the static server-side FRPS configuration. Process control
@@ -39,6 +42,7 @@ type ManagedFRPS struct {
 	internalFRPToken string
 	supervisor       *tunnelruntime.FRPSupervisor
 	prepare          func(context.Context) error
+	lifecycleLogger  logging.Logger
 	configuration    string
 	custom404Page    string
 	operations       sync.Mutex
@@ -70,6 +74,7 @@ func NewManagedFRPS(options ManagedFRPSOptions) (*ManagedFRPS, error) {
 		internalFRPToken: options.InternalFRPToken,
 		supervisor:       options.Supervisor,
 		prepare:          options.Prepare,
+		lifecycleLogger:  options.LifecycleLogger,
 		configuration:    filepath.Join(dataDirectory, "frps.toml"),
 		custom404Page:    filepath.Join(dataDirectory, "404.html"),
 		observers:        make(map[uint64]func()),
@@ -201,6 +206,7 @@ func (managed *ManagedFRPS) VerifyPublishedConfiguration(ctx context.Context) er
 func (managed *ManagedFRPS) Start(ctx context.Context) error {
 	managed.operations.Lock()
 	defer managed.operations.Unlock()
+	managed.lifecycleLogger.Event(logging.Debug, "frps.start_requested", "Managed FRPS start requested", nil)
 	return managed.start(ctx)
 }
 
@@ -239,7 +245,12 @@ func (managed *ManagedFRPS) start(ctx context.Context) error {
 func (managed *ManagedFRPS) Restart(ctx context.Context) error {
 	managed.operations.Lock()
 	defer managed.operations.Unlock()
-	return managed.start(ctx)
+	managed.lifecycleLogger.Event(logging.Debug, "frps.restart_requested", "Managed FRPS restart requested", nil)
+	if err := managed.start(ctx); err != nil {
+		return err
+	}
+	managed.lifecycleLogger.Event(logging.Info, "frps.restarted", "Managed FRPS restarted", nil)
+	return nil
 }
 
 // Stop serializes manual shutdown with activation without changing managed
@@ -247,6 +258,7 @@ func (managed *ManagedFRPS) Restart(ctx context.Context) error {
 func (managed *ManagedFRPS) Stop() error {
 	managed.operations.Lock()
 	defer managed.operations.Unlock()
+	managed.lifecycleLogger.Event(logging.Debug, "frps.stop_requested", "Managed FRPS stop requested", nil)
 	return managed.supervisor.Stop()
 }
 

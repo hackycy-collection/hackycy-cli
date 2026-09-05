@@ -31,6 +31,7 @@ func TestFRPSupervisorStreamsOutputAndStopsItsUnixProcessGroup(t *testing.T) {
 	t.Setenv("FRP_GRANDCHILD_PID", pidPath)
 	var output lockedFRPLogBuffer
 	runtime := logging.NewRuntime(logging.Options{Writer: &output})
+	runtime.SetLevel(logging.Debug)
 	supervisor := newTestFRPSupervisor(t, FRPSupervisorOptions{
 		BinaryPath: parent, Role: FRPRoleClient, ActivationGrace: 20 * time.Millisecond, Logger: runtime.Logger("tunnel.client.frpc"),
 	})

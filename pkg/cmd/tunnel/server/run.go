@@ -321,6 +321,8 @@ func RunServer(ctx context.Context, config ServerConfig, options ServerRunOption
 	if ctx.Err() != nil {
 		return nil
 	}
+	lifecycle := newServerLifecycle(options.Logger)
+	lifecycle.starting(config)
 	newRuntime := options.newRuntime
 	if newRuntime == nil {
 		newRuntime = NewServerRuntime
@@ -331,35 +333,41 @@ func RunServer(ctx context.Context, config ServerConfig, options ServerRunOption
 		SessionIdleLifetime: config.SessionIdleLifetime,
 		FRPToken:            config.FRPToken,
 		FRPSLogger:          options.Logger,
+		LifecycleLogger:     options.Logger,
 	})
 	if err != nil {
 		if ctx.Err() == nil {
-			options.Logger.Error("Tunnel server failed", map[string]any{"error": err.Error()})
+			lifecycle.failed("state.open_failed", err)
+			lifecycle.stopped(ctx, err)
 			return err
 		}
 		return nil
 	}
+	lifecycle.stateOpened(config)
+	stopFRPSObserver := runtime.supervisor.Observe(lifecycle.frpsState)
+	defer stopFRPSObserver()
 	if ctx.Err() != nil {
-		return runtime.Close()
+		closeErr := runtime.Close()
+		lifecycle.shutdown(ctx, "cancelled")
+		if closeErr != nil {
+			lifecycle.failed("shutdown.cleanup_failed", closeErr)
+		}
+		lifecycle.stopped(ctx, closeErr)
+		return closeErr
 	}
-	server, err := runtime.Start()
+	server, err := runtime.start(false)
 	if err != nil {
 		if ctx.Err() == nil {
-			options.Logger.Error("Tunnel server failed", map[string]any{"error": err.Error()})
+			lifecycle.failed("control.bind_failed", err)
+			lifecycle.stopped(ctx, err)
 			return err
 		}
 		return nil
 	}
-	settings := config.Settings
-	options.Logger.Info("Tunnel control plane started", map[string]any{
-		"url": server.URL(), "address": settings.Address, "controlPort": settings.ControlPort,
-	})
-	options.Logger.Info("FRP listeners configured", map[string]any{
-		"frpBind":   fmt.Sprintf("%s:%d", settings.Address, settings.FRPPort),
-		"httpVhost": fmt.Sprintf("%s:%d", settings.Address, settings.HTTPPort),
-		"portPool":  fmt.Sprintf("%d-%d", settings.PortRange.Start, settings.PortRange.End),
-	})
-	options.Logger.Info("Tunnel server state directory configured", map[string]any{"stateDirectory": settings.DataDir})
+	lifecycle.listening(server.Port())
+	lifecycle.started()
+	lifecycle.frpsPreparing()
+	server.startManagedFRPS()
 
 	waited := make(chan error, 1)
 	go func() {
@@ -368,18 +376,20 @@ func RunServer(ctx context.Context, config ServerConfig, options ServerRunOption
 	select {
 	case err := <-waited:
 		if err != nil {
-			options.Logger.Error("Tunnel server failed", map[string]any{"error": err.Error()})
+			lifecycle.failed("control.listener_failed", err)
+			lifecycle.stopped(ctx, err)
 			return err
 		}
-		options.Logger.Info("Tunnel server stopped", nil)
+		lifecycle.stopped(ctx, nil)
 		return nil
 	case <-ctx.Done():
-		options.Logger.Info("Tunnel server stopping", nil)
-		if err := server.Close(); err != nil {
-			options.Logger.Error("Tunnel server failed", map[string]any{"error": err.Error()})
-			return err
+		lifecycle.shutdown(ctx, "cancelled")
+		if closeErr := server.Close(); closeErr != nil {
+			lifecycle.failed("shutdown.cleanup_failed", closeErr)
+			lifecycle.stopped(ctx, closeErr)
+			return closeErr
 		}
-		options.Logger.Info("Tunnel server stopped", nil)
+		lifecycle.stopped(ctx, nil)
 		return nil
 	}
 }

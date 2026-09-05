@@ -33,7 +33,7 @@ func TestTunnelServerStandaloneBinaryPreservesCLIValidation(t *testing.T) {
 		"Run the Tunnel Control Plane and supervised frps process",
 		"--address", "--control-port", "--frp-port", "--http-port", "--port-range",
 		"--advertise-frp-addr", "--data-dir", "--session-idle-days",
-		"Global Flags:", "--log-level",
+		"Flags:", "--log-level",
 	} {
 		if !strings.Contains(string(help), expected) {
 			t.Fatalf("tunnel server help omitted %q:\n%s", expected, help)
@@ -62,7 +62,7 @@ func TestTunnelServerStandaloneBinaryPreservesCLIValidation(t *testing.T) {
 	}
 	for _, expected := range []string{
 		"Connect a native trusted client to a Tunnel Control Plane",
-		"--server", "--token", "Global Flags:", "--log-level",
+		"--server", "--token", "Flags:", "--log-level",
 	} {
 		if !strings.Contains(string(connectHelp), expected) {
 			t.Fatalf("tunnel connect help omitted %q:\n%s", expected, connectHelp)

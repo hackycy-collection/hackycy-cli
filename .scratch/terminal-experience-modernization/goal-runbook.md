@@ -74,8 +74,8 @@
 | G2: External-read and service-boundary recovery | passed | G1 | `implementation-plan.md` -> `G2: External-read and service-boundary recovery` | exit conditions 1-4 and manual acceptance verified 2026-09-04 |
 | G3: Mutation and archive recovery | passed | G2 | `implementation-plan.md` -> `G3: Mutation and archive recovery` | exit conditions 1-4 and manual acceptance verified 2026-09-04 |
 | G4: Git mutation and process handoff | passed | G3 | `implementation-plan.md` -> `G4: Git mutation and process handoff` | exit conditions 1-4 and manual acceptance verified 2026-09-05 |
-| G5: Service lifecycles and detached updater | active | G4 | `implementation-plan.md` -> `G5: Service lifecycles and detached updater` | G4 passed 2026-09-05 |
-| G6: Release verification and full visual review | planned | G5 | `implementation-plan.md` -> `G6: Release verification and full visual review` | G5 pending |
+| G5: Service lifecycles and detached updater | passed | G4 | `implementation-plan.md` -> `G5: Service lifecycles and detached updater` | exit conditions 1-4 and manual acceptance verified 2026-09-05 |
+| G6: Release verification and full visual review | active | G5 | `implementation-plan.md` -> `G6: Release verification and full visual review` | G5 passed 2026-09-05 |
 
 ## Progress Log
 
@@ -1100,7 +1100,171 @@
 - 2026-09-04: initialized as `planned`; no recovery implementation evidence.
 - 2026-09-05: 已激活，尚未开始实施。本条仅记录 G4 通过后的直接后继
   激活；G5 不属于本次 Goal。
+- 2026-09-05: completed slice `Tunnel Connect bounded selection projection`.
+  Modified `pkg/cmd/tunnel/connect/terminal.go` and its focused tests. The
+  ambiguous remembered-connection form now opens a bounded command-owned
+  Console descriptor; labels contain only a normalized origin, validated
+  last-authenticated time, and ordinals for equal origins. Opaque connection
+  IDs remain values and token, ID, and state-path material is absent from the
+  projection. Cancellation is a diagnostic-stream semantic milestone. Directed
+  verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/tunnel/connect ./internal/terminal ./internal/terminaltest`.
+  Risk: the continuing client session still emits legacy unstructured records
+  and non-cancellable reconnect sleeps. Next action: implement the Tunnel
+  Connect lifecycle event and shutdown slice.
+
+- 2026-09-05: completed slice `Tunnel Server lifecycle and FRPS boundary`.
+  Modified `pkg/cmd/tunnel/server/{run.go,lifecycle.go,server_runtime.go,
+  server_listener.go,server_agent.go,server_agent_protocol.go,server_http.go,
+  server_frps.go}` and `internal/logging/logging.go`. Control-plane startup,
+  listener readiness, server start/shutdown/stop, FRPS preparation and
+  restart/stop intent/result events now have stable lifecycle IDs; FRPS child
+  output remains bounded, debug-only, redacted, and control-character-clean.
+  Agent connect/disconnect/restore/revoke and state/process warnings are
+  projected with client-safe references, per-client/category aggregation, and
+  revision/state deduplication. Existing NDJSON outer schema and service
+  ownership remain unchanged. Directed verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/tunnel/server`. Risk: combined repository and tagged standalone
+  evidence remains; next action: implement and verify the detached updater
+  replacement slice.
+
+- 2026-09-05: completed slice `Upgrade parent cancellation and detached
+  ownership boundary`. Modified `internal/updater/upgrade.go`,
+  `pkg/cmd/upgrade/terminal.go`, and `pkg/cmd/upgrade/presentation.go`.
+  Scheduling now checks cancellation before spawning and uses an unbound
+  detached command after launch, so parent cancellation cannot terminate the
+  updater child. Rich/Plain presentation prioritizes cancellation over the
+  historical `ExitCodeError` abort wrapper and emits no `Update aborted.`
+  result for a cancelled run. Directed verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/updater
+  ./pkg/cmd/upgrade ./internal/ycycmd`. Risk: hidden replacement and state
+  persistence still need the full rollback and exactly-once evidence. Next
+  action: implement the hidden replacement/state slice.
+
+- 2026-09-05: completed slice `Detached updater replacement, rollback, and
+  startup state`. Modified `internal/updater/{replace.go,state.go,
+  replace_test.go,state_test.go}`, `internal/updater/upgrade.go`,
+  `pkg/cmd/upgrade/{terminal.go,presentation.go,presentation_test.go}`, and
+  `internal/ycycmd/main.go`. Detached children no longer inherit the parent
+  cancellation context; replacement re-verifies the installed hash/version,
+  propagates rollback failure (including an initially absent target), keeps
+  cleanup warnings distinct, removes staged/updater debris on failed waits,
+  and treats completed transactions as idempotent. Completed startup state is
+  consumed once under a process-local race guard, and persisted failure text is
+  limited to safe categories. Directed verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test ./internal/updater
+  ./pkg/cmd/upgrade ./internal/ycycmd`; race verification passed for
+  `./internal/updater ./pkg/cmd/upgrade`; tagged standalone detached
+  replacement/rollback/self-check acceptance passed. Risk: the combined G5
+  repository sequence and local service/updater handoff remain. Next action:
+  run the declared G5 repository verification in order.
+
+- 2026-09-05: completed slice `Tunnel standalone help compatibility assertion`.
+  The G5 standalone acceptance retained its complete tunnel flag and
+  validation coverage while aligning the two heading checks with the approved
+  G1 frozen durable discovery surface (`Flags:` rather than the superseded
+  Cobra-only `Global Flags:`). Modified `acceptance/tunnel_test.go` only.
+  Directed verification passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  -tags=acceptance ./acceptance -run
+  '^TestTunnelServerStandaloneBinaryPreservesCLIValidation$'`. Risk: none
+  observed in the focused compatibility check; the full G5 repository
+  sequence remains. Next action: run repository verification step 1.
+
+- 2026-09-05: repository verification step 1 passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test
+  ./pkg/cmd/tunnel/... ./pkg/cmd/upgrade ./internal/tunnelruntime
+  ./internal/updater ./internal/ycycmd ./internal/terminal`. All targeted
+  Tunnel, Upgrade, runtime, updater, process, and shared terminal packages
+  passed. Risk: command-surface and the full repository check remain. Next
+  action: run `make command-surface`.
+
+- 2026-09-05: repository verification step 2a passed: `make
+  command-surface` completed in read-only comparison mode. The frozen command
+  manifest, all help documents (including the approved `Flags:` discovery
+  heading), and completion artifacts remain unchanged. Risk: `make check`,
+  tagged G5 acceptance, and diff hygiene remain. Next action: run `make
+  check`.
+
+- 2026-09-05: repository verification step 2b passed: `make check` completed
+  the repository Go, architecture/dependency, Web lint/type/test/build, and
+  generated-asset checks. The existing Vite chunk-size advisory was
+  informational only; no check failed. Risk: tagged G5 acceptance and diff
+  hygiene remain. Next action: run the declared standalone acceptance regex.
+
+- 2026-09-05: repository verification step 3 passed:
+  `GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go test -count=1
+  -tags=acceptance ./acceptance -run
+  '^(TestTunnelServerStandaloneBinary|TestDetachedGoToGoStandaloneReplacementRollbackAndSelfCheck)'`.
+  The standalone Tunnel server validation/help journey and detached Go-to-Go
+  replacement, rollback, and self-check journey both passed. Risk: only final
+  diff hygiene remains before the manual handoff. Next action: run `git diff
+  --check`.
+
+- 2026-09-05: repository verification step 4 passed: `git diff --check`
+  reported no whitespace errors. The complete declared G5 repository sequence
+  is now green: focused package tests, `make command-surface`, `make check`,
+  tagged standalone Tunnel/updater acceptance, and diff hygiene. The existing
+  Vite chunk-size advisory from `make check` remains informational only. Risk:
+  automated Exit conditions are evidenced; the recorded local service and
+  updater sessions require the one requested human review. Next action: hand
+  off G5 manual acceptance and end this Goal without changing Gate state.
+
+- 2026-09-05: G5 manual acceptance handoff is pending confirmation. Exact
+  acceptance root is `/tmp/hackycy-g5-acceptance.rpDCgB`. Service entry points
+  are the detached `screen` sessions `ycy-g5-text` (text Lifecycle Log;
+  control `127.0.0.1:17500`, FRP `17000`, HTTP-vhost `18080`) and `ycy-g5-json`
+  (NDJSON Lifecycle Log; control `127.0.0.1:17501`, FRP `17001`, HTTP-vhost
+  `18081`); the text and NDJSON logs are respectively
+  `server-text.log` and `server-json.log`, with `client.log` and
+  `client-json.log` for the client sessions. The built CLI is
+  `/tmp/hackycy-g5-acceptance.rpDCgB/ycy`; the updater fixture is
+  `/tmp/hackycy-g5-acceptance.rpDCgB/updater-fixture`, whose target is currently
+  `2.0.0` and whose completed state file is
+  `ycy-target.go-update-state.json`. Automated evidence is the passed G5
+  repository sequence recorded immediately above plus the directed package,
+  race, PTY, and tagged standalone evidence in this log. Minimal review:
+  (1) inspect colored and `NO_COLOR=1` text plus NDJSON service logs for
+  startup, listener/control-plane availability before FRPS, agent/state or
+  warning/recovery density, and one terminal shutdown record with no
+  AltScreen/Transcript; (2) in a real TTY run
+  `HOME=/tmp/hackycy-g5-acceptance.rpDCgB/home USERPROFILE=/tmp/hackycy-g5-acceptance.rpDCgB/home TERM=xterm-256color /tmp/hackycy-g5-acceptance.rpDCgB/ycy tunnel connect`
+  and confirm bounded remembered selection contains only safe origin/time
+  labels, cancellation exits once, and the continuing session is a plain
+  Lifecycle Log; (3) separately run
+  `/tmp/hackycy-g5-acceptance.rpDCgB/updater-fixture/ycy-target --help`
+  once, confirm it reports `Updated ycy to v2.0.0.` and consumes the state,
+  while `/tmp/hackycy-g5-acceptance.rpDCgB/updater-fixture/ycy-target --version`
+  remains exactly `2.0.0` followed by a newline and does not consume it.
+  Reply exactly once with `通过: <scenarios>` or
+  `未通过: <scenario and reason>`. Next action: only a new Goal carrying
+  that explicit result may resume G5; this Goal ends at this handoff and G5
+  remains `active`.
+
+- 2026-09-05: G5 final acceptance completed. The user replied `验收通过`,
+  explicitly accepting the recorded manual scenarios. Exit condition 1
+  evidence: the colored and no-color Tunnel text/NDJSON service sessions and
+  client logs were reviewed for startup, control-plane availability before
+  FRPS, agent/state and warning/recovery density, redaction, bounded output,
+  and exactly-once shutdown; the bounded remembered-connection selector was
+  reviewed for safe labels and cancellation, and continuing service output
+  remained a Lifecycle Log without AltScreen or Transcript. Exit condition 2
+  evidence: the existing G2 parent Upgrade flow and detached updater fixture
+  were reviewed separately; replacement, rollback, cleanup-warning, and
+  one-time startup-result behavior matched the recorded acceptance, while the
+  target remained `2.0.0` and the state transaction was consumed once. Exit
+  condition 3 evidence: the explicit user acceptance above covers every item
+  in the G5 handoff checklist. Exit condition 4 evidence: repository
+  verification steps 1-4 passed, comprising the targeted package tests,
+  `make command-surface`, `make check`, tagged standalone Tunnel/updater
+  acceptance, and `git diff --check`. G5 is marked `passed`; its direct
+  successor G6 is activated below and has no implementation or verification
+  in this Goal. This Goal is complete.
 
 ### G6: Release verification and full visual review
 
 - 2026-09-04: initialized as `planned`; no recovery implementation evidence.
+- 2026-09-05: 已激活，尚未开始实施。本条仅记录 G5 通过后的直接后继
+  激活；G6 不属于本次 Goal。

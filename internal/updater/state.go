@@ -9,15 +9,22 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 const (
-	InternalApplyMarker = "--internal-apply-update"
-	stateSuffix         = ".go-update-state.json"
-	stateTempSuffix     = ".tmp"
-	stateTempMaxAge     = time.Minute
+	InternalApplyMarker  = "--internal-apply-update"
+	stateSuffix          = ".go-update-state.json"
+	stateTempSuffix      = ".tmp"
+	stateTempMaxAge      = time.Minute
+	stateMessageFailed   = "replacement failed"
+	stateMessageRollback = "rollback failed"
+	stateMessageCleanup  = "cleanup warning"
+	stateMessageParent   = "parent wait failed"
 )
+
+var consumeStateMu sync.Mutex
 
 // UpdateStatus is the Go-owned transaction result vocabulary.
 type UpdateStatus string
@@ -141,6 +148,9 @@ func ReadState(statePath string) (*UpdateTransaction, error) {
 
 // ConsumeState reports pending state or removes a completed state exactly once.
 func ConsumeState(targetPath string) (*UpdateTransaction, error) {
+	consumeStateMu.Lock()
+	defer consumeStateMu.Unlock()
+
 	statePath := StatePath(targetPath)
 	state, err := ReadState(statePath)
 	cleanupTemporaryFiles(targetPath, state, defaultProcessAlive)
@@ -149,24 +159,67 @@ func ConsumeState(targetPath string) (*UpdateTransaction, error) {
 	}
 	if err := removeUpgradeFile(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		return state, fmt.Errorf("consume update state: %w", err)
+	} else if errors.Is(err, os.ErrNotExist) {
+		// Another startup won the one-time consume race after this reader loaded
+		// the document. Do not present the same result twice.
+		return nil, nil
 	}
 	if state.UpdaterPath != "" {
-		removeUpdaterCopy(state.UpdaterPath)
+		_ = removeUpdaterCopy(state.UpdaterPath)
 	}
 	return state, nil
 }
 
 // FormatStateResult maps a completed transaction to its one-time human result.
 func FormatStateResult(state UpdateTransaction) string {
+	version := safeStateVersion(state.ExpectedVersion)
 	switch state.Status {
 	case StatusSucceeded:
-		return fmt.Sprintf("Updated ycy to v%s.", state.ExpectedVersion)
+		return fmt.Sprintf("Updated ycy to v%s.", version)
 	case StatusSucceededCleanupWarn:
-		return fmt.Sprintf("Updated ycy to v%s, but cleanup failed: %s", state.ExpectedVersion, state.Message)
+		return fmt.Sprintf("Updated ycy to v%s, but cleanup failed.", version)
 	case StatusFailed:
-		return fmt.Sprintf("Previous update failed and was rolled back: %s", state.Message)
+		if hasRollbackFailure(state.Message) {
+			return "Previous update failed and rollback failed."
+		}
+		if strings.Contains(strings.ToLower(state.Message), "parent wait") {
+			return "Previous update did not start."
+		}
+		return "Previous update failed and was rolled back."
 	default:
 		return "An update is being applied. Retry in a moment."
+	}
+}
+
+func safeStateVersion(value string) string {
+	value = strings.TrimSpace(value)
+	if _, err := parseVersion(value); err != nil {
+		return "unknown"
+	}
+	return value
+}
+
+func hasRollbackFailure(message string) bool {
+	return strings.Contains(strings.ToLower(message), "rollback failed")
+}
+
+// safeFailureMessage is the only error detail persisted in a transaction.
+// Paths, credentials, protocol payloads, and raw filesystem messages stay
+// process-local diagnostics and cannot leak through startup consumption.
+func safeFailureMessage(err error) string {
+	if err == nil {
+		return stateMessageFailed
+	}
+	message := strings.ToLower(err.Error())
+	switch {
+	case strings.Contains(message, "rollback failed"):
+		return stateMessageRollback
+	case strings.Contains(message, "wait") || strings.Contains(message, "parent"):
+		return stateMessageParent
+	case strings.Contains(message, "cleanup") || strings.Contains(message, "remove the previous"):
+		return stateMessageCleanup
+	default:
+		return stateMessageFailed
 	}
 }
 
@@ -359,20 +412,31 @@ func defaultProcessAlive(pid int) bool {
 	return processAlive(pid)
 }
 
-func removeUpdaterCopy(path string) {
+func removeUpdaterCopy(path string) error {
+	return removeUpdaterCopyWith(path, os.Remove)
+}
+
+func removeUpdaterCopyWith(path string, remove func(string) error) error {
 	temporary, err := filepath.Abs(os.TempDir())
 	if err != nil {
-		return
+		return nil
 	}
 	resolved, err := filepath.Abs(path)
 	if err != nil {
-		return
+		return nil
 	}
 	relative, err := filepath.Rel(temporary, resolved)
 	if err != nil || relative == "" || relative == "." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) || !strings.HasPrefix(filepath.Base(resolved), "ycy-updater-") {
-		return
+		return nil
 	}
-	_ = removeUpgradeFile(resolved)
+	if remove == nil {
+		remove = os.Remove
+	}
+	err = retryFileOperation(fileRetryCount, defaultFileSleep, func() error { return remove(resolved) })
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }
 
 // WaitForParent is kept in this slice as the hidden entry's bounded process gate.

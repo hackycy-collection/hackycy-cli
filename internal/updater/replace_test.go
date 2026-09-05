@@ -125,6 +125,24 @@ func TestApplyTransactionSupportsMissingTargetAndBackupConflict(t *testing.T) {
 	}
 }
 
+func TestApplyTransactionRetainsRollbackFailureWhenTargetWasInitiallyMissing(t *testing.T) {
+	state := replacementState(t, "", "new binary")
+	options := replacementOptions(t)
+	options.VerifyBinary = func(context.Context, string, string) error { return errors.New("self-check failed") }
+	options.Remove = func(path string) error {
+		if path == state.TargetPath {
+			return errors.New("target is locked")
+		}
+		return os.Remove(path)
+	}
+	if _, err := ApplyTransaction(context.Background(), state, options); err == nil || !strings.Contains(err.Error(), "rollback failed") {
+		t.Fatalf("rollback failure = %v", err)
+	}
+	if !fileExists(state.TargetPath) {
+		t.Fatal("new target was removed despite rollback failure")
+	}
+}
+
 func TestApplyTransactionRetriesRetryableRename(t *testing.T) {
 	state := replacementState(t, "old binary", "new binary")
 	options := replacementOptions(t)
@@ -173,5 +191,22 @@ func TestRunInternalUpdaterRecordsSuccessAndFailure(t *testing.T) {
 	read, err = ReadState(failure.StatePath)
 	if err != nil || read == nil || read.Status != StatusFailed {
 		t.Fatalf("failure state = %#v, %v", read, err)
+	}
+}
+
+func TestRunInternalUpdaterDoesNotReapplyCompletedTransaction(t *testing.T) {
+	state := replacementState(t, "stable binary", "new binary")
+	state.Status = StatusSucceeded
+	if err := WriteState(state); err != nil {
+		t.Fatal(err)
+	}
+	options := replacementOptions(t)
+	options.CurrentExecutable = func() (string, error) { return state.UpdaterPath, nil }
+	if err := RunInternalUpdater(context.Background(), InternalUpdateArgs(state), options); err != nil {
+		t.Fatal(err)
+	}
+	contents, err := os.ReadFile(state.TargetPath)
+	if err != nil || string(contents) != "stable binary" {
+		t.Fatalf("completed transaction changed target = %q, %v", contents, err)
 	}
 }

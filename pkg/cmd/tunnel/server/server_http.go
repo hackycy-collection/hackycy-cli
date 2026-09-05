@@ -224,6 +224,7 @@ func (handler *ServerHTTPHandler) serveAgent(writer http.ResponseWriter, request
 	requestHost := serverAgentRequestHostname(request)
 	socket, err := serverAgentWebSocketUpgrader.Upgrade(writer, request, nil)
 	if err != nil {
+		handler.agentGateway.protocolWarning(reservation.ClientID(), "protocol")
 		reservation.Release()
 		return
 	}
@@ -237,12 +238,15 @@ func (handler *ServerHTTPHandler) serveAgent(writer http.ResponseWriter, request
 		_ = socket.Close()
 	})
 	if err := connection.AcknowledgeReplacementToken(request.Context()); err != nil {
+		handler.agentGateway.protocolWarning(connection.ClientID(), "control-plane")
 		closeServerAgentSocket(socket, &ServerAgentProtocolError{CloseCode: 1011, Message: "Tunnel server control plane is unavailable"})
 		_ = socket.Close()
 		connection.Close()
 		return
 	}
-	stopLiveness := startServerAgentWebSocketLiveness(socket)
+	stopLiveness := startServerAgentWebSocketLiveness(socket, func() {
+		handler.agentGateway.protocolWarning(connection.ClientID(), "liveness")
+	})
 	defer func() {
 		stopLiveness()
 		_ = socket.Close()
@@ -261,10 +265,12 @@ func (handler *ServerHTTPHandler) serveAgent(writer http.ResponseWriter, request
 		}
 		if !welcomePresented {
 			if protocolError := connection.AcceptHello(request.Context(), source); protocolError != nil {
+				handler.agentGateway.protocolWarning(connection.ClientID(), serverAgentWarningCategory(protocolError))
 				closeServerAgentSocket(socket, protocolError)
 				return
 			}
 			if protocolError := connection.PresentWelcome(request.Context(), requestHost, socket.WriteJSON); protocolError != nil {
+				handler.agentGateway.protocolWarning(connection.ClientID(), serverAgentWarningCategory(protocolError))
 				closeServerAgentSocket(socket, protocolError)
 				return
 			}
@@ -272,6 +278,7 @@ func (handler *ServerHTTPHandler) serveAgent(writer http.ResponseWriter, request
 			continue
 		}
 		if protocolError := connection.AcceptActiveMessage(request.Context(), source); protocolError != nil {
+			handler.agentGateway.protocolWarning(connection.ClientID(), serverAgentWarningCategory(protocolError))
 			closeServerAgentSocket(socket, protocolError)
 			return
 		}
@@ -287,7 +294,7 @@ func closeServerAgentSocket(socket *websocket.Conn, protocolError *ServerAgentPr
 
 // startServerAgentWebSocketLiveness retains v3's open-ended hello phase while
 // requiring a pong after every server ping interval.
-func startServerAgentWebSocketLiveness(socket *websocket.Conn) func() {
+func startServerAgentWebSocketLiveness(socket *websocket.Conn, onTimeout ...func()) func() {
 	if socket == nil {
 		return func() {}
 	}
@@ -313,6 +320,9 @@ func startServerAgentWebSocketLiveness(socket *websocket.Conn) func() {
 			mu.Lock()
 			if awaitingPong {
 				mu.Unlock()
+				if len(onTimeout) > 0 && onTimeout[0] != nil {
+					onTimeout[0]()
+				}
 				closeServerAgentSocket(socket, &ServerAgentProtocolError{
 					CloseCode: serverAgentCloseLivenessTimeout,
 					Message:   "Control connection timed out",
@@ -330,6 +340,24 @@ func startServerAgentWebSocketLiveness(socket *websocket.Conn) func() {
 	}()
 	return func() {
 		stopOnce.Do(func() { close(done) })
+	}
+}
+
+func serverAgentWarningCategory(protocolError *ServerAgentProtocolError) string {
+	if protocolError == nil {
+		return "protocol"
+	}
+	switch protocolError.CloseCode {
+	case serverAgentCloseIncompatible:
+		return "incompatible"
+	case serverAgentCloseLivenessTimeout:
+		return "liveness"
+	case serverAgentCloseFRPSUnavailable:
+		return "frps"
+	case serverAgentCloseRevoked:
+		return "revoked"
+	default:
+		return "protocol"
 	}
 }
 

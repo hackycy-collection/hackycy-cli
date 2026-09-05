@@ -55,18 +55,34 @@ func ApplyTransaction(ctx context.Context, state UpdateTransaction, options Repl
 
 	originalMoved := false
 	rollback := func(cause error) error {
+		var rollbackErr error
 		if !originalMoved {
-			_ = retryOperation(options, func() error {
-				if _, statErr := os.Stat(state.TargetPath); statErr == nil {
-					return options.Remove(state.TargetPath)
-				}
-				return nil
-			})
+			if _, statErr := os.Stat(state.TargetPath); statErr == nil {
+				rollbackErr = retryOperation(options, func() error {
+					err := options.Remove(state.TargetPath)
+					if errors.Is(err, os.ErrNotExist) {
+						return nil
+					}
+					return err
+				})
+			} else if !errors.Is(statErr, os.ErrNotExist) {
+				rollbackErr = fmt.Errorf("inspect target for rollback: %w", statErr)
+			}
+			if rollbackErr != nil {
+				return fmt.Errorf("%w; rollback failed: %v", cause, rollbackErr)
+			}
 			return cause
 		}
-		rollbackErr := error(nil)
 		if _, statErr := os.Stat(state.TargetPath); statErr == nil {
-			rollbackErr = retryOperation(options, func() error { return options.Remove(state.TargetPath) })
+			rollbackErr = retryOperation(options, func() error {
+				err := options.Remove(state.TargetPath)
+				if errors.Is(err, os.ErrNotExist) {
+					return nil
+				}
+				return err
+			})
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			rollbackErr = fmt.Errorf("inspect target for rollback: %w", statErr)
 		}
 		if rollbackErr == nil {
 			rollbackErr = retryOperation(options, func() error { return options.Rename(state.BackupPath, state.TargetPath) })
@@ -140,30 +156,67 @@ func RunInternalUpdater(ctx context.Context, arguments []string, options Replace
 	if err != nil {
 		return err
 	}
+	// A completed transaction is consumed by the next ordinary startup. If a
+	// detached process is retried, never apply the same transaction twice.
+	if state.Status != StatusPending {
+		return nil
+	}
 	options = normalizeReplacementOptions(options)
 	if err := WaitForParent(ctx, state.ParentPID, options.ProcessAlive, options.ParentSleep); err != nil {
-		writeFailedState(state, err)
-		return err
+		cleanupInternalUpdaterFiles(state, options, true)
+		return recordFailedState(state, err)
 	}
 	warning, err := ApplyTransaction(ctx, state, options)
 	if err != nil {
-		_ = retryOperation(options, func() error { return options.Remove(state.StagedPath) })
-		writeFailedState(state, err)
-		return err
+		cleanupInternalUpdaterFiles(state, options, true)
+		return recordFailedState(state, err)
+	}
+	if runtime.GOOS != "windows" {
+		if cleanupErr := removeUpdaterCopyWith(state.UpdaterPath, options.Remove); cleanupErr != nil {
+			if warning == "" {
+				warning = fmt.Sprintf("could not remove detached updater: %v", cleanupErr)
+			} else {
+				warning += fmt.Sprintf("; detached updater cleanup also failed: %v", cleanupErr)
+			}
+		}
 	}
 	state.Status = StatusSucceeded
 	state.Message = ""
 	if warning != "" {
 		state.Status = StatusSucceededCleanupWarn
-		state.Message = warning
+		state.Message = stateMessageCleanup
 	}
 	if err := WriteState(state); err != nil {
-		return err
-	}
-	if runtime.GOOS != "windows" {
-		removeUpdaterCopy(state.UpdaterPath)
+		return fmt.Errorf("persist update result: %w", err)
 	}
 	return nil
+}
+
+func cleanupInternalUpdaterFiles(state UpdateTransaction, options ReplacementOptions, staged bool) {
+	if staged {
+		_ = retryOperation(options, func() error {
+			err := options.Remove(state.StagedPath)
+			if errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+			return err
+		})
+	}
+	if runtime.GOOS != "windows" {
+		_ = removeUpdaterCopyWith(state.UpdaterPath, options.Remove)
+	}
+}
+
+func recordFailedState(state UpdateTransaction, cause error) error {
+	if cause == nil {
+		cause = errors.New("update failed")
+	}
+	if err := writeFailedState(state, cause); err != nil {
+		// Keep the original failure for callers while making state persistence
+		// failure explicit without replacing the operation's root cause.
+		return errors.Join(cause, errors.New("could not persist update failure state"))
+	}
+	return cause
 }
 
 func normalizeReplacementOptions(options ReplacementOptions) ReplacementOptions {
@@ -261,8 +314,8 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
-func writeFailedState(state UpdateTransaction, cause error) {
+func writeFailedState(state UpdateTransaction, cause error) error {
 	state.Status = StatusFailed
-	state.Message = cause.Error()
-	_ = WriteState(state)
+	state.Message = safeFailureMessage(cause)
+	return WriteState(state)
 }
