@@ -1,6 +1,0 @@
-command=GOTOOLCHAIN=go1.26.7 GOWORK=off CGO_ENABLED=0 go mod download
-commit=e916cb1ad5b7b5ef5a5b949647e0145208adb167
-status=web-dist-files=428
-sevenzip-payload-files=14
-gomodcache=/g9-go-cache/mod
-gocache=/g9-go-cache/build
